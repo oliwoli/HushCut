@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 import math
+import uuid
 from statistics import median_grouped
-from subprocess import CompletedProcess
 from time import time
 from typing import (
     Any,
     Dict,
     List,
     Literal,
-    NotRequired,
-    Optional,
-    TypeAlias,
     TypedDict,
-    Union,
 )
-
 import os
 import sys
 import subprocess
@@ -25,38 +20,14 @@ from dotenv import load_dotenv
 import json
 
 
-def sec_to_frames(seconds: float, fps: float) -> int:
-    """Converts time in seconds to frame number using ceiling."""
-    if fps <= 0:
-        raise ValueError("FPS must be positive")
-    return int(seconds * fps)
+from edit_silence import (
+    create_edits_with_optional_silence,
+    ClipData,
+    SilenceInterval,
+    EditInstruction,
+)
 
-
-def is_valid_audio(filepath: str) -> bool:
-    """Check if a file exists and has a valid audio stream."""
-    if not os.path.exists(filepath):
-        return False
-    try:
-        result: CompletedProcess[str] = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                filepath,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        duration = float(result.stdout.strip())
-        return duration > 0.1
-    except Exception as e:
-        print(f"Error checking audio file {filepath}: {e}")
-        return False
+import misc_utils
 
 
 # export timeline to XML
@@ -128,12 +99,6 @@ if not project:
     sys.exit(1)
 
 
-class SilenceDetection(TypedDict):
-    start: int
-    end: int
-    duration: int
-
-
 class FileProperties(TypedDict):
     FPS: float
 
@@ -192,12 +157,12 @@ class TimelineItem(TypedDict):
     source_start_frame: int
     source_end_frame: int
     duration: int
-    edit_instructions: list[EditFrames]
+    edit_instructions: list[EditInstruction]
 
 
 class FileData(TypedDict):
     properties: FileProperties
-    silenceDetections: List[SilenceDetection]
+    silenceDetections: List[SilenceInterval]
     timelineItems: list[TimelineItem]
 
 
@@ -220,6 +185,11 @@ class ItemsByTracks(TypedDict):
     audiotrack: List[Track]
 
 
+class SourceMedia(TypedDict):
+    file_path: str
+    uuid: str
+
+
 # Final structure:
 ProjectData = Dict[str, FileData]
 project_data: ProjectData = {}
@@ -234,6 +204,7 @@ if not timeline:
     sys.exit(1)
 timeline_name = timeline.GetName()
 timeline_fps = timeline.GetSetting("timelineFrameRate")
+curr_timecode = timeline.GetCurrentTimecode()
 video_track_count = timeline.GetTrackCount("video")
 video_track_items: list[Any] = []
 for i in range(1, video_track_count + 1):
@@ -277,36 +248,65 @@ tl_dict: Timeline = {
 # print(f"video 1 GetSourceStartFrame: {video_track_items[0].GetSourceStartFrame()}")
 # print(f"video 1 GetMediaPoolItem(): {video_track_items[0].GetMediaPoolItem()}")
 
-source_media_file_paths: list[str] = []
+source_media_files: list[SourceMedia] = []
 media_pool_items: list[Any] = []
 for item in audio_track_items:
     media_pool_item = item.GetMediaPoolItem()
     if not media_pool_item:
         continue
+    if item in media_pool_items:
+        continue
     media_pool_items.append(media_pool_item)
     filepath = media_pool_item.GetClipProperty("File Path")
     # linked_items = item.GetLinkedItems()
-    media_uuid = media_pool_item.GetUniqueId()
-    if filepath in source_media_file_paths:
-        continue
-    source_media_file_paths.append(filepath)
-print(f"Source media file paths: {source_media_file_paths}")
+    # media_uuid = media_pool_item.GetUniqueId()
+    file_path_uuid: str = misc_utils.uuid_from_path(filepath).hex
 
-if len(source_media_file_paths) == 0:
+    source_media_item: SourceMedia = {
+        "file_path": filepath,
+        "uuid": file_path_uuid,
+    }
+
+    if source_media_item in source_media_files:
+        continue
+    source_media_files.append(source_media_item)
+
+# print(f"Source media files: {source_media_files}")
+
+if len(source_media_files) == 0:
     print("No file paths to process.")
     sys.exit(1)
+
 
 silence_start_re = re.compile(r"silence_start: (?P<start>\d+\.?\d*)")
 silence_end_re = re.compile(r"silence_end: (?P<end>\d+\.?\d*)")
 silence_duration_re = re.compile(r"silence_duration: (?P<duration>\d+\.?\d*)")
 
+silence_detect_time_start = time()
 
-for filepath in source_media_file_paths:
-    wav_path = f"{filepath}.wav"
+root_dir = os.path.dirname(os.path.abspath(__file__))
 
-    if is_valid_audio(wav_path):
-        print(f"Skipping extraction, valid audio already exists: {wav_path}")
-    else:
+
+for file in source_media_files:
+    filepath = file["file_path"]
+    if not filepath:
+        continue
+    if not filepath or not os.path.exists(filepath):
+        continue
+    print(f"Processing file: {filepath}")
+    basename = os.path.basename(filepath)
+    print(f"Processing file: {basename}")
+
+    wav_path = os.path.join(root_dir, "temp", f"{os.path.basename(file['uuid'])}.wav")
+    print(f"wav_path: {wav_path}")
+
+    # make the temp directory if it doesn't exist
+    temp_dir = os.path.join(root_dir, "temp")
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir)
+        print(f"Created temp directory: {temp_dir}")
+
+    if not misc_utils.is_valid_audio(wav_path):
         print(f"Extracting audio from: {filepath}")
         audio_extract_cmd = [
             "ffmpeg",
@@ -339,19 +339,23 @@ for filepath in source_media_file_paths:
     stderr_output = proc.stderr
     # print(f"Output: {stderr_output}")
     file_data = []
-    current_silence: SilenceDetection = {"start": 0, "end": 0, "duration": 0}
+    current_silence: SilenceInterval = {"start": 0, "end": 0, "duration": 0}
     for line in stderr_output.splitlines():
         line = line.strip()
         if "silence_start:" in line:
             try:
                 start_time = float(line.split("silence_start:")[1].strip())
-                current_silence["start"] = sec_to_frames(start_time, timeline_fps)
+                current_silence["start"] = misc_utils.sec_to_frames(
+                    start_time, timeline_fps
+                )
             except ValueError:
                 continue
         elif "silence_end:" in line and "silence_duration:" in line:
             try:
                 end_time = float(line.split("silence_end:")[1].split("|")[0].strip())
-                current_silence["end"] = sec_to_frames(end_time, timeline_fps)
+                current_silence["end"] = misc_utils.sec_to_frames(
+                    end_time, timeline_fps
+                )
             except ValueError:
                 continue
 
@@ -359,7 +363,9 @@ for filepath in source_media_file_paths:
                 duration = float(
                     line.split("silence_duration:")[1].split("|")[0].strip()
                 )
-                current_silence["duration"] = sec_to_frames(duration, timeline_fps)
+                current_silence["duration"] = misc_utils.sec_to_frames(
+                    duration, timeline_fps
+                )
                 file_data.append(current_silence)
                 current_silence = {
                     "start": 0,
@@ -381,22 +387,7 @@ for filepath in source_media_file_paths:
 
 
 end_time_silence = time()
-execution_time_silence = end_time_silence - start_time
-print(f"Silence detection completed in {execution_time_silence:.2f} seconds.")
-
-
-# export silence detections as json
-def export_project_data_to_json(project_data: ProjectData, output_path: str) -> None:
-    """
-    Export silence detections to a JSON file.
-
-    Args:
-        project_data (dict): Main project data.
-        output_path (str): Path to save the JSON file.
-    """
-    with open(output_path, "w") as json_file:
-        json.dump(project_data, json_file, indent=4)
-    print(f"Silence detections exported to {output_path}")
+execution_time_silence = end_time_silence - silence_detect_time_start
 
 
 for track in items_by_tracks["audiotrack"]:
@@ -417,9 +408,21 @@ for track in items_by_tracks["audiotrack"]:
         clip_end_frame_source = item.GetSourceEndFrame()
         clip_duration = item.GetDuration()
         clip_linked_items = item.GetLinkedItems()
-        clip_file_path = item.GetMediaPoolItem().GetClipProperty("File Path")
+        clip_media_pool_item = item.GetMediaPoolItem()
+        if not clip_media_pool_item:
+            continue
+        clip_file_path = clip_media_pool_item.GetClipProperty("File Path")
+        if clip_file_path is None or clip_file_path == "":
+            continue
 
-        timeline_item = get_timeline_item(item)
+        main_clip_data: ClipData = {
+            "start_frame": clip_start_frame_timeline,
+            "end_frame": clip_end_frame_timeline,
+            "source_start_frame": clip_start_frame_source,
+            "source_end_frame": clip_end_frame_source,
+        }
+
+        timeline_item: TimelineItem = get_timeline_item(item)
         timeline_items = project_data[clip_file_path]["timelineItems"]
 
         linked_items_file_paths = [
@@ -431,75 +434,17 @@ for track in items_by_tracks["audiotrack"]:
             filepath in project_data
             for filepath in [clip_file_path] + linked_items_file_paths
         ):
-            print(f"Clip {clip_name} has silence detections.")
-
-            # # remove existing markers
-            # current_markers = item.GetMarkers()
-            # for marker in current_markers:
-            #     item.DeleteMarkerAtFrame(marker)
-
-            # add markers to clip
-            file_data = project_data[clip_file_path]
-            for i, detection in enumerate(file_data["silenceDetections"]):
-                start = detection["start"]
-                end = detection["end"]
-                duration_frames = detection["duration"]
-                shifted_start = start - clip_start_frame_source
-                shifted_end = end - clip_start_frame_source
-
-                if start > clip_duration:
-                    print("reached end of clip")
-                    break
-
-                # marker = item.AddMarker(
-                #     shifted_start,
-                #     "Red",
-                #     f"Silence {clip_start_frame_timeline} - {clip_end_frame_timeline}",
-                #     f"Silence detected from {clip_start_frame_timeline} to {clip_end_frame_timeline}",
-                #     duration_frames,
-                # )
-                # print(
-                #     f"Added marker to clip {clip_name} from {shifted_start} to {clip_end_frame_timeline}: {marker}"
-                # )
-
-                if i == 0:
-                    print("FIRST DETECTION")
-                    continue
-
-                # absolute start time in frames of the clip in the timeline
-                clip_start_tl = timeline_item["start_frame"]
-
-                if i == 1:
-                    start_frame = clip_start_tl
-                    end_frame = clip_start_tl + (
-                        start - file_data["silenceDetections"][i - 1]["end"]
-                    )
-
-                else:
-                    last_edit = timeline_item["edit_instructions"][-1]
-
-                    start_frame = last_edit["end_frame"]
-                    end_frame = last_edit["end_frame"] + (
-                        start - file_data["silenceDetections"][i - 1]["end"]
-                    )
-
-                timeline_item["edit_instructions"].append(
-                    {
-                        "start_frame": start_frame,
-                        "end_frame": end_frame,
-                        "source_start_frame": file_data["silenceDetections"][i - 1][
-                            "end"
-                        ],
-                        "source_end_frame": start,
-                        "duration": end_frame - start_frame,
-                    }
+            edit_instructions: List[EditInstruction] = (
+                create_edits_with_optional_silence(
+                    main_clip_data, project_data[clip_file_path]["silenceDetections"]
                 )
-
+            )
+            timeline_item["edit_instructions"] = edit_instructions
         timeline_items.append(timeline_item)
 
 current_file_path = os.path.dirname(os.path.abspath(__file__))
 json_output_path = os.path.join(current_file_path, "silence_detections.json")
-export_project_data_to_json(project_data, json_output_path)
+misc_utils.export_to_json(project_data, json_output_path)
 
 
 def add_markers_to_timeline() -> None:
@@ -507,7 +452,7 @@ def add_markers_to_timeline() -> None:
         print(
             f"Processing {filepath} with {len(file_data['silenceDetections'])} silence segments"
         )
-        silence_detections: List[SilenceDetection] = file_data["silenceDetections"]
+        silence_detections: List[SilenceInterval] = file_data["silenceDetections"]
         for detection in silence_detections:
             start = detection["start"]
             end = detection["end"]
@@ -531,11 +476,6 @@ def add_markers_to_timeline() -> None:
 # add_markers_to_timeline()
 
 # stills_dir = project.GetSetting("colorGalleryStillsLocation")
-# print(f"Stills directory: {stills_dir}")
-
-xml_file_path = os.path.join(current_file_path, f"temp_timeline_export2.xml")
-print(f"Exporting timeline to {xml_file_path}")
-export_timeline_to_xml(timeline, file_path=xml_file_path)
 
 
 def make_edit_timeline() -> None:
@@ -543,11 +483,13 @@ def make_edit_timeline() -> None:
     edit_timeline_name = f"{timeline_name} - Silence Detection"
     media_pool = project.GetMediaPool()
     edit_timeline = media_pool.CreateEmptyTimeline(edit_timeline_name)
+    edit_timeline_startframe = edit_timeline.GetStartFrame()
     # switch to the new timeline
     resolve.OpenPage("edit")
     # set the new timeline as current
     project.SetCurrentTimeline(edit_timeline)
 
+    media_appends: list[Any] = []
     for file in media_pool_items:
         file_path = file.GetClipProperty("File Path")
         if file_path not in project_data:
@@ -557,42 +499,82 @@ def make_edit_timeline() -> None:
         file_data = project_data[file_path]
         timeline_items = file_data["timelineItems"]
 
-        for timeline_item in timeline_items:
-            edit_instructions = timeline_item["edit_instructions"]
-            for edit in edit_instructions:
-                start_frame = edit["start_frame"]
-                end_frame = edit["end_frame"]
-                source_start_frame = edit["source_start_frame"]
-                source_end_frame = edit["source_end_frame"]
-                duration = edit["duration"]
+    FLOAT_EPSILON = 1e-9
+    for timeline_item in timeline_items:
+        edit_instructions = timeline_item["edit_instructions"]
 
-                # Create a new clip info for the timeline
-                clip_info: Dict[str, Any] = {
-                    "mediaPoolItem": file,
-                    "startFrame": source_start_frame,
-                    "endFrame": source_end_frame,
-                    "recordFrame": start_frame,
-                }
-                print(f"Appending clip info: {clip_info}")
-                # Append the clip to the timeline
-                append = media_pool.AppendToTimeline([clip_info])
+        for edit in edit_instructions:
+            timeline_start_frame = edit["start_frame"]
+            source_start_time = edit["source_start_frame"]
+            source_end_time_inclusive = edit["source_end_frame"]
 
-        # clip_info = {
-        #     "mediaPoolItem": file,  # The MediaPoolItem you're appending
-        #     "startFrame": 10,  # In point (in source media frame numbers)
-        #     "endFrame": 5000,  # Out point (exclusive)
-        #     "recordFrame": 114206,  # Position on the timeline to place the clip (in timeline frame numbers)
-        #     # "trackIndex": 1,  # Optional: which track to insert into
-        #     # "mediaType": 1,  # Optional: 1 = video, 2 = audio
-        # }
+            # Adjust source end frame assuming API expects exclusive end (+1 frame concept)
+            api_source_end_exclusive = source_end_time_inclusive + 1.0
+
+            # Safety check using original inclusive source values
+            if source_end_time_inclusive <= source_start_time + FLOAT_EPSILON:
+                # Optional: assert error
+                raise ValueError(
+                    f"Source end frame {source_end_time_inclusive} is not greater than start frame {source_start_time}"
+                )
+
+            clip_info = {
+                "mediaPoolItem": media_pool_item,
+                "startFrame": source_start_time,
+                "endFrame": api_source_end_exclusive,  # Using adjusted exclusive end
+                "recordFrame": timeline_start_frame,
+                # Ensure mediaType is set correctly based on 'edit["enabled"]' and API requirements
+                "mediaType": None,
+                # Add trackIndex etc. if needed
+            }
+            media_appends.append(clip_info)
+
         # append = media_pool.AppendToTimeline([clip_info])
-        # print(append)
+
+    # append all clips to the timeline
+    # print(f"Appending {len(media_appends)} clips to timeline")
+    # print(f"appends: {media_appends}")
+    append = media_pool.AppendToTimeline(media_appends)
+    print(f"Total cuts made: {len(append)}")
+
+    # apply the timecode to the timeline
+    print(f"Setting timeline timecode to {curr_timecode}")
+    print(f"Timeline timecode: {edit_timeline.GetCurrentTimecode()}")
+    edit_timeline.SetCurrentTimecode(curr_timecode)
+    print(f"Timeline timecode after: {edit_timeline.GetCurrentTimecode()}")
+
+    # print(append)
+
+    # clip_info = {
+    #     "mediaPoolItem": file,  # The MediaPoolItem you're appending
+    #     "startFrame": 10,  # In point (in source media frame numbers)
+    #     "endFrame": 5000,  # Out point (exclusive)
+    #     "recordFrame": 114206,  # Position on the timeline to place the clip (in timeline frame numbers)
+    #     # "trackIndex": 1,  # Optional: which track to insert into
+    #     # "mediaType": 1,  # Optional: 1 = video, 2 = audio
+    # }
+    # append = media_pool.AppendToTimeline([clip_info])
+    # print(append)
 
 
 full_end_time = time()
 execution_time = full_end_time - script_start_time
-
-current_time_code = timeline.GetCurrentTimecode()
-print(f"Current timecode: {current_time_code}")
-
 print(f"Script finished successfully in {execution_time:.2f} seconds.")
+
+time_edit_start = time()
+make_edit_timeline()
+time_edit_end = time()
+time_to_edit = time_edit_end - time_edit_start
+print(f"Silence detection completed in {execution_time_silence:.2f} seconds.")
+print(f"Edit timeline creation completed in {time_to_edit:.2f} seconds.")
+
+export_xml_time = time()
+edit_timeline = project.GetCurrentTimeline()
+
+xml_file_path = os.path.join(current_file_path, f"temp_timeline_export2.xml")
+export_timeline_to_xml(edit_timeline, file_path=xml_file_path)
+export_xml_end_time = time()
+export_xml_execution_time = export_xml_end_time - export_xml_time
+print(
+    f"Exported timeline to XML in {export_xml_execution_time:.2f} seconds. File path: {xml_file_path}"
+)
