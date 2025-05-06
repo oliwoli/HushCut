@@ -46,5 +46,9 @@ def is_valid_audio(filepath: str) -> bool:
 
 
 def export_to_json(project_data: Any, output_path: str) -> None:
+
+    def fallback_serializer(obj):
+        return "<BMDObject>"
+
     with open(output_path, "w") as json_file:
-        json.dump(project_data, json_file, indent=4)
+        json.dump(project_data, json_file, indent=4, default=fallback_serializer)
