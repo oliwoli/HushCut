@@ -148,14 +148,14 @@ def create_edits_with_optional_silence(
 
             # Ensure end is not before start after potential adjustment
             if segment_timeline_end_int >= segment_timeline_start_int:
-                edit: EditInstruction = {
+                first_edit: EditInstruction = {
                     "source_start_frame": segment_source_start_inc,
                     "source_end_frame": segment_source_end_inc,
                     "start_frame": segment_timeline_start_int,
                     "end_frame": segment_timeline_end_int,
                     "enabled": True,
                 }
-                edited_clips.append(edit)
+                edited_clips.append(first_edit)
                 # Update last end frame only if segment was added and we're removing silence
                 if not keep_silence_segments:
                     last_timeline_end_int = segment_timeline_end_int
@@ -184,14 +184,14 @@ def create_edits_with_optional_silence(
                 )
 
                 if segment_timeline_end_int >= segment_timeline_start_int:
-                    edit: EditInstruction = {
+                    mid_edit: EditInstruction = {
                         "source_start_frame": segment_source_start_inc,
                         "source_end_frame": segment_source_end_inc,
                         "start_frame": segment_timeline_start_int,
                         "end_frame": segment_timeline_end_int,
                         "enabled": False,
                     }
-                    edited_clips.append(edit)
+                    edited_clips.append(mid_edit)
                     # Don't update last_timeline_end_int for disabled segments
 
         # Update the source position for the next iteration
@@ -233,14 +233,14 @@ def create_edits_with_optional_silence(
             # Optional: Adjust if gap detected? Usually not needed for final segment.
 
         if segment_timeline_end_int >= segment_timeline_start_int:
-            edit: EditInstruction = {
+            final_edit: EditInstruction = {
                 "source_start_frame": segment_source_start_inc,
                 "source_end_frame": segment_source_end_inc,
                 "start_frame": segment_timeline_start_int,
                 "end_frame": segment_timeline_end_int,
                 "enabled": True,
             }
-            edited_clips.append(edit)
+            edited_clips.append(final_edit)
             # No need to update last_timeline_end_int after final segment
 
     # --- Optional Diagnostic Check ---
