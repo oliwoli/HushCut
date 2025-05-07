@@ -33,109 +33,14 @@ from edit_silence import (
 import misc_utils
 
 
-# export timeline to XML
-def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
-    """
-    Export the current timeline to an XML file.
-
-    Args:
-        timeline (Any): The timeline object to export.
-        file_path (str): The path where the XML file will be saved.
-    """
-    if not timeline:
-        print("No timeline to export.")
-        return
-
-    # Assuming the Resolve API has a method to export timelines
-    success = timeline.Export(file_path, resolve.EXPORT_FCP_7_XML)
-    if success:
-        print(f"Timeline exported successfully to {file_path}")
-    else:
-        print("Failed to export timeline.")
+class FileProperties(TypedDict):
+    FPS: float
 
 
-if not load_dotenv():
-    raise FileNotFoundError(".env file not found.")
-
-
-def extract_audio(file: Any, root_dir) -> str | None:
-    filepath = file.get("file_path")
-    if not filepath or not os.path.exists(filepath):
-        return
-
-    basename = os.path.basename(filepath)
-    print(f"Processing file: {basename}")
-
-    wav_path = os.path.join(root_dir, "temp", f"{os.path.basename(file['uuid'])}.wav")
-    if misc_utils.is_valid_audio(wav_path):
-        print(f"{wav_path} is valid audio")
-        return wav_path
-
-    print(f"Extracting audio from: {filepath}")
-    audio_extract_cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        filepath,
-        "-vn",
-        "-acodec",
-        "pcm_s16le",
-        wav_path,
-    ]
-    subprocess.run(audio_extract_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return wav_path
-
-
-def process_audio_files(audio_source_files, root_dir, max_workers=4):
-    """Runs audio extraction in parallel using ThreadPoolExecutor."""
-    start_time = time()
-    wav_paths = []
-    print(f"Starting audio extraction with {max_workers} workers.")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(extract_audio, file, root_dir)
-            for file in audio_source_files
-        ]
-
-        for future in as_completed(futures):
-            result = future.result()
-            if result:  # Only add valid paths
-                wav_paths.append(result)
-
-    print(
-        f"Audio extraction for {len(audio_source_files)} files completed in {time() - start_time:.2f} seconds."
-    )
-    return wav_paths
-
-
-def get_resolve() -> Any:
-    script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
-    if script_api_dir:
-        resolve_modules_path = os.path.join(script_api_dir, "Modules")
-        if resolve_modules_path not in sys.path:
-            sys.path.insert(
-                0, resolve_modules_path
-            )  # Prepend to ensure it's checked first
-            print(f"Added to sys.path: {resolve_modules_path}")
-        else:
-            print(f"Already in sys.path: {resolve_modules_path}")
-
-    try:
-        from python_get_resolve import GetResolve
-
-        # import DaVinciResolveScript as bmd
-    except ImportError as e:
-        print(f"Failed to import GetResolve or its dependencies: {e}")
-        print("Check and ensure DaVinci Resolve installation is correct.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"An unexpected error occurred during import: {e}")
-        sys.exit(1)
-    resolve = GetResolve()  # noqa
-    return resolve
-
-
-resolve = get_resolve()
+class TimelineProperties(TypedDict):
+    name: str
+    FPS: float
+    item_usages: List[TimelineItem]
 
 
 class EditFrames(TypedDict):
@@ -197,6 +102,227 @@ class FileSource(TypedDict):
     bmd_media_pool_item: Any
     file_path: str
     uuid: str
+
+
+# export timeline to XML
+def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
+    """
+    Export the current timeline to an XML file.
+
+    Args:
+        timeline (Any): The timeline object to export.
+        file_path (str): The path where the XML file will be saved.
+    """
+    if not timeline:
+        print("No timeline to export.")
+        return
+
+    # Assuming the Resolve API has a method to export timelines
+    success = timeline.Export(file_path, resolve.EXPORT_FCP_7_XML)
+    if success:
+        print(f"Timeline exported successfully to {file_path}")
+    else:
+        print("Failed to export timeline.")
+
+
+# export timeline to XML
+def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
+    """
+    Export the current timeline to an XML file.
+
+    Args:
+        timeline (Any): The timeline object to export.
+        file_path (str): The path where the XML file will be saved.
+    """
+    if not timeline:
+        print("No timeline to export.")
+        return
+
+    # Assuming the Resolve API has a method to export timelines
+    success = timeline.Export(file_path, resolve.EXPORT_OTIO)
+    if success:
+        print(f"Timeline exported successfully to {file_path}")
+    else:
+        print("Failed to export timeline.")
+
+
+if not load_dotenv():
+    raise FileNotFoundError(".env file not found.")
+
+
+class AudioFromVideo(TypedDict):
+    video_bmd_media_pool_item: Any
+    video_file_path: str
+    audio_file_path: str
+    audio_file_uuid: str
+    audio_file_name: str
+    silence_intervals: List[SilenceInterval]
+
+
+def extract_audio(file: Any, root_dir) -> AudioFromVideo | None:
+    filepath = file.get("file_path")
+    if not filepath or not os.path.exists(filepath):
+        return
+
+    basename = os.path.basename(filepath)
+    print(f"Processing file: {basename}")
+
+    wav_path = os.path.join(root_dir, "temp", f"{os.path.basename(file['uuid'])}.wav")
+
+    audio_from_video: AudioFromVideo = {
+        "audio_file_name": os.path.basename(wav_path),
+        "audio_file_path": wav_path,
+        "audio_file_uuid": file["uuid"],
+        "video_file_path": filepath,
+        "video_bmd_media_pool_item": file["bmd_media_pool_item"],
+        "silence_intervals": [],
+    }
+
+    if misc_utils.is_valid_audio(wav_path):
+        print(f"{wav_path} is valid audio")
+        return audio_from_video
+
+    print(f"Extracting audio from: {filepath}")
+    audio_extract_cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        filepath,
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        wav_path,
+    ]
+    subprocess.run(audio_extract_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return audio_from_video
+
+
+def process_audio_files(
+    audio_source_files, root_dir, max_workers=4
+) -> list[AudioFromVideo]:
+    """Runs audio extraction in parallel using ThreadPoolExecutor."""
+    print(f"audio source files: {audio_source_files}")
+    print(f"root dir: {root_dir}")
+
+    start_time = time()
+
+    audios_from_video: list[AudioFromVideo] = []
+
+    print(f"Starting audio extraction with {max_workers} workers.")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(extract_audio, file, root_dir)
+            for file in audio_source_files
+        ]
+
+        for future in as_completed(futures):
+            result = future.result()
+            if result:  # Only add valid paths
+                audios_from_video.append(result)
+
+    print(
+        f"Audio extraction for {len(audio_source_files)} files completed in {time() - start_time:.2f} seconds."
+    )
+    return audios_from_video
+
+
+def detect_silence_in_file(audio_file: AudioFromVideo, timeline_fps) -> AudioFromVideo:
+    """Runs FFmpeg silence detection on a single WAV file and returns intervals."""
+    print(f"Running silence detection on: {audio_file['audio_file_name']}")
+    processed_audio = audio_file["audio_file_path"]
+    silence_detect_cmd = [
+        "ffmpeg",
+        "-i",
+        processed_audio,
+        "-af",
+        "silencedetect=n=-20dB:d=0.5",
+        "-f",
+        "null",
+        "-",
+    ]
+    proc = subprocess.run(
+        silence_detect_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stderr_output = proc.stderr
+
+    silence_data: list[SilenceInterval] = []
+    current_silence: SilenceInterval = {"start": 0, "end": 0}
+    for line in stderr_output.splitlines():
+        line = line.strip()
+        if "silence_start:" in line:
+            try:
+                start_time = float(line.split("silence_start:")[1].strip())
+                current_silence["start"] = misc_utils.sec_to_frames(
+                    start_time, timeline_fps
+                )
+            except ValueError:
+                continue
+        elif "silence_end:" in line and "silence_duration:" in line:
+            try:
+                end_time = float(line.split("silence_end:")[1].split("|")[0].strip())
+                current_silence["end"] = misc_utils.sec_to_frames(
+                    end_time, timeline_fps
+                )
+                silence_data.append(current_silence)
+                current_silence = {"start": 0, "end": 0}
+            except ValueError:
+                continue
+    audio_file["silence_intervals"] = silence_data
+    return audio_file
+
+
+def detect_silence_parallel(
+    processed_audio: list[AudioFromVideo], timeline_fps, max_workers=4
+) -> dict[str, AudioFromVideo]:
+    """Runs silence detection in parallel across audio files."""
+    start_time = time()
+    results: dict[str, AudioFromVideo] = {}
+
+    print(f"Starting silence detection with {max_workers} workers.")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(detect_silence_in_file, audio_from_video, timeline_fps)
+            for audio_from_video in processed_audio
+        ]
+
+        for future in as_completed(futures):
+            final_audio: AudioFromVideo = future.result()
+            results[final_audio["video_file_path"]] = final_audio
+
+    return results
+
+
+def get_resolve() -> Any:
+    script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
+    if script_api_dir:
+        resolve_modules_path = os.path.join(script_api_dir, "Modules")
+        if resolve_modules_path not in sys.path:
+            sys.path.insert(
+                0, resolve_modules_path
+            )  # Prepend to ensure it's checked first
+            print(f"Added to sys.path: {resolve_modules_path}")
+        else:
+            print(f"Already in sys.path: {resolve_modules_path}")
+
+    try:
+        from python_get_resolve import GetResolve
+
+        # import DaVinciResolveScript as bmd
+    except ImportError as e:
+        print(f"Failed to import GetResolve or its dependencies: {e}")
+        print("Check and ensure DaVinci Resolve installation is correct.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred during import: {e}")
+        sys.exit(1)
+    resolve = GetResolve()  # noqa
+    return resolve
+
+
+resolve = get_resolve()
 
 
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
@@ -263,7 +389,6 @@ def get_source_media_from_timeline_item(
 
 def main() -> None:
     global resolve
-
     script_start_time: float = time()
     if not resolve:
         print("Could not connect to DaVinci Resolve. Is it running?")
@@ -285,6 +410,12 @@ def main() -> None:
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
     curr_timecode = timeline.GetCurrentTimecode()
+
+    current_file_path = os.path.dirname(os.path.abspath(__file__))
+    # export state of current timeline to otio
+    otio_file_path = os.path.join(current_file_path, f"pre-edit_timeline_export.otio")
+    export_timeline_to_otio(timeline, file_path=otio_file_path)
+    print(f"Exported timeline to OTIO in {otio_file_path}")
 
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
@@ -334,66 +465,16 @@ def main() -> None:
         os.makedirs(temp_dir)
         print(f"Created temp directory: {temp_dir}")
 
-    processed_audio_paths = process_audio_files(audio_source_files, root_dir)
-
-    for wav_path in processed_audio_paths:
-        print(f"Running silence detection on: {wav_path}")
-        silence_detect_cmd = [
-            "ffmpeg",
-            "-i",
-            wav_path,
-            "-af",
-            "silencedetect=n=-20dB:d=0.5",
-            "-f",
-            "null",
-            "-",
-        ]
-        proc = subprocess.run(
-            silence_detect_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        stderr_output = proc.stderr
-        # print(f"Output: {stderr_output}")
-        file_data = []
-        current_silence: SilenceInterval = {"start": 0, "end": 0}
-        for line in stderr_output.splitlines():
-            line = line.strip()
-            if "silence_start:" in line:
-                try:
-                    start_time = float(line.split("silence_start:")[1].strip())
-                    current_silence["start"] = misc_utils.sec_to_frames(
-                        start_time, timeline_fps
-                    )
-                except ValueError:
-                    continue
-            elif "silence_end:" in line and "silence_duration:" in line:
-                try:
-                    end_time = float(
-                        line.split("silence_end:")[1].split("|")[0].strip()
-                    )
-                    current_silence["end"] = misc_utils.sec_to_frames(
-                        end_time, timeline_fps
-                    )
-                except ValueError:
-                    continue
-
-                try:
-                    duration = float(
-                        line.split("silence_duration:")[1].split("|")[0].strip()
-                    )
-                    file_data.append(current_silence)
-                    current_silence = {
-                        "start": 0,
-                        "end": 0,
-                    }
-                except ValueError:
-                    continue
+    processed_audio_paths: list[AudioFromVideo] = process_audio_files(
+        audio_source_files, root_dir
+    )
+    silence_intervals_by_file = detect_silence_parallel(
+        processed_audio_paths, timeline_fps
+    )
 
     for file in audio_source_files:
-        wav_path = file["file_path"]
-        project_data["files"][wav_path] = {
+        audio_path = file["file_path"]
+        project_data["files"][audio_path] = {
             "properties": {
                 "FPS": timeline_fps,
             },
@@ -401,8 +482,16 @@ def main() -> None:
             "timelineItems": [],
             "fileSource": file,
         }
-        project_data["files"][wav_path]["silenceDetections"] = file_data
-        print(f"Detected {len(file_data)} silence segments in {wav_path}")
+        if audio_path not in silence_intervals_by_file:
+            print(f"No silence detected in {audio_path}")
+            continue
+
+        silence_intervals: AudioFromVideo = silence_intervals_by_file[audio_path]
+
+        project_data["files"][audio_path]["silenceDetections"] = silence_intervals[
+            "silence_intervals"
+        ]
+        print(f"Detected {len(silence_intervals)} silence segments in {audio_path}")
 
     end_time_silence = time()
     execution_time_silence = end_time_silence - silence_detect_time_start
@@ -446,8 +535,23 @@ def main() -> None:
             edit_instructions: List[EditInstruction] = (
                 create_edits_with_optional_silence(main_clip_data, silence_detections)
             )
-        item["edit_instructions"] = edit_instructions
-        timeline_items.append(item)
+            item["edit_instructions"] = edit_instructions
+            timeline_items.append(item)
+
+    current_file_path = os.path.dirname(os.path.abspath(__file__))
+    json_output_path = os.path.join(current_file_path, "silence_detections.json")
+    misc_utils.export_to_json(project_data, json_output_path)
+
+    # let's just run create_otio.py as subprocess.run for now
+    subprocess.run([sys.executable, os.path.join(current_file_path, "create_otio.py")])
+    import_otio_file_path = os.path.join(
+        current_file_path, "edited_timeline_refactored.otio"
+    )
+    timeline_name = f"{timeline_name} - Silence Detection{time()}"
+    imported_timeline = import_otio_timeline(
+        import_otio_file_path, project, timeline_name
+    )
+    return
 
     full_end_time = time()
     execution_time = full_end_time - script_start_time
@@ -459,61 +563,23 @@ def main() -> None:
     time_to_edit = time_edit_end - time_edit_start
     print(f"Silence detection completed in {execution_time_silence:.2f} seconds.")
     print(f"Edit timeline creation completed in {time_to_edit:.2f} seconds.")
-    export_xml_time = time()
+    export_otio_start = time()
     edit_timeline = project.GetCurrentTimeline()
-
-    current_file_path = os.path.dirname(os.path.abspath(__file__))
-    xml_file_path = os.path.join(current_file_path, f"temp_timeline_export2.xml")
-    export_timeline_to_xml(edit_timeline, file_path=xml_file_path)
-    export_xml_end_time = time()
-    export_xml_execution_time = export_xml_end_time - export_xml_time
+    otio_file_path = os.path.join(current_file_path, f"temp_timeline_export2.otio")
+    export_timeline_to_otio(edit_timeline, file_path=otio_file_path)
+    export_otio_endtime = time()
+    export_otio_exec_time = export_otio_endtime - export_otio_start
     print(
-        f"Exported timeline to XML in {export_xml_execution_time:.2f} seconds. File path: {xml_file_path}"
+        f"Exported timeline to XML in {export_otio_exec_time:.2f} seconds. File path: {otio_file_path}"
     )
-
-    current_file_path = os.path.dirname(os.path.abspath(__file__))
-    json_output_path = os.path.join(current_file_path, "silence_detections.json")
-    misc_utils.export_to_json(project_data, json_output_path)
-
-
-class FileProperties(TypedDict):
-    FPS: float
-
-
-class TimelineProperties(TypedDict):
-    name: str
-    FPS: float
-    item_usages: List[TimelineItem]
 
 
 def get_item_id(item: Any) -> str:
     track_type_and_index = item.GetTrackTypeAndIndex()
     track_type = track_type_and_index[0]
     track_index = track_type_and_index[1]
-    return f"{item.GetName()}-{track_type}-{track_index}"
-
-
-def get_timeline_item(item: Any) -> TimelineItem:
-    """Convert a timeline item to a dictionary."""
-    name = item.GetName()
     start_frame = item.GetStart()
-    track_type_and_index = item.GetTrackTypeAndIndex()
-    track_type = track_type_and_index[0]
-    track_index = track_type_and_index[1]
-    return {
-        "name": name,
-        "id": f"{name}-{track_type}-{track_index}",
-        "track_type": track_type,
-        "track_index": track_index,
-        "source_file_path": item.GetMediaPoolItem().GetClipProperty("File Path"),
-        "start_frame": start_frame,
-        "end_frame": item.GetEnd(),
-        "source_start_frame": item.GetSourceStartFrame(),
-        "source_end_frame": item.GetSourceEndFrame(),
-        "duration": item.GetDuration(),
-        "edit_instructions": [],
-        "bmd_item": item,
-    }
+    return f"{item.GetName()}-{track_type}-{track_index}--{start_frame}"
 
 
 def add_markers_to_timeline() -> None:
@@ -542,11 +608,6 @@ def add_markers_to_timeline() -> None:
             # print(f"Added marker for silence from {start} to {end}")
 
 
-# add_markers_to_timeline()
-
-# stills_dir = project.GetSetting("colorGalleryStillsLocation")
-
-
 def make_edit_timeline(project_data: ProjectData, project) -> None:
     global resolve
     curr_timecode = project.GetCurrentTimeline().GetCurrentTimecode()
@@ -565,9 +626,8 @@ def make_edit_timeline(project_data: ProjectData, project) -> None:
         edit_timeline = media_pool.CreateEmptyTimeline(edit_timeline_name)
         num += 1
 
-    # switch to the new timeline
+    switch_to_page("edit")
     resolve.OpenPage("edit")
-    # set the new timeline as current
     project.SetCurrentTimeline(edit_timeline)
 
     media_appends: list[Any] = []
@@ -589,18 +649,10 @@ def make_edit_timeline(project_data: ProjectData, project) -> None:
         media_pool_items.append(media_pool_item)
         timeline_items.append(item)
 
-    # for file in media_pool_items:
-    #     file_path = file.GetClipProperty("File Path")
-    #     if file_path not in project_data["audiofiles"]:
-    #         print(f"File {file_path} not in project data, skipping.")
-    #         continue
-
-    #     file_data = project_data[file_path]
-    #     timeline_items = file_data["timelineItems"]
-
     FLOAT_EPSILON = 1e-9
     for timeline_item in timeline_items:
-        print(timeline_item)
+        current_media_pool_item = timeline_item["bmd_item"].GetMediaPoolItem()
+
         edit_instructions = timeline_item["edit_instructions"]
 
         for edit in edit_instructions:
@@ -619,7 +671,7 @@ def make_edit_timeline(project_data: ProjectData, project) -> None:
                 )
 
             clip_info = {
-                "mediaPoolItem": media_pool_item,
+                "mediaPoolItem": current_media_pool_item,
                 "startFrame": source_start_time,
                 "endFrame": source_end_exclusive,  # Using adjusted exclusive end
                 "recordFrame": timeline_start_frame,
@@ -628,12 +680,6 @@ def make_edit_timeline(project_data: ProjectData, project) -> None:
                 # Add trackIndex etc. if needed
             }
             media_appends.append(clip_info)
-
-        # append = media_pool.AppendToTimeline([clip_info])
-
-    # append all clips to the timeline
-    # print(f"Appending {len(media_appends)} clips to timeline")
-    # print(f"appends: {media_appends}")
 
     # list append
     # append = media_pool.AppendToTimeline(media_appends)
@@ -649,21 +695,35 @@ def make_edit_timeline(project_data: ProjectData, project) -> None:
     edit_timeline.SetCurrentTimecode(curr_timecode)
     print(f"Timeline timecode after: {edit_timeline.GetCurrentTimecode()}")
 
-    # print(append)
 
-    # clip_info = {
-    #     "mediaPoolItem": file,  # The MediaPoolItem you're appending
-    #     "startFrame": 10,  # In point (in source media frame numbers)
-    #     "endFrame": 5000,  # Out point (exclusive)
-    #     "recordFrame": 114206,  # Position on the timeline to place the clip (in timeline frame numbers)
-    #     # "trackIndex": 1,  # Optional: which track to insert into
-    #     # "mediaType": 1,  # Optional: 1 = video, 2 = audio
-    # }
-    # append = media_pool.AppendToTimeline([clip_info])
-    # print(append)
+def import_otio_timeline(
+    otio_file_path: str, project: Any, timeline_name: str
+) -> Any | None:
+    media_pool = project.GetMediaPool()
+    timeline = media_pool.ImportTimelineFromFile(
+        otio_file_path, {"timelineName": timeline_name}
+    )
+    if not timeline:
+        print("Failed to import OTIO timeline.")
+        return
+    print(f"Imported OTIO timeline: {timeline}")
+    return timeline
 
 
 if __name__ == "__main__":
+    # current_file_path = os.path.dirname(os.path.abspath(__file__))
+    # import_otio_file_path = os.path.join(
+    #     current_file_path, "edited_timeline_refactored.otio"
+    # )
+    # print(f"Importing OTIO file: {import_otio_file_path}")
+    # timeline_name = f"OTIO test - Silence Detection"
+    # project = resolve.GetProjectManager().GetCurrentProject()
+    # print(f"Project: {project.GetName()}")
+    # imported_timeline = import_otio_timeline(
+    #     import_otio_file_path, project, timeline_name
+    # )
+    # sys.exit(1)
+
     script_time = time()
     main()
     script_end_time = time()
