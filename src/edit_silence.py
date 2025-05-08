@@ -2,12 +2,11 @@ from typing import TypedDict
 import math
 
 
-# --- edit_types.py (Assume unchanged) ---
 class ClipData(TypedDict):
     source_start_frame: float
     source_end_frame: float  # Inclusive end point/time
-    start_frame: int
-    end_frame: int
+    start_frame: float
+    end_frame: float
 
 
 class SilenceInterval(TypedDict):
@@ -18,8 +17,8 @@ class SilenceInterval(TypedDict):
 class EditInstruction(TypedDict):
     source_start_frame: float  # Precise source start point/time (inclusive)
     source_end_frame: float  # Precise source end point/time (inclusive)
-    start_frame: int  # Calculated timeline start frame (inclusive)
-    end_frame: int  # Calculated timeline end frame (inclusive)
+    start_frame: float  # Calculated timeline start frame (inclusive)
+    end_frame: float  # Calculated timeline end frame (inclusive)
     enabled: bool
 
 
@@ -245,7 +244,6 @@ def create_edits_with_optional_silence(
 
     # --- Optional Diagnostic Check ---
     if not keep_silence_segments and len(edited_clips) > 1:
-        print("--- Running Diagnostic Check for Gaps/Overlaps ---")
         has_issue = False
         for i in range(len(edited_clips) - 1):
             # Check only enabled segments if keep_silence_segments is True? No, check all for this diagnostic.
@@ -262,8 +260,6 @@ def create_edits_with_optional_silence(
                     )
                 else:  # clip2_start > clip1_end + 1
                     print(f"  ISSUE TYPE: Gap ({clip2_start - clip1_end - 1} frame(s))")
-        if not has_issue:
-            print("--- Diagnostic Check: No gaps or overlaps detected. ---")
 
     return edited_clips
 

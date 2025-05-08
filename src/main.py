@@ -44,11 +44,11 @@ class TimelineProperties(TypedDict):
 
 
 class EditFrames(TypedDict):
-    start_frame: int
-    end_frame: int
-    source_start_frame: int
-    source_end_frame: int
-    duration: int
+    start_frame: float
+    end_frame: float
+    source_start_frame: float
+    source_end_frame: float
+    duration: float
 
 
 class TimelineItem(TypedDict):
@@ -58,11 +58,11 @@ class TimelineItem(TypedDict):
     track_type: Literal["video", "audio", "subtitle"]
     track_index: int
     source_file_path: str
-    start_frame: int
-    end_frame: int
-    source_start_frame: int
-    source_end_frame: int
-    duration: int
+    start_frame: float
+    end_frame: float
+    source_start_frame: float
+    source_end_frame: float
+    duration: float
     edit_instructions: list[EditInstruction]
 
 
@@ -118,7 +118,7 @@ def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
         return
 
     # Assuming the Resolve API has a method to export timelines
-    success = timeline.Export(file_path, resolve.EXPORT_FCP_7_XML)
+    success = timeline.Export(file_path, RESOLVE.EXPORT_FCP_7_XML)
     if success:
         print(f"Timeline exported successfully to {file_path}")
     else:
@@ -139,7 +139,7 @@ def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
         return
 
     # Assuming the Resolve API has a method to export timelines
-    success = timeline.Export(file_path, resolve.EXPORT_OTIO)
+    success = timeline.Export(file_path, RESOLVE.EXPORT_OTIO)
     if success:
         print(f"Timeline exported successfully to {file_path}")
     else:
@@ -164,10 +164,7 @@ def extract_audio(file: Any, root_dir) -> AudioFromVideo | None:
     if not filepath or not os.path.exists(filepath):
         return
 
-    basename = os.path.basename(filepath)
-    print(f"Processing file: {basename}")
-
-    wav_path = os.path.join(root_dir, "temp", f"{os.path.basename(file['uuid'])}.wav")
+    wav_path = os.path.join(root_dir, "temp", f"{file['uuid']}.wav")
 
     audio_from_video: AudioFromVideo = {
         "audio_file_name": os.path.basename(wav_path),
@@ -179,7 +176,6 @@ def extract_audio(file: Any, root_dir) -> AudioFromVideo | None:
     }
 
     if misc_utils.is_valid_audio(wav_path):
-        print(f"{wav_path} is valid audio")
         return audio_from_video
 
     print(f"Extracting audio from: {filepath}")
@@ -201,11 +197,7 @@ def process_audio_files(
     audio_source_files, root_dir, max_workers=4
 ) -> list[AudioFromVideo]:
     """Runs audio extraction in parallel using ThreadPoolExecutor."""
-    print(f"audio source files: {audio_source_files}")
-    print(f"root dir: {root_dir}")
-
     start_time = time()
-
     audios_from_video: list[AudioFromVideo] = []
 
     print(f"Starting audio extraction with {max_workers} workers.")
@@ -228,7 +220,6 @@ def process_audio_files(
 
 def detect_silence_in_file(audio_file: AudioFromVideo, timeline_fps) -> AudioFromVideo:
     """Runs FFmpeg silence detection on a single WAV file and returns intervals."""
-    print(f"Running silence detection on: {audio_file['audio_file_name']}")
     processed_audio = audio_file["audio_file_path"]
     silence_detect_cmd = [
         "ffmpeg",
@@ -278,7 +269,6 @@ def detect_silence_parallel(
     processed_audio: list[AudioFromVideo], timeline_fps, max_workers=4
 ) -> dict[str, AudioFromVideo]:
     """Runs silence detection in parallel across audio files."""
-    start_time = time()
     results: dict[str, AudioFromVideo] = {}
 
     print(f"Starting silence detection with {max_workers} workers.")
@@ -322,17 +312,17 @@ def get_resolve() -> Any:
     return resolve
 
 
-resolve = get_resolve()
+RESOLVE = get_resolve()
 
 
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
 
 
 def switch_to_page(page: ResolvePage) -> None:
-    global resolve
-    current_page = resolve.GetCurrentPage()
+    global RESOLVE
+    current_page = RESOLVE.GetCurrentPage()
     if current_page != page:
-        resolve.OpenPage(page)
+        RESOLVE.OpenPage(page)
         print(f"Switched to {page} page.")
     else:
         print(f"Already on {page} page.")
@@ -346,15 +336,16 @@ def get_items_by_tracktype(
     for i in range(1, track_count + 1):
         track_items = timeline.GetItemListInTrack(track_type, i)
         for item in track_items:
-            print(item)
+            start_frame = item.GetStart()
+            item_name = item.GetName()
             timeline_item: TimelineItem = {
                 "bmd_item": item,
-                "duration": item.GetDuration(),
-                "name": item.GetName(),
+                "duration": 0,  # unused, therefore 0 #item.GetDuration(),
+                "name": item_name,
                 "edit_instructions": [],
-                "start_frame": item.GetStart(),
+                "start_frame": start_frame,
                 "end_frame": item.GetEnd(),
-                "id": get_item_id(item),
+                "id": get_item_id(item, item_name, start_frame, track_type, i),
                 "track_type": track_type,
                 "track_index": i,
                 "source_file_path": item.GetMediaPoolItem().GetClipProperty(
@@ -364,14 +355,12 @@ def get_items_by_tracktype(
                 "source_end_frame": item.GetSourceEndFrame(),
             }
             items.append(timeline_item)
-
     return items
 
 
 def get_source_media_from_timeline_item(
     timeline_item: TimelineItem,
 ) -> Union[FileSource, None]:
-    print(timeline_item)
     media_pool_item = timeline_item["bmd_item"].GetMediaPoolItem()
     if not media_pool_item:
         return None
@@ -388,15 +377,15 @@ def get_source_media_from_timeline_item(
 
 
 def main() -> None:
-    global resolve
+    global RESOLVE
     script_start_time: float = time()
-    if not resolve:
+    if not RESOLVE:
         print("Could not connect to DaVinci Resolve. Is it running?")
         # GetResolve already prints detailed errors if loading DaVinciResolveScript fails
         sys.exit(1)
 
-    switch_to_page("edit")
-    project = resolve.GetProjectManager().GetCurrentProject()
+    # switch_to_page("edit")
+    project = RESOLVE.GetProjectManager().GetCurrentProject()
     if not project:
         print("No project is currently open.")
         sys.exit(1)
@@ -409,8 +398,6 @@ def main() -> None:
 
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
-    curr_timecode = timeline.GetCurrentTimecode()
-
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     # export state of current timeline to otio
     otio_file_path = os.path.join(current_file_path, f"pre-edit_timeline_export.otio")
@@ -435,9 +422,7 @@ def main() -> None:
     }
 
     audio_source_files: list[FileSource] = []
-    media_pool_items: list[Any] = []
     for item in audio_track_items:
-        print(f"Processing audio item: {item['name']}")
         source_media_item = get_source_media_from_timeline_item(item)
         if not source_media_item:
             continue
@@ -450,11 +435,6 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Source media files count: {len(audio_source_files)}")
-
-    silence_start_re = re.compile(r"silence_start: (?P<start>\d+\.?\d*)")
-    silence_end_re = re.compile(r"silence_end: (?P<end>\d+\.?\d*)")
-    silence_duration_re = re.compile(r"silence_duration: (?P<duration>\d+\.?\d*)")
-
     silence_detect_time_start = time()
 
     root_dir = os.path.dirname(os.path.abspath(__file__))
@@ -496,16 +476,14 @@ def main() -> None:
     end_time_silence = time()
     execution_time_silence = end_time_silence - silence_detect_time_start
 
+    start_calc_edits = time()
     for item in project_data["timeline"]["audio_track_items"]:
-        print(f"Processing item: {item}")
         bmd_item = item["bmd_item"]
-        clip_name = bmd_item.GetName()
         clip_start_frame_timeline = item["start_frame"]
         clip_start_frame_source = item["source_start_frame"]
         clip_end_frame_timeline = item["end_frame"]
         clip_end_frame_source = item["source_end_frame"]
-        clip_duration = bmd_item.GetDuration()
-        clip_linked_items = bmd_item.GetLinkedItems()
+        # clip_linked_items = bmd_item.GetLinkedItems()
         clip_media_pool_item = bmd_item.GetMediaPoolItem()
         if not clip_media_pool_item:
             continue
@@ -523,11 +501,6 @@ def main() -> None:
             "timelineItems"
         ]
 
-        linked_items_file_paths = [
-            item.GetMediaPoolItem().GetClipProperty("File Path")
-            for item in clip_linked_items
-        ]
-
         silence_detections: Union[List[SilenceInterval], None] = project_data["files"][
             clip_file_path
         ]["silenceDetections"]
@@ -537,20 +510,29 @@ def main() -> None:
             )
             item["edit_instructions"] = edit_instructions
             timeline_items.append(item)
+    print(f"It took {time() - start_calc_edits:.2f} seconds to calculate edits")
 
+    json_ex_start = time()
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     json_output_path = os.path.join(current_file_path, "silence_detections.json")
     misc_utils.export_to_json(project_data, json_output_path)
+    print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
 
     # let's just run create_otio.py as subprocess.run for now
     subprocess.run([sys.executable, os.path.join(current_file_path, "create_otio.py")])
     import_otio_file_path = os.path.join(
         current_file_path, "edited_timeline_refactored.otio"
     )
+
+    start_import = time()
     timeline_name = f"{timeline_name} - Silence Detection{time()}"
     imported_timeline = import_otio_timeline(
         import_otio_file_path, project, timeline_name
     )
+    if not imported_timeline:
+        print("Failed to import OTIO timeline.")
+    end_import = time()
+    print(f"Importing OTIO took {end_import - start_import:.2f} seconds")
     return
 
     full_end_time = time()
@@ -574,42 +556,14 @@ def main() -> None:
     )
 
 
-def get_item_id(item: Any) -> str:
-    track_type_and_index = item.GetTrackTypeAndIndex()
-    track_type = track_type_and_index[0]
-    track_index = track_type_and_index[1]
-    start_frame = item.GetStart()
-    return f"{item.GetName()}-{track_type}-{track_index}--{start_frame}"
-
-
-def add_markers_to_timeline() -> None:
-    for filepath, file_data in project_data.items():
-        print(
-            f"Processing {filepath} with {len(file_data['silenceDetections'])} silence segments"
-        )
-        silence_detections: List[SilenceInterval] = file_data["silenceDetections"]
-        for detection in silence_detections:
-            start = detection["start"]
-            end = detection["end"]
-            duration_frames = detection["duration"]
-            duration_seconds = detection["duration"]
-            print(
-                f"Adding marker from {start} to {end} (Duration frames: {duration_frames})"
-            )
-
-            # Add markers to the timeline
-            timeline.AddMarker(
-                start,
-                "Green",
-                f"Silence {start} - {end}",
-                f"Silence detected from {start} to {end} (Duration frames: {duration_frames})",
-                duration_frames,
-            )
-            # print(f"Added marker for silence from {start} to {end}")
+def get_item_id(
+    item: Any, item_name: str, start_frame: float, track_type: str, track_index: int
+) -> str:
+    return f"{item_name}-{track_type}-{track_index}--{start_frame}"
 
 
 def make_edit_timeline(project_data: ProjectData, project) -> None:
-    global resolve
+    global RESOLVE
     curr_timecode = project.GetCurrentTimeline().GetCurrentTimecode()
 
     # make a new timeline
@@ -626,8 +580,7 @@ def make_edit_timeline(project_data: ProjectData, project) -> None:
         edit_timeline = media_pool.CreateEmptyTimeline(edit_timeline_name)
         num += 1
 
-    switch_to_page("edit")
-    resolve.OpenPage("edit")
+    # switch_to_page("edit")
     project.SetCurrentTimeline(edit_timeline)
 
     media_appends: list[Any] = []
@@ -711,19 +664,6 @@ def import_otio_timeline(
 
 
 if __name__ == "__main__":
-    # current_file_path = os.path.dirname(os.path.abspath(__file__))
-    # import_otio_file_path = os.path.join(
-    #     current_file_path, "edited_timeline_refactored.otio"
-    # )
-    # print(f"Importing OTIO file: {import_otio_file_path}")
-    # timeline_name = f"OTIO test - Silence Detection"
-    # project = resolve.GetProjectManager().GetCurrentProject()
-    # print(f"Project: {project.GetName()}")
-    # imported_timeline = import_otio_timeline(
-    #     import_otio_file_path, project, timeline_name
-    # )
-    # sys.exit(1)
-
     script_time = time()
     main()
     script_end_time = time()
