@@ -1,10 +1,27 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { LogSlider } from "./components/ui/volumeSlider";
-import VolumeMeter from "./components/ui/volumeMeter";
+import WaveformPlayer from "./components/audio/bbcwaveform";
+
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+
 import { cn } from "@/lib/utils";
 
 import {
@@ -15,8 +32,12 @@ import {
   RotateCcw,
   Link,
   Unlink,
+  EllipsisVertical,
+  Ellipsis,
+  XIcon,
 } from "lucide-react";
 import { RunPythonScriptWithArgs } from "../wailsjs/go/main/App";
+import { CloseApp } from "../wailsjs/go/main/App";
 
 // Reusable reset button with dimmed default state and hover transition
 function ResetButton({ onClick }: { onClick: () => void }) {
@@ -33,7 +54,7 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 }
 
 export default function App() {
-  const DEFAULT_THRESHOLD = -60;
+  const DEFAULT_THRESHOLD = -20;
   const DEFAULT_MIN_DURATION = 0.5;
   const DEFAULT_PADDING = 0.0;
 
@@ -75,9 +96,8 @@ export default function App() {
         size="lg"
         onMouseDown={handleMouseDown}
         onClick={handleClick}
-        className={`bg-emerald-600 hover:bg-emerald-700 hover:scale-[101%] text-white py-6 px-12 font-bold border-b-4 border-r-2 border-emerald-900 transition-all ${
-          pressed ? "border-0 scale-[99%] translate-y-0.5" : ""
-        }`}
+        className={`bg-emerald-600 hover:bg-emerald-700 hover:scale-[101%] text-white py-6 px-12 font-bold border-b-4 border-r-2 border-emerald-900 transition-all ${pressed ? "border-0 scale-[99%] translate-y-0.5" : ""
+          }`}
       >
         <Scissors className="h-6 w-6 ml-2" />
         Remove Silence
@@ -102,154 +122,206 @@ export default function App() {
     setPaddingLinked(true);
   };
 
+  const [windowMenuVisible, setWindowMenuVisible] = useState(false);
+
+  const handleWindowMenuToggle = () => {
+    setWindowMenuVisible((prev) => !prev);
+  };
+
+  const titleBarHeight = "2.35rem";
+
   return (
-    <div className="h-screen p-6 bg-[#28282e]">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-neutral-400">ResoCut</h1>
-        <Button
-          size="icon"
-          className="hover:bg-zinc-600/20 bg-transparent hover:text-white"
-        >
-          <Settings className="h-6 w-6 text-zinc-400 opacity-80 hover:text-blue-500 hover:opacity-100" />
-        </Button>
-      </header>
-
-      <main className="flex-1 gap-8 mt-8">
-        <VolumeMeter />
-        <div className="flex flex-col space-y-8">
-          {/* Volume Slider */}
-          <div className="flex items-center space-x-4">
-            <LogSlider
-              defaultDb={-20}
-              onGainChange={(gain) => console.log("Gain changed:", gain)}
-            />
-          </div>
-          {/* Threshold Loudness */}
-          <div className="space-y-2">
-            <Label className="font-medium">Threshold Loudness</Label>
-            <p className="text-sm text-zinc-500">
-              Set the threshold for silence detection.
-            </p>
+    <>
+      {/* TITLE BAR */}
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-50">
+            <Button
+              size={"sm"}
+              className="px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 hover:text-white"
+              onClick={CloseApp}
+            >
+              <XIcon className="scale-90" strokeWidth={2.5} />
+            </Button>
+            <h1 className="text-sm font-normal text-neutral-200">ResoCut</h1>
             <div className="flex items-center space-x-2">
-              <Slider
-                min={-80}
-                max={0}
-                step={1}
-                value={[threshold]}
-                onValueChange={(vals) => setThreshold(vals[0])}
-                className="w-64"
-              />
-              <span className="text-sm text-zinc-100 text-nowrap">
-                {threshold} dB
-              </span>
-              <ResetButton onClick={resetThreshold} />
+              <Button
+                size="icon"
+                className="bg-transparent hover:text-white hover:bg-transparent"
+              >
+                <Ellipsis className="h-8 w-8 text-xl scale-150 text-zinc-400 opacity-80 hover:text-blue-500 hover:opacity-100" />
+              </Button>
             </div>
           </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-64">
+          <ContextMenuItem inset onClick={CloseApp}>
+            Close
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <div
+        className="p-6 pt-3 bg-[#28282e] border-1 border-t-0 border-zinc-900"
+        style={{
+          marginTop: titleBarHeight,
+          height: `calc(100vh - ${titleBarHeight})`,
+          overflowY: "auto", // Make this div scrollable
+        }}
+      >
+        <header className="flex items-center justify-between"></header>
 
-          {/* Minimum Duration */}
-          <div className="space-y-2">
-            <Label className="font-medium">Minimum Duration</Label>
-            <p className="text-sm text-zinc-500">
-              Silence longer than this will be cut.
-            </p>
-            <div className="flex items-center space-x-2">
-              <Slider
-                min={0}
-                max={5}
-                step={0.001}
-                value={[minDuration]}
-                onValueChange={(vals) => setMinDuration(vals[0])}
-                className="w-64"
-              />
-              <span className="text-sm text-zinc-100">
-                {minDuration.toFixed(3)}s
-              </span>
-              <ResetButton onClick={resetMinDuration} />
-            </div>
-          </div>
-
-          {/* Padding */}
-          <div className="space-y-2">
-            <Label className="font-medium">Padding</Label>
-            <p className="text-sm text-zinc-500">
-              Extend clips before cutting.
-            </p>
-            <div className="flex items-start space-x-6">
-              {/* Left Padding */}
-              <div className="flex flex-col space-y-1 w-64">
-                <div className="flex items-center space-x-2">
-                  <Slider
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={[paddingLeft]}
-                    onValueChange={(vals) =>
-                      handlePaddingChange("left", vals[0])
-                    }
-                    className="w-full"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setPaddingLinked((l) => !l)}
-                    className="text-zinc-500 hover:text-zinc-300"
-                  >
-                    {paddingLocked ? (
-                      <Link className="h-2 w-2 ml-4" />
-                    ) : (
-                      <Unlink className="h-2 w-2 ml-4" />
-                    )}
-                  </Button>
-                </div>
-                <span className="text-sm text-zinc-400">
-                  Left:{" "}
-                  <span className="text-zinc-100">
-                    {paddingLeft.toFixed(2)}s
+        <main className="flex-1 gap-8 mt-8">
+          <div className="flex flex-col space-y-8">
+            {/* Group Threshold, Min Duration, and Padding horizontally */}
+            <div className="flex flex-row space-x-6 items-start">
+              {" "}
+              {/* Added flex container */}
+              {/* Threshold Silence Column */}
+              <div className="flex flex-col space-y-2 items-center">
+                {" "}
+                {/* Make this a flex column for its own content */}
+                <LogSlider
+                  defaultDb={-20}
+                  onGainChange={(gain) => setThreshold(gain)}
+                />
+                <div className="flex flex-col items-center text-center mt-1 text-base/tight">
+                  <p className="text-base/tight">
+                    Silence
+                    <br />
+                    Threshold
+                  </p>
+                  <span className="text-sm text-zinc-100 whitespace-nowrap">
+                    {threshold.toFixed(2)} dB
                   </span>
-                </span>
-              </div>
-
-              {/* Right Padding */}
-              <div className="flex flex-col space-y-1 w-64">
-                <div className="flex items-center space-x-2">
-                  <Slider
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={[paddingRight]}
-                    onValueChange={(vals) =>
-                      handlePaddingChange("right", vals[0])
-                    }
-                    className="w-full"
-                  />
-                  <ResetButton onClick={() => resetPadding()} />
                 </div>
-                <span className="text-sm text-zinc-400">
-                  Right:{" "}
-                  <span className="text-zinc-100">
-                    {paddingRight.toFixed(2)}s
-                  </span>
-                </span>
               </div>
-            </div>
-          </div>
+              <div className="flex flex-col space-y-2 w-full">
+                {/* Minimum Duration Column */}
+                <div className="space-y-2 w-full">
+                  <div className="flex items-center space-x-5">
+                    <Label className="font-medium w-32 flex-row-reverse">
+                      Minimum Duration
+                    </Label>
+                    <div className="flex w-64 items-center space-x-2">
+                      <Slider
+                        min={0}
+                        max={5}
+                        step={0.001}
+                        value={[minDuration]}
+                        onValueChange={(vals) => setMinDuration(vals[0])}
+                        className="w-full" // Changed from w-64 to w-full for better responsiveness
+                      />
+                      <span className="text-sm text-zinc-100">
+                        {minDuration.toFixed(2)}s
+                      </span>
+                      <ResetButton onClick={resetMinDuration} />
+                    </div>
+                  </div>
+                </div>
 
-          {/* Make New Timeline */}
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              checked={makeNewTimeline}
-              onCheckedChange={(checked) =>
-                setMakeNewTimeline(checked === true)
-              }
-            />
-            <Label className="text-base">Make new timeline</Label>
-          </div>
-        </div>
-      </main>
+                {/* Padding Column */}
+                <div className="space-y-2 flex-1">
+                  <div className="flex items-baseline space-x-5">
+                    <Label className="font-medium w-32 text-right flex-row-reverse">
+                      Padding
+                    </Label>
+                    <div className="flex items-start space-x-0">
+                      {/* Left Padding */}
+                      <div className="flex flex-col space-y-1 w-full">
+                        <div className="flex items-center">
+                          <Slider
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={[paddingLeft]}
+                            onValueChange={(vals) =>
+                              handlePaddingChange("left", vals[0])
+                            }
+                            className="w-32"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setPaddingLinked((l) => !l)}
+                            className="text-zinc-500 hover:text-zinc-300 text-center"
+                          >
+                            {paddingLocked ? (
+                              <Link className="h-4 w-4" />
+                            ) : (
+                              <Unlink className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                        <span className="text-sm text-zinc-400">
+                          Left:{" "}
+                          <span className="text-zinc-100">
+                            {paddingLeft.toFixed(2)}s
+                          </span>
+                        </span>
+                      </div>
 
-      <footer className="mt-8 flex justify-left">
-        <RemoveSilenceBtnComponent />
-      </footer>
-    </div>
+                      {/* Right Padding */}
+                      <div className="flex flex-col space-y-1 w-full">
+                        {" "}
+                        {/* Changed from w-64 */}
+                        <div className="flex items-center space-x-2">
+                          <Slider
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={[paddingRight]}
+                            onValueChange={(vals) =>
+                              handlePaddingChange("right", vals[0])
+                            }
+                            className="w-32"
+                          />
+                          <ResetButton onClick={() => resetPadding()} />
+                        </div>
+                        <span className="text-sm text-zinc-400">
+                          Right:{" "}
+                          <span className="text-zinc-100">
+                            {paddingRight.toFixed(2)}s
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col space-y-8 w-full">
+                  {/* Wavesurfer Player */}
+                  <WaveformPlayer
+                    audioUrl="/preview-render.wav"
+                    waveformDataUrl="/data.json"
+                  />
+
+                  {/* test audio native html
+                  <audio
+                    src="http://localhost:34115/preview-render.ogg"
+                    controls
+                    className="w-full"
+                  /> */}
+
+                  <div className="items-center space-y-2">
+                    {/* Make New Timeline */}
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        checked={makeNewTimeline}
+                        onCheckedChange={(checked) =>
+                          setMakeNewTimeline(checked === true)
+                        }
+                      />
+                      <Label className="text-base">Make new timeline</Label>
+                    </div>
+                    <RemoveSilenceBtnComponent />
+                  </div>
+                </div>
+              </div>
+            </div>{" "}
+            {/* End of flex row container */}
+          </div>
+        </main>
+      </div>
+    </>
   );
 }

@@ -1,0 +1,42 @@
+/* WaveformWithMeter.css */
+
+.controls-meter-container {
+    display: flex;
+    align-items: center;
+    margin-top: 10px;
+    gap: 15px; /* Space between button and meter */
+  }
+  
+  .play-pause-button {
+    /* Style your button using classes if preferred */
+    padding: 10px;
+    background-color: #4f46e5;
+    color: #fff;
+    border-radius: 5px;
+    border: none; /* If using Shadcn Button, these might be handled by variant */
+    cursor: pointer;
+  }
+  
+  .play-pause-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+  }
+  
+  
+  .meter-bar-container {
+    flex-grow: 1; /* Allow meter to take available space */
+    height: 18px; /* Height of the meter bar */
+    background-color: #333; /* Background of the empty part of the meter */
+    border-radius: 3px;
+    overflow: hidden; /* Hide overflow from the inner bar */
+    position: relative; /* For potential future additions like ticks */
+  }
+  
+  .meter-bar-level {
+    height: 100%;
+    background: green;
+    /* background: linear-gradient(to right, #4ade80, #facc15, #f87171);  */
+    /* The MAGIC for smooth animation */
+    transition: width 0.01s linear; /* Tune duration (e.g., 0.05s - 0.1s) and timing function */
+    width: 0%; /* Initial width */
+  }
