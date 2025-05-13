@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-import math
-import uuid
-from statistics import median_grouped
-from time import time
+from time import time, sleep
 from typing import (
     Any,
     Dict,
@@ -17,12 +14,8 @@ from typing import (
 import os
 import sys
 import subprocess
-import re
 
-# from dotenv import load_dotenv
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 
 from edit_silence import (
     create_edits_with_optional_silence,
@@ -33,76 +26,21 @@ from edit_silence import (
 
 import misc_utils
 
+from local_types import (
+    Timeline,
+    TimelineItem,
+    FileSource,
+    ProjectData,
+)
 
-class FileProperties(TypedDict):
-    FPS: float
+import create_otio
 
-
-class TimelineProperties(TypedDict):
-    name: str
-    FPS: float
-    item_usages: List[TimelineItem]
-
-
-class EditFrames(TypedDict):
-    start_frame: float
-    end_frame: float
-    source_start_frame: float
-    source_end_frame: float
-    duration: float
-
-
-class TimelineItem(TypedDict):
-    bmd_item: Any
-    name: str
-    id: str
-    track_type: Literal["video", "audio", "subtitle"]
-    track_index: int
-    source_file_path: str
-    start_frame: float
-    end_frame: float
-    source_start_frame: float
-    source_end_frame: float
-    duration: float
-    edit_instructions: list[EditInstruction]
-
-
-class FileData(TypedDict):
-    properties: FileProperties
-    silenceDetections: Optional[List[SilenceInterval]]
-    timelineItems: list[TimelineItem]
-    fileSource: FileSource
-
-
-class ProjectData(TypedDict):
-    project_name: str
-    timeline: Timeline
-    files: Dict[str, FileData]
-
-
-class Timeline(TypedDict):
-    name: str
-    fps: float
-    video_track_items: List[TimelineItem]
-    audio_track_items: List[TimelineItem]
-
-
-class Track(TypedDict):
-    name: str
-    type: Literal["video", "audio"]
-    index: int
-    items: List[Any]
-
-
-class ItemsByTracks(TypedDict):
-    videotrack: List[Track]
-    audiotrack: List[Track]
-
-
-class FileSource(TypedDict):
-    bmd_media_pool_item: Any
-    file_path: str
-    uuid: str
+from project_orga import (
+    map_media_pool_items_to_folders,
+    MediaPoolItemFolderMapping,
+    move_clips_to_temp_folder,
+    restore_clips_from_temp_folder,
+)
 
 
 # export timeline to XML
@@ -160,12 +98,12 @@ class AudioFromVideo(TypedDict):
     silence_intervals: List[SilenceInterval]
 
 
-def extract_audio(file: Any, root_dir) -> AudioFromVideo | None:
+def extract_audio(file: Any, target_folder: str) -> AudioFromVideo | None:
     filepath = file.get("file_path")
     if not filepath or not os.path.exists(filepath):
         return
 
-    wav_path = os.path.join(root_dir, "temp", f"{file['uuid']}.wav")
+    wav_path = os.path.join(target_folder, f"{file['uuid']}.wav")
 
     audio_from_video: AudioFromVideo = {
         "audio_file_name": os.path.basename(wav_path),
@@ -197,7 +135,7 @@ def extract_audio(file: Any, root_dir) -> AudioFromVideo | None:
 
 
 def process_audio_files(
-    audio_source_files, root_dir, max_workers=4
+    audio_source_files: list[FileSource], target_folder: str, max_workers=4
 ) -> list[AudioFromVideo]:
     """Runs audio extraction in parallel using ThreadPoolExecutor."""
     start_time = time()
@@ -206,7 +144,7 @@ def process_audio_files(
     print(f"Starting audio extraction with {max_workers} workers.")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(extract_audio, file, root_dir)
+            executor.submit(extract_audio, file, target_folder)
             for file in audio_source_files
         ]
 
@@ -315,7 +253,11 @@ def get_resolve() -> Any:
     return resolve
 
 
+# GLOBALS
 RESOLVE = get_resolve()
+TEMP_DIR: str = os.path.join(os.path.dirname(__file__), "temp")
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
 
 
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
@@ -390,15 +332,26 @@ def get_source_media_from_timeline_item(
     return source_media_item
 
 
+# def get_all_folders(project: Any, curr_folder: Optional[Any] = None) -> set[Any]:
+#     folders: set[Any] = set()
+#     if not curr_folder:
+#         curr_folder = project.GetMediaPool().GetRootFolder()
+#     for folder in curr_folder.GetSubFolders():
+#         folders.add(folder)
+#         folders.update(get_all_folders(project, folder))
+#     return folders
+
+
 def main() -> None:
     global RESOLVE
+    global TEMP_DIR
     script_start_time: float = time()
     if not RESOLVE:
         print("Could not connect to DaVinci Resolve. Is it running?")
         # GetResolve already prints detailed errors if loading DaVinciResolveScript fails
         sys.exit(1)
 
-    # switch_to_page("edit")
+    switch_to_page("edit")
     project = RESOLVE.GetProjectManager().GetCurrentProject()
     if not project:
         print("No project is currently open.")
@@ -413,9 +366,9 @@ def main() -> None:
     timeline_fps = timeline.GetSetting("timelineFrameRate")
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     # export state of current timeline to otio
-    otio_file_path = os.path.join(current_file_path, f"pre-edit_timeline_export.otio")
-    export_timeline_to_otio(timeline, file_path=otio_file_path)
-    print(f"Exported timeline to OTIO in {otio_file_path}")
+    input_otio_path = os.path.join(TEMP_DIR, f"pre-edit_timeline_export.otio")
+    export_timeline_to_otio(timeline, file_path=input_otio_path)
+    print(f"Exported timeline to OTIO in {input_otio_path}")
 
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
@@ -450,18 +403,8 @@ def main() -> None:
     print(f"Source media files count: {len(audio_source_files)}")
     silence_detect_time_start = time()
 
-    root_dir = os.path.dirname(os.path.abspath(__file__))
-    # one above root dir
-    root_dir = os.path.dirname(root_dir)
-
-    # make the temp directory if it doesn't exist
-    temp_dir = os.path.join(root_dir, "temp")
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)
-        print(f"Created temp directory: {temp_dir}")
-
     processed_audio_paths: list[AudioFromVideo] = process_audio_files(
-        audio_source_files, root_dir
+        audio_source_files, TEMP_DIR
     )
     silence_intervals_by_file = detect_silence_parallel(
         processed_audio_paths, timeline_fps
@@ -528,46 +471,91 @@ def main() -> None:
     print(f"It took {time() - start_calc_edits:.2f} seconds to calculate edits")
 
     json_ex_start = time()
-    current_file_path = os.path.dirname(os.path.abspath(__file__))
-    json_output_path = os.path.join(current_file_path, "silence_detections.json")
+    json_output_path = os.path.join(TEMP_DIR, "silence_detections.json")
     misc_utils.export_to_json(project_data, json_output_path)
     print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
 
-    # let's just run create_otio.py as subprocess.run for now
-    subprocess.run([sys.executable, os.path.join(current_file_path, "create_otio.py")])
-    edited_otio_file_path = os.path.join(
-        current_file_path, "edited_timeline_refactored.otio"
+    edited_otio_path = os.path.join(TEMP_DIR, "edited_timeline_refactored.otio")
+    create_otio.edit_timeline_with_precalculated_instructions(
+        input_otio_path, project_data, edited_otio_path
     )
+
+    original_item_folder_map: dict[str, MediaPoolItemFolderMapping] = (
+        map_media_pool_items_to_folders(project, project_data)
+    )
+
+    media_pool = project.GetMediaPool()
+    timeline_id = timeline.GetMediaPoolItem().GetUniqueId()
+    original_timeline_folder = find_item_folder_by_id(project, timeline_id)
+    original_folder = media_pool.GetCurrentFolder()
+
+    start_move_clips = time()
+    # sleep(5.1)
+    temp_folder = move_clips_to_temp_folder(
+        project=project,
+        item_folder_map=original_item_folder_map,
+        temp_folder_name=str(time()),
+    )
+    end_move_clips = time()
+    print(
+        f"Moving clips to temp folder took {end_move_clips - start_move_clips:.2f} seconds"
+    )
+    # make sure the current folder is the temp folder
+    # media_pool.SetCurrentFolder(temp_folder)
 
     ## OTIO TIMELINE IMPORT
     start_import = time()
     timeline_name = f"{timeline_name} - Silence Detection{time()}"
-
-    media_pool = project.GetMediaPool()
-    timeline_id = timeline.GetMediaPoolItem().GetUniqueId()
-    timeline_folder = find_item_folder_by_id(project, timeline_id)
-    current_folder = media_pool.GetCurrentFolder()
-
-    if timeline_folder and timeline_folder != current_folder:
-        media_pool.SetCurrentFolder(timeline_folder)
-        print(f"Switched to folder: {timeline_folder.GetName()}")
-
     timeline = media_pool.ImportTimelineFromFile(
-        edited_otio_file_path,
-        {"timelineName": timeline_name, "importSourceClips": False},
+        edited_otio_path,
+        {
+            "timelineName": timeline_name,
+            "importSourceClips": True,
+        },
     )
     if not timeline:
         print("Failed to import OTIO timeline.")
         return
-    print(f"Imported OTIO timeline: {timeline}")
+    timeline_media_id = timeline.GetMediaPoolItem().GetMediaId()
 
-    # set the folder back to the original
-    if current_folder:
-        media_pool.SetCurrentFolder(current_folder)
-        print(f"Switched back to folder: {current_folder.GetName()}")
-
+    print(f"Imported OTIO timeline: {timeline.GetName()}")
+    # sleep(2.0)
     end_import = time()
     print(f"Importing OTIO took {end_import - start_import:.2f} seconds")
+
+    start_restore_clips = time()
+
+    # move the edited timeline to the "current folder"
+    if original_timeline_folder:
+        timeline_mapping_item: MediaPoolItemFolderMapping = {
+            "bmd_folder": original_timeline_folder,
+            "bmd_media_pool_item": timeline.GetMediaPoolItem(),
+            "media_pool_name": timeline.GetName(),
+            "file_path": "",
+        }
+        print(f"Timeline mapping item: {timeline_mapping_item}")
+        print(f"Timeline media ID: {timeline_media_id}")
+
+        original_item_folder_map[timeline_media_id] = timeline_mapping_item
+
+        # # this can be optimized by adding it to item_folder_map (one api call less)
+        # edited_moved = media_pool.MoveClips(
+        #     [timeline.GetMediaPoolItem()], original_timeline_folder
+        # )
+        # print(edited_moved)
+
+    restore_clips_from_temp_folder(project, original_item_folder_map, temp_folder)
+    media_pool.SetCurrentFolder(original_timeline_folder)
+    end_restore_clips = time()
+    print(
+        f"Restoring clips from temp folder took {end_restore_clips - start_restore_clips:.2f} seconds"
+    )
+
+    # set the folder back to the original
+    if original_folder:
+        media_pool.SetCurrentFolder(original_folder)
+        print(f"Switched back to folder: {original_folder.GetName()}")
+
     return
 
     full_end_time = time()
@@ -582,12 +570,12 @@ def main() -> None:
     print(f"Edit timeline creation completed in {time_to_edit:.2f} seconds.")
     export_otio_start = time()
     edit_timeline = project.GetCurrentTimeline()
-    otio_file_path = os.path.join(current_file_path, f"temp_timeline_export2.otio")
-    export_timeline_to_otio(edit_timeline, file_path=otio_file_path)
+    input_otio_path = os.path.join(current_file_path, f"temp_timeline_export2.otio")
+    export_timeline_to_otio(edit_timeline, file_path=input_otio_path)
     export_otio_endtime = time()
     export_otio_exec_time = export_otio_endtime - export_otio_start
     print(
-        f"Exported timeline to XML in {export_otio_exec_time:.2f} seconds. File path: {otio_file_path}"
+        f"Exported timeline to XML in {export_otio_exec_time:.2f} seconds. File path: {input_otio_path}"
     )
 
 

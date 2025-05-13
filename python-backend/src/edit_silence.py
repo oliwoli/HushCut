@@ -1,25 +1,5 @@
-from typing import TypedDict
 import math
-
-
-class ClipData(TypedDict):
-    source_start_frame: float
-    source_end_frame: float  # Inclusive end point/time
-    start_frame: float
-    end_frame: float
-
-
-class SilenceInterval(TypedDict):
-    start: float  # Inclusive source frame/time
-    end: float  # Exclusive source frame/time
-
-
-class EditInstruction(TypedDict):
-    source_start_frame: float  # Precise source start point/time (inclusive)
-    source_end_frame: float  # Precise source end point/time (inclusive)
-    start_frame: float  # Calculated timeline start frame (inclusive)
-    end_frame: float  # Calculated timeline end frame (inclusive)
-    enabled: bool
+from local_types import SilenceInterval, EditInstruction, ClipData
 
 
 # --- Helper functions (merge_intervals, map_source_to_timeline) ---

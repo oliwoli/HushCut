@@ -1,12 +1,9 @@
-# make_edited_otio.py
-
+import os
+import opentimelineio as otio
 from collections.abc import Mapping
 import time
-import opentimelineio as otio
 import json
-import os
 import copy
-import math
 import logging
 from collections import defaultdict
 from typing import (
@@ -16,29 +13,17 @@ from typing import (
     DefaultDict,
     Set,
     Tuple,
-    Any,
     TypedDict,
     Union,
-    cast,
 )
+from opentimelineio import schema as otio_schema
 
 # --- Logging Setup ---
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# --- Type Definitions ---
-try:
-    from main import ProjectData
-    from main import TimelineItem as JsonTimelineItem
-    from main import EditInstruction
-    from main import Timeline as ProjectTimeline
+from local_types import ProjectData, EditInstruction, TimelineItem
 
-    logger.info("Successfully imported types from main.py")
-except ImportError:
-    logger.error("CRITICAL: Could not import types from main.py.", exc_info=True)
-    exit(1)
-
-from opentimelineio import schema as otio_schema
 
 TrackItemType = Union[otio_schema.Clip, otio_schema.Gap, otio_schema.Transition]
 
@@ -152,10 +137,10 @@ def load_project_data(json_path: str) -> ProjectData:
 
 def _index_json_timeline_items(
     project_data: ProjectData,
-) -> Dict[str, JsonTimelineItem]:
+) -> Dict[str, TimelineItem]:
     # (Implementation is correct)
-    json_items_by_id: Dict[str, JsonTimelineItem] = {}
-    all_json_timeline_items: List[JsonTimelineItem] = []
+    json_items_by_id: Dict[str, TimelineItem] = {}
+    all_json_timeline_items: List[TimelineItem] = []
     timeline_data = project_data.get("timeline")
     if timeline_data:
         audio_items = timeline_data.get("audio_track_items")
@@ -169,19 +154,19 @@ def _index_json_timeline_items(
         item_edit_instructions = item.get("edit_instructions")
         if json_item_id and isinstance(item_edit_instructions, list):
             json_items_by_id[json_item_id] = item
-    logger.info(f"Indexed {len(json_items_by_id)} JSON items by their ID.")
+    logger.debug(f"Indexed {len(json_items_by_id)} JSON items by their ID.")
     return json_items_by_id
 
 
 def _map_otio_to_json_edits(
     original_otio_timeline: otio_schema.Timeline,
-    json_items_by_id: Dict[str, JsonTimelineItem],
+    json_items_by_id: Dict[str, TimelineItem],
     catalog: OriginalTimelineCatalog,
 ) -> GroupEditsMap:  # Returns Dict[str, List[EditInstruction]]
     # (Implementation is correct - uses ID matching)
     group_edits_map: GroupEditsMap = {}
     used_json_ids: Set[str] = set()
-    logger.info("Mapping OTIO items to JSON instructions using derived IDs...")
+    logger.debug("Mapping OTIO items to JSON instructions using derived IDs...")
     original_start_times_by_item_key: Dict[str, otio.opentime.RationalTime] = {
         item_key: start_time for item_key, _, _, start_time in catalog["ordered_items"]
     }
@@ -243,7 +228,7 @@ def _map_otio_to_json_edits(
     if not group_edits_map:
         logger.warning("group_edits_map is empty.")
     else:
-        logger.info(
+        logger.debug(
             f"Successfully mapped {len(group_edits_map)} OTIO items/groups to edit instructions."
         )
     return group_edits_map
@@ -317,7 +302,7 @@ def _catalog_original_timeline_items(
                 temp_processed_item_keys.add(item_key)
             current_pos_on_track_rt += item_on_orig_track.duration()
     ordered_items.sort(key=lambda x: x[3])
-    logger.info(
+    logger.debug(
         f"Cataloged {len(ordered_items)} unique items/groups from original timeline."
     )
     catalog_result: OriginalTimelineCatalog = {
@@ -339,7 +324,7 @@ def _apply_edited_segments_to_new_timeline(
     next_link_group_id: int,
 ) -> int:
 
-    logger.info(
+    logger.debug(
         f"Inside _apply_edited_segments for '{item_key}'. Received initial next_link_group_id: {next_link_group_id}. Instructions: {len(edit_instructions)}"
     )
 
@@ -366,7 +351,7 @@ def _apply_edited_segments_to_new_timeline(
         max_cursor_rt_before_group = max(
             max_cursor_rt_before_group, new_track_cursors_relative_rt[idx]
         )
-    logger.info(
+    logger.debug(
         f"  Syncing cursors for tracks {involved_track_indices} to max: {max_cursor_rt_before_group.value}"
     )
     for idx in involved_track_indices:
@@ -375,7 +360,7 @@ def _apply_edited_segments_to_new_timeline(
         )
         if sync_gap_needed.value > 1e-9:
             target_track_instance = new_timeline.tracks[idx]
-            logger.info(
+            logger.debug(
                 f"    Inserting pre-sync Gap duration {sync_gap_needed.value} on track idx {idx}"
             )
             target_track_instance.append(otio_schema.Gap(duration=sync_gap_needed))
@@ -410,12 +395,12 @@ def _apply_edited_segments_to_new_timeline(
             rt_target_placement = otio.opentime.RationalTime(
                 instr_start_frame - global_start_offset_frames, timeline_rate
             )
-            logger.info(
+            logger.debug(
                 f"  Segment {instr_idx} (FIRST): Target Placement = {rt_target_placement.value}"
             )
         else:
             rt_target_placement = last_segment_end_rt_on_all_tracks
-            logger.info(
+            logger.debug(
                 f"  Segment {instr_idx}: Contiguous Target Placement = {rt_target_placement.value}"
             )
 
@@ -441,7 +426,7 @@ def _apply_edited_segments_to_new_timeline(
         )
 
         current_segment_link_id_to_assign = current_id_for_this_groups_segments
-        logger.info(
+        logger.debug(
             f"    Assigning Link ID: {current_segment_link_id_to_assign}. Source Dur: {rt_source_duration_in_media.value}"
         )
 
@@ -470,7 +455,7 @@ def _apply_edited_segments_to_new_timeline(
             )
 
             if gap_needed_for_placement.value > 1e-9:
-                logger.info(
+                logger.debug(
                     f"        Inserting placement Gap dur {gap_needed_for_placement.value} on track idx {track_idx_orig}"
                 )
                 target_track_instance.append(
@@ -510,7 +495,7 @@ def _apply_edited_segments_to_new_timeline(
             new_track_cursors_relative_rt[track_idx_orig] = current_segment_end_rt
             # --- END CORRECTED CURSOR UPDATE ---
 
-            logger.info(
+            logger.debug(
                 f"      Appended segment to track idx {track_idx_orig}. New cursor: {current_segment_end_rt.value}"
             )  # Log the calculated end time
 
@@ -582,7 +567,7 @@ def _pad_tracks_to_common_duration(
     for cursor_rt in new_track_cursors_relative_rt:
         if cursor_rt > max_duration_rt:
             max_duration_rt = cursor_rt
-    logger.info(f"Padding tracks to common relative duration: {max_duration_rt.value}")
+    logger.debug(f"Padding tracks to common relative duration: {max_duration_rt.value}")
     for i, track_to_pad in enumerate(new_timeline.tracks):
         gap_needed_rt = max_duration_rt - new_track_cursors_relative_rt[i]
         if gap_needed_rt.value > 1e-9:
@@ -591,16 +576,18 @@ def _pad_tracks_to_common_duration(
 
 # --- Main Editing Function (Orchestrator) ---
 def edit_timeline_with_precalculated_instructions(
-    otio_data: OtioTimelineData,
+    otio_timeline_path: str,
     project_data: ProjectData,  # Assuming ProjectData is your defined type
     output_otio_path: str,
 ) -> None:
     """Edits an OTIO timeline based on precalculated instructions from project data JSON."""
+
+    otio_data: OtioTimelineData = load_otio_timeline_data(otio_timeline_path)
     original_timeline = otio_data["timeline"]
     timeline_rate = otio_data["rate"]
     global_start_offset_frames = otio_data["global_start_offset_frames"]
 
-    logger.info(
+    logger.debug(
         "Starting timeline editing process (Main Orchestrator)."
     )  # Added context
 
@@ -615,18 +602,16 @@ def edit_timeline_with_precalculated_instructions(
         name=f"{original_timeline.name or 'Timeline'} - Edits Applied",
         global_start_time=copy.deepcopy(original_timeline.global_start_time),
     )
-    logger.info(
+    logger.debug(
         f"Created new timeline: '{new_timeline.name}' with global start: {new_timeline.global_start_time}"
     )  # Added global start log
 
-    for orig_track_idx, orig_track in enumerate(
-        original_timeline.tracks
-    ):  # Added index for logging
+    for orig_track_idx, orig_track in enumerate(original_timeline.tracks):
         new_track = otio_schema.Track(name=orig_track.name, kind=orig_track.kind)
         new_timeline.tracks.append(new_track)
         logger.debug(
             f"  Copied track structure for original track {orig_track_idx}: '{orig_track.name}' ({orig_track.kind}) to new track: '{new_track.name}'"
-        )  # Changed to DEBUG
+        )
     logger.info(f"Copied {len(new_timeline.tracks)} track structures to new timeline.")
 
     ordered_items = catalog["ordered_items"]
@@ -647,18 +632,14 @@ def edit_timeline_with_precalculated_instructions(
         for _ in new_timeline.tracks
     ]
 
-    max_orig_id = _get_max_original_link_group_id(
-        original_timeline
-    )  # This function is now silent or minimally logging
-    next_link_group_id_for_main_loop = (
-        max_orig_id + 1
-    )  # Renamed for clarity in this scope
-    logger.info(
+    max_orig_id = _get_max_original_link_group_id(original_timeline)
+    next_link_group_id_for_main_loop = max_orig_id + 1
+    logger.debug(
         f"Max original Link Group ID found: {max_orig_id}. "
         f"Initializing next_link_group_id_for_main_loop to: {next_link_group_id_for_main_loop}"
     )
 
-    logger.info(
+    logger.debug(
         f"Initial new_track_cursors_relative_rt: {[c.value for c in new_track_cursors_relative_rt]} (Rate: {current_timeline_rate_for_cursors})"
     )
 
@@ -669,11 +650,11 @@ def edit_timeline_with_precalculated_instructions(
         original_item_abs_start_rt,
     ) in ordered_items:
 
-        logger.info(
+        logger.debug(
             f"Processing item_key: '{item_key}' of type '{item_type_hint}' starting at original abs time {original_item_abs_start_rt.value}"
         )
         # Log cursors before *any* processing for this item_key
-        logger.info(
+        logger.debug(
             f"  Track cursors BEFORE processing '{item_key}': {[c.value for c in new_track_cursors_relative_rt]}"
         )
 
@@ -701,7 +682,7 @@ def edit_timeline_with_precalculated_instructions(
                 f"  For item_key '{item_key}', original_clips_by_group_and_track.get() returned an empty group. This might be an issue in cataloging or item_key generation if item_key is expected to have clips."
             )
         else:
-            logger.info(
+            logger.debug(
                 f"  For item_key '{item_key}', original_clips_for_group has {len(original_clips_for_group)} potential members on tracks: {list(original_clips_for_group.keys())}"
             )
             valid_clips_in_group_count = 0
@@ -730,15 +711,15 @@ def edit_timeline_with_precalculated_instructions(
             edit_instructions_for_group is not None
         ):  # This means key was in group_edits_map. Value could be []
             if not edit_instructions_for_group:
-                logger.info(
+                logger.debug(
                     f"  For '{item_key}', edit_instructions list IS PRESENT BUT EMPTY. Processing with _apply_edited_segments."
                 )
             else:
-                logger.info(
+                logger.debug(
                     f"  For '{item_key}', found {len(edit_instructions_for_group)} edit instructions."
                 )
 
-            logger.info(
+            logger.debug(
                 f"  Calling _apply_edited_segments_to_new_timeline for '{item_key}' with current next_link_group_id = {next_link_group_id_for_main_loop}"
             )
             next_link_group_id_for_main_loop = _apply_edited_segments_to_new_timeline(
@@ -751,14 +732,14 @@ def edit_timeline_with_precalculated_instructions(
                 global_start_offset_frames=global_start_offset_frames,
                 next_link_group_id=next_link_group_id_for_main_loop,
             )
-            logger.info(
+            logger.debug(
                 f"  _apply_edited_segments_to_new_timeline for '{item_key}' returned. Main loop's next_link_group_id is now: {next_link_group_id_for_main_loop}"
             )
         else:  # item_key was NOT in group_edits_map
-            logger.info(
+            logger.debug(
                 f"  For '{item_key}', NO edit instructions found (key not in group_edits_map). Treating as unedited."
             )
-            logger.info(
+            logger.debug(
                 f"  Calling _apply_unedited_clips_to_new_timeline for '{item_key}'"
             )
             _apply_unedited_clips_to_new_timeline(
@@ -770,24 +751,23 @@ def edit_timeline_with_precalculated_instructions(
                 timeline_rate,
                 global_start_offset_frames,
             )
-            logger.info(
+            logger.debug(
                 f"  _apply_unedited_clips_to_new_timeline for '{item_key}' completed."
             )
 
         # Log cursors after *all* processing for this item_key
-        logger.info(
+        logger.debug(
             f"  Track cursors AFTER processing '{item_key}': {[c.value for c in new_track_cursors_relative_rt]}"
         )
 
     _pad_tracks_to_common_duration(new_timeline, new_track_cursors_relative_rt)
     otio.adapters.write_to_file(new_timeline, output_otio_path)
-    logger.info(f"Edited OTIO timeline saved to: {output_otio_path}")
-    logger.info(
+    logger.debug(f"Edited OTIO timeline saved to: {output_otio_path}")
+    logger.debug(
         "Timeline editing process finished (Main Orchestrator)."
     )  # Added context
 
 
-# --- Main Execution Block ---
 if __name__ == "__main__":
     # (Implementation is correct)
     start_time = time.time()
@@ -805,10 +785,9 @@ if __name__ == "__main__":
         exit(1)
 
     try:
-        otio_data_loaded = load_otio_timeline_data(otio_input_path)
         project_data_content: ProjectData = load_project_data(project_json_path)
         edit_timeline_with_precalculated_instructions(
-            otio_data_loaded, project_data_content, otio_output_path
+            otio_input_path, project_data_content, otio_output_path
         )
         logger.info("Timeline editing process finished successfully.")
     except ImportError as e:
