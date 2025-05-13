@@ -6,3 +6,8 @@ frontend/dist
 __pycache__
 venv
 typings
+
+temp
+python-backend/build
+dist
+python-backend/*.spec
