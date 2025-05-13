@@ -4,7 +4,21 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { LogSlider } from "./components/ui/volumeSlider";
-import WaveformPlayer from "./components/audio/bbcwaveform";
+import {
+  Settings,
+  Lock,
+  Unlock,
+  Scissors,
+  RotateCcw,
+  Link,
+  Unlink,
+  EllipsisVertical,
+  Ellipsis,
+  XIcon,
+} from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import { EventsOn } from "../wailsjs/runtime/runtime";
 
 import {
   ContextMenu,
@@ -22,21 +36,8 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-import { cn } from "@/lib/utils";
-
-import {
-  Settings,
-  Lock,
-  Unlock,
-  Scissors,
-  RotateCcw,
-  Link,
-  Unlink,
-  EllipsisVertical,
-  Ellipsis,
-  XIcon,
-} from "lucide-react";
-import { RunPythonScriptWithArgs } from "../wailsjs/go/main/App";
+import WaveformPlayer from "./components/audio/bbcwaveform";
+import PythonRunnerComponent from "./lib/PythonRunner";
 import { CloseApp } from "../wailsjs/go/main/App";
 
 // Reusable reset button with dimmed default state and hover transition
@@ -65,45 +66,9 @@ export default function App() {
   const [makeNewTimeline, setMakeNewTimeline] = useState(false);
   const [paddingLocked, setPaddingLinked] = useState(true);
 
-  const handleRemoveSilences = () => {
-    const args = [
-      `--threshold=${threshold}`,
-      `--min-duration=${minDuration}`,
-      `--pad-left=${paddingLeft}`,
-      `--pad-right=${paddingRight}`,
-      makeNewTimeline ? "--new-timeline" : "",
-    ].filter(Boolean);
+  const [pythonLogs, setPythonLogs] = useState([]);
+  const [scriptStatus, setScriptStatus] = useState("");
 
-    RunPythonScriptWithArgs(args);
-  };
-
-  function RemoveSilenceBtnComponent() {
-    const [pressed, setPressed] = useState(false);
-
-    const handleMouseDown = () => {
-      setPressed(true);
-    };
-
-    const handleClick = () => {
-      handleRemoveSilences();
-
-      // Reset animation shortly after click
-      setTimeout(() => setPressed(false), 50); // Adjust to match your transition
-    };
-
-    return (
-      <Button
-        size="lg"
-        onMouseDown={handleMouseDown}
-        onClick={handleClick}
-        className={`bg-emerald-600 hover:bg-emerald-700 hover:scale-[101%] text-white py-6 px-12 font-bold border-b-4 border-r-2 border-emerald-900 transition-all ${pressed ? "border-0 scale-[99%] translate-y-0.5" : ""
-          }`}
-      >
-        <Scissors className="h-6 w-6 ml-2" />
-        Remove Silence
-      </Button>
-    );
-  }
 
   const handlePaddingChange = (side: "left" | "right", value: number) => {
     if (paddingLocked) {
@@ -313,7 +278,7 @@ export default function App() {
                       />
                       <Label className="text-base">Make new timeline</Label>
                     </div>
-                    <RemoveSilenceBtnComponent />
+                    <PythonRunnerComponent threshold={threshold} minDuration={minDuration} padLeft={paddingLeft} padRight={paddingRight} makeNewTimeline={makeNewTimeline} />
                   </div>
                 </div>
               </div>

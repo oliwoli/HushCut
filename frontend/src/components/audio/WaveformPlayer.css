@@ -1,0 +1,71 @@
+/* src/components/WaveformPlayer.css */
+
+.waveform-player-container {
+    width: 100%;
+    max-width: 800px; /* Example max width */
+    margin: 20px auto;
+    padding: 15px;
+    border-radius: 8px;
+  }
+  
+  /* Style the containers for Peaks.js waveforms */
+  .waveform-zoomview {
+    height: 150px; /* Adjust height as needed */
+    margin-bottom: 10px;
+    background-color: #202024;
+    border: 1px solid #2f2e30;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    overflow: hidden;
+  }
+  
+  .waveform-overview {
+    height: 70px; /* Adjust height as needed */
+    margin-bottom: 15px;
+    background-color: #1b1b1b; /* Background for the waveform area */
+    border: 1px solid #2f2e30;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    overflow: hidden
+  }
+  
+  /* Style the audio player */
+  #audio {
+    width: 100%;
+    margin-bottom: 15px;
+  }
+  
+  /* Basic Peak Meter Styling */
+  .peak-meter-container {
+      display: flex;
+      align-items: center;
+      gap: 8px; /* Space between "Peak:" text and the meter */
+      font-family: sans-serif;
+      font-size: 14px;
+      margin-top: 10px;
+  }
+  
+  .peak-meter-bar-container {
+      width: 100px; /* Width of the meter */
+      height: 200px; /* Height of the meter */
+      background-color: #000000; /* Background track */
+      border: 1px solid #b0b0b0;
+      border-radius: 3px;
+      overflow: hidden; /* Important for the scaling effect */
+      position: relative; /* Needed for absolute positioning of the bar if not using transform */
+  }
+  
+  .peak-meter-bar {
+      width: 100%;
+      height: 100%;
+      background-color: #ff4500; /* Color of the peak bar */
+      transform-origin: bottom; /* Scale from the bottom up */
+      transform: scaleY(0); /* Start at 0 height */
+      transition: transform 0.05s linear; /* Smooth transition (optional) */
+      will-change: transform; /* Hint for browser optimization */
+  }
+  
+  /* You might need specific styling if peaks.js adds its own elements */
+  /* Example: Styling the playhead */
+  /* .peaks-playhead { background-color: red; } */
+  /* .peaks-playhead-handle { background-color: darkred; } */

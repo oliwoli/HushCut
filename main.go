@@ -11,9 +11,14 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+
+
 func main() {
+	// Serve the frontend assets
+	
 	// Create an instance of the app structure
 	app := NewApp()
+
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -29,6 +34,7 @@ func main() {
 			app,
 		},
 		AlwaysOnTop: true,
+		Frameless: true,
 	})
 
 	if err != nil {
