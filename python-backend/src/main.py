@@ -332,23 +332,12 @@ def get_source_media_from_timeline_item(
     return source_media_item
 
 
-# def get_all_folders(project: Any, curr_folder: Optional[Any] = None) -> set[Any]:
-#     folders: set[Any] = set()
-#     if not curr_folder:
-#         curr_folder = project.GetMediaPool().GetRootFolder()
-#     for folder in curr_folder.GetSubFolders():
-#         folders.add(folder)
-#         folders.update(get_all_folders(project, folder))
-#     return folders
-
-
 def main() -> None:
     global RESOLVE
     global TEMP_DIR
     script_start_time: float = time()
     if not RESOLVE:
         print("Could not connect to DaVinci Resolve. Is it running?")
-        # GetResolve already prints detailed errors if loading DaVinciResolveScript fails
         sys.exit(1)
 
     switch_to_page("edit")

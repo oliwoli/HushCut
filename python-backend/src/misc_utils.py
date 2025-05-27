@@ -99,5 +99,8 @@ def export_to_json(project_data: Any, output_path: str) -> None:
     def fallback_serializer(obj):
         return "<BMDObject>"
 
+    # make output dir if it doesn't exist
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
     with open(output_path, "w") as json_file:
         json.dump(project_data, json_file, indent=4, default=fallback_serializer)
