@@ -4,41 +4,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { LogSlider } from "./components/ui/volumeSlider";
-import {
-  Settings,
-  Lock,
-  Unlock,
-  Scissors,
-  RotateCcw,
-  Link,
-  Unlink,
-  EllipsisVertical,
-  Ellipsis,
-  XIcon,
-} from "lucide-react";
+import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { clamp, cn } from "@/lib/utils";
 import { EventsOn } from "../wailsjs/runtime/runtime";
 
 import {
   ContextMenu,
-  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
-  ContextMenuSeparator,
-  ContextMenuShortcut,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-import WaveformPlayer from "./components/audio/bbcwaveform";
+import WaveformPlayer from "./components/audio/waveform";
 import PythonRunnerComponent from "./lib/PythonRunner";
 import { CloseApp } from "../wailsjs/go/main/App";
+import SilenceDataLog from "./components/audio/SilenceDataDisplay";
+import { ActiveFile, DetectionParams } from "./types";
+import { useSilenceData } from "./hooks/useSilenceData";
 
 // Reusable reset button with dimmed default state and hover transition
 function ResetButton({ onClick }: { onClick: () => void }) {
@@ -57,10 +40,16 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 export default function App() {
   const DEFAULT_THRESHOLD = -20;
   const DEFAULT_MIN_DURATION = 0.5;
+  const MIN_DURATION_LIMIT = 0.01;
   const DEFAULT_PADDING = 0.0;
 
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
-  const [minDuration, setMinDuration] = useState(DEFAULT_MIN_DURATION);
+  const [minDuration, setMinDurationRaw] = useState(DEFAULT_MIN_DURATION);
+
+  const setMinDuration = (value: number) => {
+    setMinDurationRaw(clamp(value, MIN_DURATION_LIMIT));
+  };
+
   const [paddingLeft, setPaddingLeft] = useState(DEFAULT_PADDING);
   const [paddingRight, setPaddingRight] = useState(DEFAULT_PADDING);
   const [makeNewTimeline, setMakeNewTimeline] = useState(false);
@@ -68,7 +57,6 @@ export default function App() {
 
   const [pythonLogs, setPythonLogs] = useState([]);
   const [scriptStatus, setScriptStatus] = useState("");
-
 
   const handlePaddingChange = (side: "left" | "right", value: number) => {
     if (paddingLocked) {
@@ -94,6 +82,31 @@ export default function App() {
   };
 
   const titleBarHeight = "2.35rem";
+
+  const [detectionParams, setDetectionParams] =
+    useState<DetectionParams | null>(null);
+
+  useEffect(() => {
+    // Update detectionParams when individual parameter states change
+    setDetectionParams({
+      loudnessThreshold: threshold.toString() + "dB",
+      minSilenceDurationSeconds: minDuration.toString(),
+      paddingLeftSeconds: paddingLeft,
+      paddingRightSeconds: paddingRight,
+    });
+  }, [threshold, minDuration, paddingLeft, paddingRight]);
+
+  const [currentActiveFile, setCurrentActiveFile] = useState<ActiveFile | null>(
+    {
+      path: "/home/oliwoli/my-repos/resocut/frontend/public/audio/preview-render.wav",
+      name: "preview-render.wav",
+    }
+  );
+
+  const { silenceData, isLoading, error, refetch } = useSilenceData(
+    currentActiveFile,
+    detectionParams
+  );
 
   return (
     <>
@@ -146,8 +159,9 @@ export default function App() {
                 {" "}
                 {/* Make this a flex column for its own content */}
                 <LogSlider
-                  defaultDb={-20}
+                  defaultDb={threshold}
                   onGainChange={(gain) => setThreshold(gain)}
+                  onDoubleClick={resetThreshold}
                 />
                 <div className="flex flex-col items-center text-center mt-1 text-base/tight">
                   <p className="text-base/tight">
@@ -161,6 +175,12 @@ export default function App() {
                 </div>
               </div>
               <div className="flex flex-col space-y-2 w-full">
+                {/* Wavesurfer Player */}
+                <WaveformPlayer
+                  audioUrl="/audio/preview-render.wav"
+                  silenceData={silenceData}
+                />
+
                 {/* Minimum Duration Column */}
                 <div className="space-y-2 w-full">
                   <div className="flex items-center space-x-5">
@@ -254,12 +274,6 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col space-y-8 w-full">
-                  {/* Wavesurfer Player */}
-                  <WaveformPlayer
-                    audioUrl="/preview-render.wav"
-                    waveformDataUrl="/data.json"
-                  />
-
                   {/* test audio native html
                   <audio
                     src="http://localhost:34115/preview-render.ogg"
@@ -267,6 +281,12 @@ export default function App() {
                     className="w-full"
                   /> */}
 
+                  {/* <SilenceDataLog
+                    activeFile={currentActiveFile}
+                    silenceData={silenceData}
+                    isLoading={isLoading}
+                    error={error}
+                  /> */}
                   <div className="items-center space-y-2">
                     {/* Make New Timeline */}
                     <div className="flex items-center space-x-2">
@@ -278,7 +298,13 @@ export default function App() {
                       />
                       <Label className="text-base">Make new timeline</Label>
                     </div>
-                    <PythonRunnerComponent threshold={threshold} minDuration={minDuration} padLeft={paddingLeft} padRight={paddingRight} makeNewTimeline={makeNewTimeline} />
+                    <PythonRunnerComponent
+                      threshold={threshold}
+                      minDuration={minDuration}
+                      padLeft={paddingLeft}
+                      padRight={paddingRight}
+                      makeNewTimeline={makeNewTimeline}
+                    />
                   </div>
                 </div>
               </div>

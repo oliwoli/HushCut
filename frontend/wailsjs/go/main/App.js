@@ -10,6 +10,14 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetLogarithmicWaveform(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetLogarithmicWaveform'](arg1, arg2, arg3);
+}
+
+export function GetOrDetectSilencesWithCache(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['GetOrDetectSilencesWithCache'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }

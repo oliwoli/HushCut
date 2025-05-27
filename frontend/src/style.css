@@ -35,6 +35,46 @@ body {
     user-select: none;
 }
 
+/* silence region */
+::part(region) {
+  pointer-events: none !important;
+  box-sizing: border-box;
+  -moz-box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  border: 1px solid rgb(155, 0, 0);
+  border-top: none;
+  border-bottom: none;
+  border-radius: 0;
+  z-index: 0;
+}
+
+/* ::part(region)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 100;
+  background-color: rgba(32, 21, 21, 0.25);
+} */
+
+/* make sure waveform bars are above silence regions */
+/* ::part(canvases) {
+  z-index: 6;
+  position: relative;
+}
+
+::part(progress) {
+  z-index: 6;
+}
+
+::part(cursor) {
+  z-index: 10;
+} */
+
+
+
 /* ===== Custom Scrollbar Styles for WebKit-based environments (like Wails on Linux) ===== */
 
 /* The entire scrollbar. Defines the width (for vertical) or height (for horizontal). */

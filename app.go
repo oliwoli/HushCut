@@ -2,20 +2,27 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
 type App struct {
-	ctx        context.Context
-	configPath string
+	ctx          context.Context
+	silenceCache map[CacheKey][]SilencePeriod
+	cacheMutex   sync.RWMutex // Mutex for thread-safe access to the cache
+	configPath   string
 }
 
 // NewApp creates a new App application struct
@@ -23,7 +30,7 @@ func NewApp() *App {
 	// Config path is relative to the CWD of the running application.
 	// For built apps, consider a more robust path (e.g., using os.UserConfigDir()).
 	configPath := "shared/config.json"
-	return &App{configPath: configPath}
+	return &App{configPath: configPath, silenceCache: make(map[CacheKey][]SilencePeriod)}
 }
 
 // startup is called when the app starts.
@@ -147,4 +154,152 @@ func (a *App) CloseApp() {
 	// Close the app
 	runtime.Quit(a.ctx)
 	// Optionally, you can also perform any cleanup tasks here
+}
+
+func DetectSilences(
+	filePath string,
+	loudnessThreshold string,
+	minSilenceDurationSeconds string,
+	paddingLeftSeconds float64,
+	paddingRightSeconds float64,
+) ([]SilencePeriod, error) {
+	// ... (ffmpeg setup, LookPath check etc.) ...
+
+	args := []string{
+		"-nostdin",
+		"-i", filePath,
+		"-af", fmt.Sprintf("silencedetect=n=%s:d=%s", loudnessThreshold, minSilenceDurationSeconds),
+		"-f", "null",
+		"-",
+	}
+
+	cmd := exec.Command("ffmpeg", args...)
+	var outputBuffer bytes.Buffer
+	cmd.Stdout = &outputBuffer
+	cmd.Stderr = &outputBuffer
+
+	// --- Recommended: Improved Error Handling (see point 2 below) ---
+	err := cmd.Run()
+	output := outputBuffer.String() // Get output for parsing or error messages
+
+	if err != nil {
+		// ffmpeg failed to run or exited with an error code.
+		// The 'output' string might contain useful error details from ffmpeg.
+		return nil, fmt.Errorf("ffmpeg processing failed: %w. Output: %s", err, output)
+	}
+	// --- End of Recommended Error Handling ---
+
+	// --- PRIMARY FIX HERE ---
+	// Initialize as an empty, non-nil slice
+	detectedSilences := []SilencePeriod{}
+	// OLD way that results in nil: var detectedSilences []SilencePeriod
+
+	silenceStartRegex := regexp.MustCompile(`silence_start:\s*([0-9]+\.?[0-9]*)`)
+	silenceEndRegex := regexp.MustCompile(`silence_end:\s*([0-9]+\.?[0-9]*)`)
+
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	var currentStartTime float64 = -1
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		startMatch := silenceStartRegex.FindStringSubmatch(line)
+		if len(startMatch) > 1 {
+			startTime, parseErr := strconv.ParseFloat(startMatch[1], 64)
+			if parseErr == nil {
+				currentStartTime = startTime
+			}
+		}
+
+		endMatch := silenceEndRegex.FindStringSubmatch(line)
+		if len(endMatch) > 1 && currentStartTime != -1 {
+			endTime, parseErr := strconv.ParseFloat(endMatch[1], 64)
+			if parseErr == nil {
+				adjustedStartTime := currentStartTime + paddingLeftSeconds
+				adjustedEndTime := endTime - paddingRightSeconds
+				if adjustedStartTime < adjustedEndTime {
+					detectedSilences = append(detectedSilences, SilencePeriod{
+						Start: adjustedStartTime,
+						End:   adjustedEndTime,
+					})
+				}
+				currentStartTime = -1
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		// Return nil for data if there was a scanner error, plus the error
+		return nil, fmt.Errorf("error reading ffmpeg output: %w", err)
+	}
+
+	// If no silences were found, detectedSilences is now an empty slice [], not nil
+	return detectedSilences, nil
+}
+
+func (a *App) GetOrDetectSilencesWithCache(
+	filePath string,
+	loudnessThreshold string,
+	minSilenceDurationSeconds string,
+	paddingLeftSeconds float64,
+	paddingRightSeconds float64,
+) ([]SilencePeriod, error) {
+	key := CacheKey{
+		FilePath:                  filePath,
+		LoudnessThreshold:         loudnessThreshold,
+		MinSilenceDurationSeconds: minSilenceDurationSeconds,
+		PaddingLeftSeconds:        paddingLeftSeconds,
+		PaddingRightSeconds:       paddingRightSeconds,
+	}
+
+	// 1. Try to read from cache (read lock)
+	a.cacheMutex.RLock()
+	cachedSilences, found := a.silenceCache[key]
+	a.cacheMutex.RUnlock()
+
+	if found {
+		// fmt.Println("Cache hit for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
+		return cachedSilences, nil
+	}
+
+	// fmt.Println("Cache miss for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
+
+	// 2. If not found, perform the detection
+	// Note: We call the standalone DetectSilences function here.
+	// If DetectSilences itself could be long-running and called by multiple goroutines
+	// for the *same missing key* simultaneously, you might want a more complex
+	// single-flight mechanism. For simplicity, this lock-after-check is common.
+	silences, err := DetectSilences(filePath, loudnessThreshold, minSilenceDurationSeconds, paddingLeftSeconds, paddingRightSeconds)
+	if err != nil {
+		// Do not cache errors, so subsequent calls can retry.
+		return nil, err
+	}
+
+	// 3. Store the result in the cache (write lock)
+	a.cacheMutex.Lock()
+	a.silenceCache[key] = silences
+	a.cacheMutex.Unlock()
+
+	return silences, nil
+}
+
+
+// New method to be called from Wails frontend
+func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb float64) (*PrecomputedWaveformData, error) {
+	// `PrecomputedWaveformData` type is accessible because it's defined in waveform.go (package main) and exported.
+	// `ProcessWavToLogarithmicPeaks` function is accessible for the same reason.
+
+	runtime.LogInfof(a.ctx, "Generating logarithmic waveform for: %s (spp: %d, minDb: %.1f)", filePath, samplesPerPixel, minDb)
+
+	// maxDisplayDb is typically 0.0 for 0dBFS (full scale)
+	maxDb := 0.0
+
+	data, err := ProcessWavToLogarithmicPeaks(filePath, samplesPerPixel, minDb, maxDb)
+	if err != nil {
+		runtime.LogError(a.ctx, fmt.Sprintf("Error generating waveform data for %s: %v", filePath, err))
+		// It's often better to return the error message clearly to the frontend
+		return nil, fmt.Errorf("failed to generate waveform for '%s': %v", filePath, err)
+	}
+
+	runtime.LogInfof(a.ctx, "Successfully generated waveform for: %s, Duration: %.2f, Peaks count: %d", filePath, data.Duration, len(data.Peaks))
+	return data, nil
 }

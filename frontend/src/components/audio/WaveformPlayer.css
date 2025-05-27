@@ -6,6 +6,8 @@
     margin: 20px auto;
     padding: 15px;
     border-radius: 8px;
+    color: white;
+    overflow: hidden;
   }
   
   /* Style the containers for Peaks.js waveforms */
@@ -17,6 +19,7 @@
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     overflow: hidden;
+    color: white;
   }
   
   .waveform-overview {
@@ -61,7 +64,7 @@
       background-color: #ff4500; /* Color of the peak bar */
       transform-origin: bottom; /* Scale from the bottom up */
       transform: scaleY(0); /* Start at 0 height */
-      transition: transform 0.05s linear; /* Smooth transition (optional) */
+      transition: transform 0.15s linear; /* Smooth transition (optional) */
       will-change: transform; /* Hint for browser optimization */
   }
   
