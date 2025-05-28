@@ -37,7 +37,7 @@ body {
 
 /* silence region */
 ::part(region) {
-  pointer-events: none !important;
+  /* pointer-events: unset !important; */
   box-sizing: border-box;
   -moz-box-sizing: border-box;
   -webkit-box-sizing: border-box;
@@ -45,7 +45,19 @@ body {
   border-top: none;
   border-bottom: none;
   border-radius: 0;
-  z-index: 0;
+  z-index: 20;
+}
+
+* { scroll-behavior: auto; }
+
+div[part="minimap-overlay"] {
+  background-color: rgba(148, 148, 148, 0.197) !important;
+  border-left: 2px solid rgba(0, 0, 0, 0.46);
+  border-right: 2px solid rgba(0, 0, 0, 0.46);
+  border-top: none;
+  border-bottom: none;
+  /* transition: none !important; */
+  z-index: 100 !important;
 }
 
 /* ::part(region)::before {

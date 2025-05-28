@@ -4,6 +4,7 @@ import React, { useEffect, useCallback } from 'react';
 import { RunPythonScriptWithArgs } from "../../wailsjs/go/main/App";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 import { Button } from '@/components/ui/button';
+import { SliceIcon, StethoscopeIcon } from 'lucide-react';
 
 // 1. Define an interface for the component's props
 interface PythonRunnerProps {
@@ -30,7 +31,7 @@ const PythonRunnerComponent: React.FC<PythonRunnerProps> = (props) => {
         onScriptLog,
         onScriptDone,
         onScriptError,
-        buttonText = "Run Python Script" // Default value if not provided
+        buttonText = "Remove Silences" // Default value if not provided
     } = props;
 
     useEffect(() => {
@@ -89,8 +90,9 @@ const PythonRunnerComponent: React.FC<PythonRunnerProps> = (props) => {
 
 
     return (
-        <Button onClick={handleRunScript}>
-            {buttonText}
+        <Button onClick={handleRunScript} className='bg-teal-800 border-1 text-white p-8 hover:bg-teal-700'>
+            <span className='items-center align-middle flex text-xl gap-4'>
+                <SliceIcon size={32} className='scale-150 text-teal-500' />{buttonText}</span>
         </Button>
     );
 };

@@ -31,7 +31,7 @@ export function useSilenceData(
         setError(null);
         setIsLoading(false);
       }
-      return; // Implicitly Promise.resolve()
+      return;
     }
 
     if (isMounted.current) {
@@ -89,7 +89,7 @@ export function useSilenceData(
   // Ensure refetch returns the Promise from fetchLogic
   const refetch = useCallback(() => {
     debouncedFetch.cancel();
-    return fetchLogic(); // Return the promise from fetchLogic
+    return fetchLogic();
   }, [fetchLogic, debouncedFetch]);
 
   return { silenceData, isLoading, error, refetch };
