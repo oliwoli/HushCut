@@ -38,10 +38,10 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 }
 
 export default function App() {
-  const DEFAULT_THRESHOLD = -20;
-  const DEFAULT_MIN_DURATION = 0.5;
+  const DEFAULT_THRESHOLD = -30;
+  const DEFAULT_MIN_DURATION = 1.0;
   const MIN_DURATION_LIMIT = 0.01;
-  const DEFAULT_PADDING = 0.0;
+  const DEFAULT_PADDING = 0.25;
 
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
   const [minDuration, setMinDurationRaw] = useState(DEFAULT_MIN_DURATION);
@@ -121,7 +121,7 @@ export default function App() {
             >
               <XIcon className="scale-90" strokeWidth={2.5} />
             </Button>
-            <h1 className="text-sm font-normal text-neutral-200">ResoCut</h1>
+            <h1 className="text-sm font-normal text-neutral-200">DR. Silence</h1>
             <div className="flex items-center space-x-2">
               <Button
                 size="icon"
@@ -148,12 +148,11 @@ export default function App() {
       >
         <header className="flex items-center justify-between"></header>
 
-        <main className="flex-1 gap-8 mt-8">
+        <main className="flex-1 gap-8 mt-8 max-w-screen">
           <div className="flex flex-col space-y-8">
             {/* Group Threshold, Min Duration, and Padding horizontally */}
             <div className="flex flex-row space-x-6 items-start">
               {" "}
-              {/* Added flex container */}
               {/* Threshold Silence Column */}
               <div className="flex flex-col space-y-2 items-center">
                 {" "}
@@ -174,7 +173,7 @@ export default function App() {
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col space-y-2 w-full">
+              <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
                 {/* Wavesurfer Player */}
                 <WaveformPlayer
                   audioUrl="/audio/preview-render.wav"
@@ -276,7 +275,7 @@ export default function App() {
                 <div className="flex flex-col space-y-8 w-full">
                   {/* test audio native html
                   <audio
-                    src="http://localhost:34115/preview-render.ogg"
+                    src="/audio/preview-render.wav"
                     controls
                     className="w-full"
                   /> */}
