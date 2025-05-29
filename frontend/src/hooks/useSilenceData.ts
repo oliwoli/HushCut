@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useDebouncedCallback } from 'use-debounce';
 // Make sure this path is correct for your project structure
-import { GetOrDetectSilencesWithCache } from '../../wailsjs/go/main/App';
+import { GetOrDetectSilencesWithCache } from '@wails/go/main/App';
 import type { ActiveFile, DetectionParams, SilencePeriod, SilenceDataHookResult } from '../types'; // Adjust path to types.ts
 
 export function useSilenceData(

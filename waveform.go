@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net/url"
 	"os" // If still writing to file, or for file path handling
 	"path/filepath"
 	"strings"
@@ -15,17 +16,31 @@ import (
 )
 
 func resolvePublicAudioPath(webPath string) (string, error) {
-	if !strings.HasPrefix(webPath, "/audio/") {
-		return "", fmt.Errorf("unsupported path: must start with /audio/")
-	}
-	// Get absolute path to public folder
-	publicDir := filepath.Join(".", "frontend", "public")
-	// Remove leading slash and join safely
-	relativePath := strings.TrimPrefix(webPath, "/")
-	fullPath := filepath.Join(publicDir, relativePath)
-	// Clean path for OS compatibility
-	fullPath = filepath.Clean(fullPath)
-	return fullPath, nil
+    var cleanPath string
+
+    // Check if the input is a full URL
+    if strings.HasPrefix(webPath, "http://") || strings.HasPrefix(webPath, "https://") {
+        parsedURL, err := url.Parse(webPath)
+        if err != nil {
+            return "", fmt.Errorf("invalid URL: %w", err)
+        }
+        cleanPath = parsedURL.Path
+    } else {
+        cleanPath = webPath
+    }
+
+    // Normalize the path by removing leading slashes
+    cleanPath = strings.TrimPrefix(cleanPath, "/")
+
+
+    // Construct the absolute path to the public directory
+    publicDir := filepath.Join(".", "wav_files")
+
+    // Combine and clean the full path
+    fullPath := filepath.Join(publicDir, cleanPath)
+    fullPath = filepath.Clean(fullPath)
+
+    return fullPath, nil
 }
 
 

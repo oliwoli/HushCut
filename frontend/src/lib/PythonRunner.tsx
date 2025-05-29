@@ -20,8 +20,7 @@ interface PythonRunnerProps {
 }
 
 // 2. Use the interface to type the props
-const PythonRunnerComponent: React.FC<PythonRunnerProps> = (props) => {
-    // Destructure props for easier access (TypeScript will infer their types from PythonRunnerProps)
+const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     const {
         threshold,
         minDuration,
@@ -51,11 +50,8 @@ const PythonRunnerComponent: React.FC<PythonRunnerProps> = (props) => {
             }
         };
 
-        // It's good practice to ensure EventsOn passes string as you expect,
-        // or add type checks/assertions if the data could be different.
         const unsubscribeLog = EventsOn("python:log", logHandler as (data: unknown) => void);
         const unsubscribeDone = EventsOn("python:done", doneHandler as (data: unknown) => void);
-
 
         return () => {
             console.log("PythonRunnerComponent: Cleaning up Wails event listeners...");
@@ -97,11 +93,5 @@ const PythonRunnerComponent: React.FC<PythonRunnerProps> = (props) => {
     );
 };
 
-// You can still define defaultProps separately if you prefer,
-// though default values in destructuring is also common.
-// PythonRunnerComponent.defaultProps = {
-//   buttonText: "Run Python Script",
-//   // onScriptLog: () => {}, // etc. for optional functions if needed
-// };
 
-export default PythonRunnerComponent;
+export default RemoveSilencesButton;

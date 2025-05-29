@@ -14,6 +14,7 @@ from typing import (
 import os
 import sys
 import subprocess
+import argparse
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -332,7 +333,7 @@ def get_source_media_from_timeline_item(
     return source_media_item
 
 
-def main() -> None:
+def main(sync: bool = False) -> None:
     global RESOLVE
     global TEMP_DIR
     script_start_time: float = time()
@@ -463,6 +464,11 @@ def main() -> None:
     json_output_path = os.path.join(TEMP_DIR, "silence_detections.json")
     misc_utils.export_to_json(project_data, json_output_path)
     print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
+
+    if sync:
+        print("just syncing, exiting")
+        print(f"it took {time() - script_start_time:.2f} seconds for script to finish")
+        return
 
     edited_otio_path = os.path.join(TEMP_DIR, "edited_timeline_refactored.otio")
     create_otio.edit_timeline_with_precalculated_instructions(
@@ -743,7 +749,16 @@ def find_item_folder_by_id(project, item_id: str) -> Any | None:
 
 if __name__ == "__main__":
     script_time = time()
-    main()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-threshold', type=float)
+    parser.add_argument('-min_duration', type=float)
+    parser.add_argument('-padding_l', type=float)
+    parser.add_argument('-padding_r', type=float)
+    parser.add_argument('-s', '--sync', action='store_true')  
+    args = parser.parse_args()
+
+    main(sync=args.sync)
     script_end_time = time()
     script_execution_time = script_end_time - script_time
     print(f"Script finished successfully in {script_execution_time:.2f} seconds.")

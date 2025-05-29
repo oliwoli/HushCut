@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,31 @@ func NewApp() *App {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	log.Println("Wails App: OnStartup called.")
+	log.Println("Wails App: Initializing and launching internal WAV audio server...")
+
+	if err := LaunchWavAudioServer(); err != nil {
+		// The server failed to even set up its listener. This is critical.
+		errMsg := fmt.Sprintf("FATAL: Failed to launch WAV audio server: %v", err)
+		log.Println(errMsg)
+		// For a real app, you might want to show a critical error dialog to the user.
+		// Example: runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+		//     Type:    runtime.ErrorDialog,
+		//     Title:   "Critical Error",
+		//     Message: "The internal audio server could not be started. Audio playback will not work.\nError: " + err.Error(),
+		// })
+		// And potentially os.Exit(1) or disable features.
+	} else {
+		log.Println("Wails App: WAV audio server launch sequence initiated.")
+	}
+}
+
+func (a *App) GetAudioServerPort() int {
+	if !isServerInitialized {
+		log.Println("Wails App: GetAudioServerPort called, but server is not (yet) initialized or failed to start. Returning 0.")
+		return 0 // Or -1, or some other indicator that it's not ready
+	}
+	return actualPort // Accesses the global from httpserver.go
 }
 
 // Greet returns a greeting for the given name
