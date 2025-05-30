@@ -4,10 +4,11 @@
   "outputfilename": "resocut",
   "frontend:install": "pnpm install",
   "frontend:build": "pnpm run build",
-  "frontend:dev:watcher": "pnpm run dev",
+  "frontend:dev:watcher": "pnpm dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "oliwoli",
     "email": "oliverweiss97@gmail.com"
-  }
+  },
+  "preBuildHooks": {"linux/*": "/bin/bash ../scripts/preBuild.sh"}
 }
