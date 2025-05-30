@@ -80,10 +80,11 @@ div[part="minimap-overlay"] {
 ::part(progress) {
   z-index: 6;
 }
+*/
 
 ::part(cursor) {
-  z-index: 10;
-} */
+  z-index: 999;
+}
 
 
 

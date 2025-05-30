@@ -41,12 +41,14 @@ interface WaveformPlayerProps {
     audioUrl: string;
     silenceData?: SilencePeriod[] | null;
     projectFrameRate?: number | 30.0;
+    threshold: number
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     audioUrl,
     silenceData,
     projectFrameRate,
+    threshold
 }) => {
     const waveformContainerRef = useRef<HTMLDivElement>(null);
     const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
@@ -66,7 +68,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
     const [precomputedData, setPrecomputedData] =
         useState<main.PrecomputedWaveformData | null>(null);
-    const [skipRegionsEnabled, setSkipRegionsEnabled] = useState(false);
+    const [skipRegionsEnabled, setSkipRegionsEnabled] = useState(true);
     const skipRegionsEnabledRef = useRef(skipRegionsEnabled);
     useEffect(() => {
         skipRegionsEnabledRef.current = skipRegionsEnabled;
@@ -82,6 +84,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const panStartXRef = useRef(0); // To store initial mouse X position
     const panInitialScrollLeftRef = useRef(0); // To store initial scrollLeft of the waveform
     const originalCursorRef = useRef(''); // To store the original cursor style 
+
+    const [wsCursorX, setWsCursorX] = useState(0)
 
     useEffect(() => {
         if (!audioUrl) {
@@ -491,16 +495,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                 currentProjectFrameRate <= 0
             )
                 return;
-
-            // const ws = wavesurferRef.current;
-            // const oneFrame = 1 / currentProjectFrameRate;
-            // let newTime = ws.getCurrentTime();
-
-            // if (event.key === "ArrowRight") newTime += oneFrame;
-            // else if (event.key === "ArrowLeft") newTime -= oneFrame;
-            // else return;
-
-            // ws.setTime(Math.max(0, Math.min(duration, newTime)));
         },
         [isLoading, duration, isPlaying, currentProjectFrameRate, handlePlayPause]
     );
@@ -526,8 +520,21 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         <div className="overflow-hidden mx-2">
             <div
                 ref={waveformContainerRef}
-                className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-visible relative pointer-none:"
+                className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-visible relative"
             >
+                <canvas className="absolute inset-0 z-0" />
+
+                {/* Threshold overlay line */}
+                <div
+                    className="absolute w-full h-[2px] rounded-full bg-teal-400 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.6)]"
+                    style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
+                />
+
+                {/* <div
+                    className="absolute top-0 w-[2px] h-full bg-white z-[30] pointer-events-none"
+                    style={{ left: `${currentTime * (wavesurferRef.current?.options.minPxPerSec || 0)}px` }} // update dynamically
+                /> */}
+
                 {isLoading && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white z-10">
                         Loading waveform...
@@ -535,14 +542,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                 )}
             </div>
 
-            {/* 5. Add the Minimap container to JSX and style it */}
             <div
                 ref={minimapContainerRef}
                 className="h-[40px] w-full mt-1 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-hidden"
             >
-                {/* The minimap plugin will render its content here. 
-                    You might want a conditional loading state if minimap data isn't immediately available,
-                    but since we pass precomputed peaks, it should render quickly with the main waveform. */}
             </div>
 
             <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
