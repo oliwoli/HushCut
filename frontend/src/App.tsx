@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { LogSlider } from "./components/ui/volumeSlider";
 import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
 
 import { clamp, cn } from "@/lib/utils";
-import { EventsOn } from "../wailsjs/runtime/runtime";
+import { GetAudioServerPort } from "@wails/go/main/App";
 
 import {
   ContextMenu,
@@ -17,9 +17,8 @@ import {
 } from "@/components/ui/context-menu";
 
 import WaveformPlayer from "./components/audio/waveform";
-import PythonRunnerComponent from "./lib/PythonRunner";
+import RemoveSilencesButton from "./lib/PythonRunner";
 import { CloseApp } from "../wailsjs/go/main/App";
-import SilenceDataLog from "./components/audio/SilenceDataDisplay";
 import { ActiveFile, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
 
@@ -38,6 +37,43 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 }
 
 export default function App() {
+  const [audioServerPort, setAudioServerPort] = useState<Number | null>(null)
+  const [currentActiveFile, setCurrentActiveFile] = useState<ActiveFile | null>(
+    {
+      path: `http://localhost:${audioServerPort}/preview-render.wav`,
+      name: "preview-render.wav",
+    }
+  );
+  const [detectionParams, setDetectionParams] =
+    useState<DetectionParams | null>(null);
+
+  const { silenceData, isLoading, error, refetch } = useSilenceData(
+    currentActiveFile,
+    detectionParams
+  );
+
+
+  useEffect(() => {
+    const getAudioPort = async () => {
+      console.log("Getting Audio Port");
+      try {
+        const port = await GetAudioServerPort();
+        setAudioServerPort(port)
+
+        const activeFile = {
+          path: `http://localhost:${port}/preview-render.wav`,
+          name: "preview-render.wav",
+        }
+        setCurrentActiveFile(activeFile)
+      } catch (error) {
+        console.error("Error getting the port of the http audio server:", error);
+        setAudioServerPort(null);
+      }
+    };
+    getAudioPort();
+  }, []);
+
+
   const DEFAULT_THRESHOLD = -30;
   const DEFAULT_MIN_DURATION = 1.0;
   const MIN_DURATION_LIMIT = 0.01;
@@ -54,9 +90,6 @@ export default function App() {
   const [paddingRight, setPaddingRight] = useState(DEFAULT_PADDING);
   const [makeNewTimeline, setMakeNewTimeline] = useState(false);
   const [paddingLocked, setPaddingLinked] = useState(true);
-
-  const [pythonLogs, setPythonLogs] = useState([]);
-  const [scriptStatus, setScriptStatus] = useState("");
 
   const handlePaddingChange = (side: "left" | "right", value: number) => {
     if (paddingLocked) {
@@ -75,16 +108,8 @@ export default function App() {
     setPaddingLinked(true);
   };
 
-  const [windowMenuVisible, setWindowMenuVisible] = useState(false);
-
-  const handleWindowMenuToggle = () => {
-    setWindowMenuVisible((prev) => !prev);
-  };
-
   const titleBarHeight = "2.35rem";
 
-  const [detectionParams, setDetectionParams] =
-    useState<DetectionParams | null>(null);
 
   useEffect(() => {
     // Update detectionParams when individual parameter states change
@@ -95,18 +120,6 @@ export default function App() {
       paddingRightSeconds: paddingRight,
     });
   }, [threshold, minDuration, paddingLeft, paddingRight]);
-
-  const [currentActiveFile, setCurrentActiveFile] = useState<ActiveFile | null>(
-    {
-      path: "/home/oliwoli/my-repos/resocut/frontend/public/audio/preview-render.wav",
-      name: "preview-render.wav",
-    }
-  );
-
-  const { silenceData, isLoading, error, refetch } = useSilenceData(
-    currentActiveFile,
-    detectionParams
-  );
 
   return (
     <>
@@ -148,12 +161,10 @@ export default function App() {
       >
         <header className="flex items-center justify-between"></header>
 
-        <main className="flex-1 gap-8 mt-8 max-w-screen">
+        <main className="flex-1 gap-8 mt-8 max-w-screen select-none">
           <div className="flex flex-col space-y-8">
-            {/* Group Threshold, Min Duration, and Padding horizontally */}
+            {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
-              {" "}
-              {/* Threshold Silence Column */}
               <div className="flex flex-col space-y-2 items-center">
                 {" "}
                 {/* Make this a flex column for its own content */}
@@ -174,13 +185,11 @@ export default function App() {
                 </div>
               </div>
               <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
-                {/* Wavesurfer Player */}
                 <WaveformPlayer
-                  audioUrl="/audio/preview-render.wav"
+                  audioUrl={`http://localhost:${audioServerPort}/preview-render.wav`}
                   silenceData={silenceData}
                 />
 
-                {/* Minimum Duration Column */}
                 <div className="space-y-2 w-full">
                   <div className="flex items-center space-x-5">
                     <Label className="font-medium w-32 flex-row-reverse">
@@ -193,7 +202,7 @@ export default function App() {
                         step={0.001}
                         value={[minDuration]}
                         onValueChange={(vals) => setMinDuration(vals[0])}
-                        className="w-full" // Changed from w-64 to w-full for better responsiveness
+                        className="w-full"
                       />
                       <span className="text-sm text-zinc-100">
                         {minDuration.toFixed(2)}s
@@ -203,7 +212,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Padding Column */}
                 <div className="space-y-2 flex-1">
                   <div className="flex items-baseline space-x-5">
                     <Label className="font-medium w-32 text-right flex-row-reverse">
@@ -246,8 +254,6 @@ export default function App() {
 
                       {/* Right Padding */}
                       <div className="flex flex-col space-y-1 w-full">
-                        {" "}
-                        {/* Changed from w-64 */}
                         <div className="flex items-center space-x-2">
                           <Slider
                             min={0}
@@ -273,21 +279,13 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col space-y-8 w-full">
-                  {/* test audio native html
+                  test
                   <audio
-                    src="/audio/preview-render.wav"
+                    src={`http://localhost:${audioServerPort}/preview-render.wav`}
                     controls
-                    className="w-full"
-                  /> */}
+                  />
 
-                  {/* <SilenceDataLog
-                    activeFile={currentActiveFile}
-                    silenceData={silenceData}
-                    isLoading={isLoading}
-                    error={error}
-                  /> */}
                   <div className="items-center space-y-2">
-                    {/* Make New Timeline */}
                     <div className="flex items-center space-x-2">
                       <Checkbox
                         checked={makeNewTimeline}
@@ -297,7 +295,7 @@ export default function App() {
                       />
                       <Label className="text-base">Make new timeline</Label>
                     </div>
-                    <PythonRunnerComponent
+                    <RemoveSilencesButton
                       threshold={threshold}
                       minDuration={minDuration}
                       padLeft={paddingLeft}
@@ -307,8 +305,7 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            </div>{" "}
-            {/* End of flex row container */}
+            </div>
           </div>
         </main>
       </div>
