@@ -2,10 +2,9 @@ import { PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react"; // Removed Skip
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
-import RegionsPlugin, {
-    RegionParams,
-} from "wavesurfer.js/dist/plugins/regions.js";
+import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js"; // 1. Import Minimap
+import ZoomPlugin from 'wavesurfer.js/dist/plugins/zoom.esm.js'
 
 import { GetLogarithmicWaveform } from "@wails/go/main/App";
 import { main } from "@wails/go/models";
@@ -49,63 +48,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     silenceData,
     projectFrameRate,
 }) => {
-    const [blobUrl, setBlobUrl] = useState<string | null>(null);
-
-    useEffect(() => {
-        let objectUrl: string | null = null;
-        const fetchAudioAndSetUrl = async () => {
-            if (!audioUrl) {
-                setBlobUrl(null);
-                return;
-            }
-            try {
-                console.log("Fetching audio from:", audioUrl);
-                const response = await fetch(audioUrl);
-                if (!response.ok)
-                    throw new Error(
-                        `Failed to fetch audio: ${response.statusText} (status: ${response.status})`
-                    );
-                const originalBlob = await response.blob();
-                let finalBlob = originalBlob;
-                if (!originalBlob.type && originalBlob.size > 0) {
-                    let assumedType: string | undefined;
-                    if (audioUrl.toLowerCase().endsWith(".mp3"))
-                        assumedType = "audio/mpeg";
-                    else if (audioUrl.toLowerCase().endsWith(".wav"))
-                        assumedType = "audio/wav";
-                    else if (audioUrl.toLowerCase().endsWith(".ogg"))
-                        assumedType = "audio/ogg";
-                    else if (audioUrl.toLowerCase().endsWith(".aac"))
-                        assumedType = "audio/aac";
-                    else if (audioUrl.toLowerCase().endsWith(".flac"))
-                        assumedType = "audio/flac";
-                    if (assumedType) {
-                        console.warn(`Re-blobbing with assumed type: ${assumedType}`);
-                        finalBlob = new Blob([originalBlob], { type: assumedType });
-                    } else {
-                        console.warn(
-                            "Original blob had no MIME type and extension not recognized."
-                        );
-                    }
-                } else if (originalBlob.size === 0) {
-                    console.error("Fetched blob is empty.");
-                    setBlobUrl(null);
-                    throw new Error("Fetched audio blob is empty.");
-                }
-                objectUrl = URL.createObjectURL(finalBlob);
-                setBlobUrl(objectUrl);
-            } catch (error) {
-                console.error("Error fetching audio blob:", error);
-                setBlobUrl(null);
-            }
-        };
-        fetchAudioAndSetUrl();
-        return () => {
-            if (objectUrl) URL.revokeObjectURL(objectUrl);
-            setBlobUrl(null);
-        };
-    }, [audioUrl]);
-
     const waveformContainerRef = useRef<HTMLDivElement>(null);
     const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
     const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -135,6 +77,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     }, [silenceData]);
 
     const currentProjectFrameRate = projectFrameRate || 30.0;
+
+    const isPanningRef = useRef(false);
+    const panStartXRef = useRef(0); // To store initial mouse X position
+    const panInitialScrollLeftRef = useRef(0); // To store initial scrollLeft of the waveform
+    const originalCursorRef = useRef(''); // To store the original cursor style 
 
     useEffect(() => {
         if (!audioUrl) {
@@ -175,31 +122,21 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     }, [audioUrl]);
 
     useEffect(() => {
-        console.log(
-            "WaveSurfer Init Effect: blobUrl:",
-            !!blobUrl,
-            "precomputedData:",
-            !!precomputedData,
-            "minimapRef:",
-            !!minimapContainerRef.current
-        );
         if (wavesurferRef.current) {
             wavesurferRef.current.destroy();
             wavesurferRef.current = null;
         }
         if (!waveformContainerRef.current || !minimapContainerRef.current) {
-            console.log("WS Init: Container or minimap ref not ready.");
             return;
         }
         if (
-            !blobUrl ||
+            !audioUrl ||
             !precomputedData ||
             !precomputedData.peaks ||
             precomputedData.peaks.length === 0 ||
             precomputedData.duration <= 0
         ) {
-            console.log("WS Init: Waiting for blobUrl or valid precomputedData.");
-            if (audioUrl && (!blobUrl || !precomputedData))
+            if (audioUrl && (!audioUrl || !precomputedData))
                 setIsLoading(true); // Keep loading if URL exists but data not ready
             else if (!audioUrl) setIsLoading(false); // No URL, not loading
             return;
@@ -225,7 +162,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             duration: precomputedData.duration,
             normalize: false,
             barAlign: "bottom",
-        });
+        }
+        );
 
         const wsOptions: WaveSurferOptions = {
             container: waveformContainerRef.current,
@@ -239,7 +177,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             fillParent: true,
             barAlign: "bottom",
             interact: true,
-            url: blobUrl,
+            url: audioUrl,
             peaks: [precomputedData.peaks],
             duration: precomputedData.duration,
             normalize: false,
@@ -254,6 +192,16 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
         try {
             const ws = WaveSurfer.create(wsOptions);
+            ws.registerPlugin(
+                ZoomPlugin.create({
+                    // the amount of zoom per wheel step, e.g. 0.5 means a 50% magnification per scroll
+                    scale: 0.01,
+                    // Optionally, specify the maximum pixels-per-second factor while zooming
+                    maxZoom: 180,
+                    exponentialZooming: true,
+                }),
+            )
+
             wavesurferRef.current = ws;
 
             ws.on("ready", () => {
@@ -279,7 +227,45 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                 ws.setTime(0);
                 setCurrentTime(0);
             }); // Reset to start on finish
+
+            ws.on("interaction", (newTime: number) => {
+                ws.setTime(newTime);
+                setCurrentTime(newTime); // Keep updating React state for the current time display
+            });
+
+            ws.on("zoom", (newPixelsPerSecond) => { // The parameter is the new pixels-per-second scale
+                // console.log(`Zoom event: new px/s = ${newPixelsPerSecond}`); // For debugging
+
+                const mainWs = wavesurferRef.current;
+                if (!mainWs || !mainWs.getDuration()) { // Ensure ws is valid and has a duration
+                    return;
+                }
+
+                const currentTime = mainWs.getCurrentTime();    // This is our anchor point
+                const containerWidth = mainWs.getWidth();       // Width of the visible waveform area
+
+                // Calculate the absolute pixel position of the currentTime on the newly scaled waveform
+                const pixelPositionOfPlayhead = currentTime * newPixelsPerSecond;
+
+                // Calculate the target scrollLeft value to place the playhead in the center
+                let targetScrollLeft = pixelPositionOfPlayhead - (containerWidth / 2);
+
+                // Optional but recommended: Clamp the scroll value to prevent overscrolling
+                // (scrolling beyond the beginning or end of the waveform)
+                const totalWaveformWidth = mainWs.getDuration() * newPixelsPerSecond;
+                const maxScrollPossible = Math.max(0, totalWaveformWidth - containerWidth);
+                targetScrollLeft = Math.max(0, Math.min(targetScrollLeft, maxScrollPossible));
+
+                console.log(`Centering scroll: targetScrollLeft = ${targetScrollLeft}`); // For debugging
+
+                // Apply the new scroll position
+                mainWs.setScroll(0);
+            });
+
             ws.on("timeupdate", (time: number) => {
+                //ws.setScroll(-1550);
+                //ws.setScrollTime(time);
+
                 setCurrentTime(time); // Keep updating React state for the current time display
 
                 if (
@@ -287,7 +273,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                     skipRegionsEnabledRef.current &&
                     silenceDataForSkippingRef.current?.length
                 ) {
-                    // time how long the loop takes
                     for (const region of silenceDataForSkippingRef.current) {
                         const epsilon = 0.01; // A small buffer to avoid floating point issues or skipping too late
 
@@ -312,6 +297,64 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                 setIsLoading(false);
                 setIsPlaying(false);
             });
+
+            const scrollWrapper = ws.getWrapper(); // Get the scrollable wrapper element
+            if (scrollWrapper) {
+                // Store original cursor and set initial "grab" cursor
+                originalCursorRef.current = scrollWrapper.style.cursor;
+                //scrollWrapper.style.cursor = 'grab';
+
+                const handleGlobalMouseMove = (event: MouseEvent) => {
+                    if (!isPanningRef.current || !wavesurferRef.current) return; // Check main ws ref too
+
+                    event.preventDefault(); // Prevent other actions during drag
+                    const wsInstance = wavesurferRef.current;
+                    const deltaX = event.clientX - panStartXRef.current;
+                    let newScrollLeft = panInitialScrollLeftRef.current - deltaX; // Subtract delta to move content with mouse
+
+                    // Optional: Clamp scroll position to prevent overscrolling
+                    // const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
+                    // newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
+
+                    wsInstance.setScroll(newScrollLeft);
+                };
+
+                const handleGlobalMouseUp = (event: MouseEvent) => {
+                    if (!isPanningRef.current) return;
+
+                    // Only truly act if it was a middle mouse drag, though isPanningRef should cover this
+                    isPanningRef.current = false;
+                    scrollWrapper.style.cursor = originalCursorRef.current
+
+                    document.removeEventListener('mousemove', handleGlobalMouseMove);
+                    document.removeEventListener('mouseup', handleGlobalMouseUp);
+                };
+
+                const handleWaveformMouseDown = (event: MouseEvent) => {
+                    const wsInstance = wavesurferRef.current;
+                    if (!wsInstance) return;
+
+                    // Check for middle mouse button (event.button === 1)
+                    if (event.button === 1) {
+                        event.preventDefault(); // Prevent default middle-click actions (like autoscroll)
+                        event.stopPropagation(); // Prevent other listeners on WaveSurfer from acting on this
+
+                        isPanningRef.current = true;
+                        panStartXRef.current = event.clientX;
+                        panInitialScrollLeftRef.current = wsInstance.getScroll();
+
+                        scrollWrapper.style.cursor = 'grabbing';
+
+                        // Add listeners to the document to capture mouse moves outside the wrapper
+                        document.addEventListener('mousemove', handleGlobalMouseMove);
+                        document.addEventListener('mouseup', handleGlobalMouseUp);
+                    }
+                };
+
+                scrollWrapper.addEventListener('mousedown', handleWaveformMouseDown);
+            }
+
+
         } catch (error: any) {
             console.error(
                 "Error during WaveSurfer create/load:",
@@ -320,6 +363,50 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             setIsLoading(false);
             setIsPlaying(false);
         }
+
+        // --- Event listeners for the MINIMAP plugin instance ---
+        if (wsMinimap) {
+            const onMinimapDrag = (relativeX: number) => {
+                const mainWs = wavesurferRef.current;
+                if (!mainWs) return
+                const mainDuration = mainWs.getDuration(); // Use main wavesurfer's duration
+                if (mainDuration > 0) {
+                    const newTime = relativeX * mainDuration;
+                    //console.log(`Minimap Drag event: newTime ${newTime.toFixed(3)} (relativeX: ${relativeX})`);
+                    setCurrentTime(newTime);
+                    mainWs.setTime(newTime);
+                    const pixelsPerSecond = mainWs.options.minPxPerSec;
+                    const timeToCenter = mainWs.getCurrentTime();
+                    const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
+                    const containerWidth = mainWs.getWidth();
+                    let targetScrollPx = pixelPositionOfTimeToCenter - (containerWidth / 2);
+                    mainWs.setScroll(targetScrollPx);
+                }
+
+            };
+            wsMinimap.on('drag', onMinimapDrag);
+
+            const onMinimapClick = (relativeX: number, _relativeY: number) => {
+                const mainWs = wavesurferRef.current;
+                if (mainWs) {
+                    const mainDuration = mainWs.getDuration();
+                    if (mainDuration > 0) {
+                        const newTime = relativeX * mainDuration;
+                        // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
+                        setCurrentTime(newTime);
+                        mainWs.setTime(newTime);
+                        const pixelsPerSecond = mainWs.options.minPxPerSec;
+                        const timeToCenter = mainWs.getCurrentTime();
+                        const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
+                        const containerWidth = mainWs.getWidth();
+                        let targetScrollPx = pixelPositionOfTimeToCenter - (containerWidth / 2);
+                        mainWs.setScroll(targetScrollPx);
+                    }
+                }
+            };
+            wsMinimap.on('click', onMinimapClick);
+        }
+
         return () => {
             if (wavesurferRef.current) {
                 console.log("WaveSurfer cleanup: Destroying instance.");
@@ -327,9 +414,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                 wavesurferRef.current = null;
             }
         };
-        // Dependencies: audioUrl (for new file), precomputedData (when it's fetched/updated), blobUrl (when it's ready)
+
+
+        // Dependencies: audioUrl (for new file), precomputedData (when it's fetched/updated), audioUrl (when it's ready)
         // minimapContainerRef.current is not a reactive dependency in the same way, its existence is checked.
-    }, [audioUrl, precomputedData, blobUrl]);
+    }, [audioUrl, precomputedData]);
 
     const updateSilenceRegions = useCallback(
         (
