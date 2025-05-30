@@ -1,8 +1,7 @@
 // src/components/PythonRunnerComponent.tsx
 import React, { useEffect, useCallback } from 'react';
-// Adjust the import paths if your wailsjs directory is structured differently or elsewhere
-import { RunPythonScriptWithArgs } from "../../wailsjs/go/main/App";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { RunPythonScriptWithArgs } from "@wails/go/main/App";
+import { EventsOn } from "@wails/runtime/runtime";
 import { Button } from '@/components/ui/button';
 import { SliceIcon, StethoscopeIcon } from 'lucide-react';
 
@@ -36,7 +35,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     useEffect(() => {
         console.log("PythonRunnerComponent: Setting up Wails event listeners...");
 
-        const logHandler = (line: string) => { // Explicitly type 'line' if needed, though inferred
+        const logHandler = (line: string) => {
             console.log("[Python STDOUT/STDERR]:", line);
             if (onScriptLog) {
                 onScriptLog(line);
@@ -92,6 +91,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
         </Button>
     );
 };
+
 
 
 export default RemoveSilencesButton;

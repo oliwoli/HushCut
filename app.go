@@ -128,8 +128,8 @@ func (a *App) SaveConfig(configData map[string]interface{}) error {
 }
 
 func (a *App) RunPythonScriptWithArgs(args []string) error {
-	scriptPath := "python-backend/src/main.py"
-	cmd := exec.Command("python3", append([]string{scriptPath}, args...)...)
+	binaryPath := "python_backend"
+	cmd := exec.Command("python3", append([]string{binaryPath}, args...)...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

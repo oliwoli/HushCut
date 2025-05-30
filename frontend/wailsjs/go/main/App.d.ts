@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function CloseApp():Promise<void>;
 
+export function GetAudioServerPort():Promise<number>;
+
 export function GetConfig():Promise<Record<string, any>>;
 
 export function GetLogarithmicWaveform(arg1:string,arg2:number,arg3:number):Promise<main.PrecomputedWaveformData>;

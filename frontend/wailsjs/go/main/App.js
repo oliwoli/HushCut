@@ -6,6 +6,10 @@ export function CloseApp() {
   return window['go']['main']['App']['CloseApp']();
 }
 
+export function GetAudioServerPort() {
+  return window['go']['main']['App']['GetAudioServerPort']();
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
