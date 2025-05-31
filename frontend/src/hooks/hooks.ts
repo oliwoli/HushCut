@@ -1,16 +1,38 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
-export const useWindowFocus = (onFocus: () => void, onBlur: () => void) => {
+export const useWindowFocus = (
+    onFocus: () => void,
+    onBlur: () => void,
+    options?: {
+        fireOnMount?: boolean;
+        throttleMs?: number;
+    }
+) => {
+    const lastCalledRef = useRef(0);
+    const throttleMs = options?.throttleMs ?? 0;
+
     useEffect(() => {
-        window.addEventListener("focus", onFocus);
-        window.addEventListener("blur", onBlur);
+        const callThrottled = (fn: () => void) => {
+            const now = Date.now();
+            if (now - lastCalledRef.current >= throttleMs) {
+                fn();
+                lastCalledRef.current = now;
+            }
+        };
 
-        // Call onFocus initially if desired
-        //onFocus();
+        const handleFocus = () => callThrottled(onFocus);
+        const handleBlur = () => callThrottled(onBlur);
+
+        window.addEventListener("focus", handleFocus);
+        window.addEventListener("blur", handleBlur);
+
+        if (options?.fireOnMount) {
+            callThrottled(onFocus);
+        }
 
         return () => {
-            window.removeEventListener("focus", onFocus);
-            window.removeEventListener("blur", onBlur);
+            window.removeEventListener("focus", handleFocus);
+            window.removeEventListener("blur", handleBlur);
         };
-    }, [onFocus, onBlur]);
+    }, [onFocus, onBlur, options?.fireOnMount, throttleMs]);
 };

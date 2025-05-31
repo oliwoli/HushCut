@@ -126,7 +126,8 @@ export default function App() {
 
   useWindowFocus(
     () => toast.success("Window is focused"),
-    () => console.log("Tab is blurred")
+    () => console.log("Tab is blurred"),
+    { fireOnMount: false, throttleMs: 500 }
   );
 
   const createActiveFileFromTimelineItem = (
