@@ -3,7 +3,7 @@ import React, { useEffect, useCallback } from 'react';
 import { RunPythonScriptWithArgs } from "@wails/go/main/App";
 import { EventsOn } from "@wails/runtime/runtime";
 import { Button } from '@/components/ui/button';
-import { SliceIcon, StethoscopeIcon } from 'lucide-react';
+import { SliceIcon } from "lucide-react";
 
 // 1. Define an interface for the component's props
 interface PythonRunnerProps {

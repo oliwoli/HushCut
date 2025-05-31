@@ -43,6 +43,8 @@ from project_orga import (
     restore_clips_from_temp_folder,
 )
 
+import requests
+
 
 # export timeline to XML
 def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
@@ -312,17 +314,7 @@ def get_source_media_from_timeline_item(
         return None
     filepath = media_pool_item.GetClipProperty("File Path")
     if not filepath:
-        # print(f"File path not found for item: {timeline_item['name']}")
-        # # print metadata
-        # print(f"tl item properties: {timeline_item['bmd_item'].GetProperty()}")
-        # print(f"Clip property: {media_pool_item.GetClipProperty()}")
-        # print(f"Metadata: {media_pool_item.GetMetadata()}")
-        # print(f"Selected Take: {timeline_item["bmd_item"].GetSelectedTakeIndex()}")
-        # print(f"Fusion comp count: {timeline_item['bmd_item'].GetFusionCompCount()}")
-        # print(f"takes count: {timeline_item['bmd_item'].GetTakesCount()}")
-        # print(f"3rd party: {media_pool_item.GetThirdPartyMetadata()}")
         print(f"Audio mapping: {media_pool_item.GetAudioMapping()}")
-        # print(f"Track count: {timeline_item['bmd_item'].GetTrackCount("video")}")
         return None
     file_path_uuid: str = misc_utils.uuid_from_path(filepath).hex
     source_media_item: FileSource = {
@@ -341,7 +333,7 @@ def main(sync: bool = False) -> None:
         print("Could not connect to DaVinci Resolve. Is it running?")
         sys.exit(1)
 
-    switch_to_page("edit")
+    #switch_to_page("edit")
     project = RESOLVE.GetProjectManager().GetCurrentProject()
     if not project:
         print("No project is currently open.")
@@ -747,16 +739,64 @@ def find_item_folder_by_id(project, item_id: str) -> Any | None:
     return _recursive_find_item_in_folder(root_folder, item_id)
 
 
+def signal_go_ready(go_server_port: int):
+    """
+    Sends an HTTP request to the Go server to signal readiness.
+    Retries a few times in case the Go server isn't immediately available.
+    """
+    # This URL must match the endpoint defined in your Go server's LaunchHttpServer
+    ready_url = f"http://localhost:{go_server_port}/ready"
+    max_retries = 5
+    retry_delay_seconds = 2
+
+    print(f"Python Backend: Attempting to signal Go server at {ready_url}", flush=True)
+
+    for attempt in range(max_retries):
+        try:
+            # Using GET, but POST would also work based on your Go handler
+            response = requests.get(ready_url, timeout=10)  # 10-second timeout for the request
+            response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
+            print(f"Python Backend: Successfully signaled Go server. Status: {response.status_code}", flush=True)
+            print(f"Python Backend: Go server response: {response.text}", flush=True)
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Python Backend: Error signaling Go (attempt {attempt + 1}/{max_retries}): {e}", flush=True)
+            if attempt < max_retries - 1:
+                print(f"Python Backend: Retrying in {retry_delay_seconds} seconds...", flush=True)
+                sleep(retry_delay_seconds)
+            else:
+                print(f"Python Backend: Failed to signal Go server after {max_retries} attempts.", flush=True)
+                return False
+    return False # Should not be reached if max_retries > 0
+
+
 if __name__ == "__main__":
     script_time = time()
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-threshold', type=float)
+    parser.add_argument('-port', '--port', type=int) # port to communicate with http server
+    parser.add_argument('--token', type=str) # authorization token
     parser.add_argument('-min_duration', type=float)
     parser.add_argument('-padding_l', type=float)
     parser.add_argument('-padding_r', type=float)
-    parser.add_argument('-s', '--sync', action='store_true')  
+    parser.add_argument('-s', '--sync', action='store_true')
     args = parser.parse_args()
+
+    signal_go_ready(args.port)
+    try:
+        while True:
+            # print("Python Backend: Still alive and working...", flush=True)
+            sleep(60)
+    except KeyboardInterrupt:
+        print("Python Backend: Shutting down due to user interrupt.", flush=True)
+    except Exception as e:
+        print(f"Python Backend: An unexpected error occurred: {e}", flush=True)
+    finally:
+        print("Python Backend: Exited.", flush=True)
+    sys.exit(1)
+
+
 
     main(sync=args.sync)
     script_end_time = time()

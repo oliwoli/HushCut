@@ -6,15 +6,16 @@ import { Label } from "@/components/ui/label";
 import { LogSlider } from "./components/ui/volumeSlider";
 import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
 
-import { clamp, cn } from "@/lib/utils";
-import { GetAudioServerPort } from "@wails/go/main/App";
-
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+
+import { clamp, cn } from "@/lib/utils";
+import { GetAudioServerPort } from "@wails/go/main/App";
+import { GetPythonReadyStatus } from "@wails/go/main/App";
 
 import WaveformPlayer from "./components/audio/waveform";
 import RemoveSilencesButton from "./lib/PythonRunner";
@@ -37,10 +38,10 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 }
 
 export default function App() {
-  const [audioServerPort, setAudioServerPort] = useState<Number | null>(null)
+  const [httpPort, setHttpPort] = useState<Number | null>(null);
   const [currentActiveFile, setCurrentActiveFile] = useState<ActiveFile | null>(
     {
-      path: `http://localhost:${audioServerPort}/preview-render.wav`,
+      path: `http://localhost:${httpPort}/preview-render.wav`,
       name: "preview-render.wav",
     }
   );
@@ -52,27 +53,31 @@ export default function App() {
     detectionParams
   );
 
-
   useEffect(() => {
-    const getAudioPort = async () => {
+    const getHttpPort = async () => {
       console.log("Getting Audio Port");
       try {
         const port = await GetAudioServerPort();
-        setAudioServerPort(port)
+        console.log("HTTP Server Port: ", port);
+        setHttpPort(port);
+
+        console.log("Python ready: ", await GetPythonReadyStatus());
 
         const activeFile = {
           path: `http://localhost:${port}/preview-render.wav`,
           name: "preview-render.wav",
-        }
-        setCurrentActiveFile(activeFile)
+        };
+        setCurrentActiveFile(activeFile);
       } catch (error) {
-        console.error("Error getting the port of the http audio server:", error);
-        setAudioServerPort(null);
+        console.error(
+          "Error getting the port of the http audio server:",
+          error
+        );
+        setHttpPort(null);
       }
     };
-    getAudioPort();
+    getHttpPort();
   }, []);
-
 
   const DEFAULT_THRESHOLD = -30;
   const DEFAULT_MIN_DURATION = 1.0;
@@ -110,7 +115,6 @@ export default function App() {
 
   const titleBarHeight = "2.35rem";
 
-
   useEffect(() => {
     // Update detectionParams when individual parameter states change
     setDetectionParams({
@@ -134,7 +138,9 @@ export default function App() {
             >
               <XIcon className="scale-90" strokeWidth={2.5} />
             </Button>
-            <h1 className="text-sm font-normal text-neutral-200">DR. Silence</h1>
+            <h1 className="text-sm font-normal text-neutral-200">
+              DR. Silence
+            </h1>
             <div className="flex items-center space-x-2">
               <Button
                 size="icon"
@@ -186,8 +192,9 @@ export default function App() {
               </div>
               <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
                 <WaveformPlayer
-                  audioUrl={`http://localhost:${audioServerPort}/preview-render.wav`}
+                  audioUrl={`http://localhost:${httpPort}/preview-render.wav`}
                   silenceData={silenceData}
+                  threshold={threshold}
                 />
 
                 <div className="space-y-2 w-full">
@@ -279,11 +286,11 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col space-y-8 w-full">
-                  test
+                  {/* test
                   <audio
                     src={`http://localhost:${audioServerPort}/preview-render.wav`}
                     controls
-                  />
+                  /> */}
 
                   <div className="items-center space-y-2">
                     <div className="flex items-center space-x-2">
@@ -302,6 +309,11 @@ export default function App() {
                       padRight={paddingRight}
                       makeNewTimeline={makeNewTimeline}
                     />
+
+                    {/* python status tester */}
+                    <Button onClick={() => console.log(GetPythonReadyStatus())}>
+                      Python Status
+                    </Button>
                   </div>
                 </div>
               </div>

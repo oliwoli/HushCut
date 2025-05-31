@@ -14,16 +14,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
 type App struct {
-	ctx          context.Context
-	silenceCache map[CacheKey][]SilencePeriod
-	cacheMutex   sync.RWMutex // Mutex for thread-safe access to the cache
-	configPath   string
+	ctx             context.Context
+	silenceCache    map[CacheKey][]SilencePeriod
+	cacheMutex      sync.RWMutex // Mutex for thread-safe access to the cache
+	configPath      string
+	pythonReadyChan chan bool
+	pythonReady     bool
 }
 
 // NewApp creates a new App application struct
@@ -31,29 +34,38 @@ func NewApp() *App {
 	// Config path is relative to the CWD of the running application.
 	// For built apps, consider a more robust path (e.g., using os.UserConfigDir()).
 	configPath := "shared/config.json"
-	return &App{configPath: configPath, silenceCache: make(map[CacheKey][]SilencePeriod)}
+	return &App{configPath: configPath, silenceCache: make(map[CacheKey][]SilencePeriod), pythonReadyChan: make(chan bool, 1)}
 }
 
-// startup is called when the app starts.
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-	log.Println("Wails App: OnStartup called.")
-	log.Println("Wails App: Initializing and launching internal WAV audio server...")
+// launch python backend and wait for POST /ready on http server endpoint
+func LaunchPythonBackend(port int) error {
+	pythonTargetName := "python_backend"
 
-	if err := LaunchWavAudioServer(); err != nil {
-		// The server failed to even set up its listener. This is critical.
-		errMsg := fmt.Sprintf("FATAL: Failed to launch WAV audio server: %v", err)
-		log.Println(errMsg)
-		// For a real app, you might want to show a critical error dialog to the user.
-		// Example: runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-		//     Type:    runtime.ErrorDialog,
-		//     Title:   "Critical Error",
-		//     Message: "The internal audio server could not be started. Audio playback will not work.\nError: " + err.Error(),
-		// })
-		// And potentially os.Exit(1) or disable features.
-	} else {
-		log.Println("Wails App: WAV audio server launch sequence initiated.")
+	var determinedPath string
+
+	goExecutablePath, err := os.Executable()
+	if err == nil {
+		goExecutableDir := filepath.Dir(goExecutablePath)
+		pathAlongsideExe := filepath.Join(goExecutableDir, pythonTargetName)
+
+		if _, statErr := os.Stat(pathAlongsideExe); statErr == nil {
+			// Found it next to the Go executable!
+			determinedPath = pathAlongsideExe
+		}
 	}
+
+	portArgName := "--port"
+	cmdArgs := []string{portArgName, fmt.Sprintf("%d", port)}
+
+	cmd := exec.Command(determinedPath, cmdArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	log.Printf("Go app: Python backend process started (PID: %d, Path: '%s'). Waiting for its HTTP ready signal.\n", cmd.Process.Pid, determinedPath)
+	return nil
 }
 
 func (a *App) GetAudioServerPort() int {
@@ -62,6 +74,55 @@ func (a *App) GetAudioServerPort() int {
 		return 0 // Or -1, or some other indicator that it's not ready
 	}
 	return actualPort // Accesses the global from httpserver.go
+}
+
+// startup is called when the app starts.
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	log.Println("Wails App: OnStartup called.")
+	log.Println("Wails App: Initializing and launching internal WAV audio server...")
+
+	if err := LaunchHttpServer(a.pythonReadyChan); err != nil {
+		// The server failed to even set up its listener. This is critical.
+		errMsg := fmt.Sprintf("FATAL: Failed to launch WAV audio server: %v", err)
+		log.Println(errMsg)
+		runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+			Type:    runtime.ErrorDialog,
+			Title:   "Critical Error",
+			Message: "The internal audio server could not be started. Audio playback will not work.\nError: " + err.Error(),
+		})
+		// And potentially os.Exit(1) or disable features.
+	}
+	log.Println("Wails App: WAV audio server launch sequence initiated.")
+	port := a.GetAudioServerPort()
+	if port == 0 {
+		log.Println("Wails App: Failed to get audio server port. Python backend will not be launched.")
+		return
+	}
+	if err := LaunchPythonBackend(port); err != nil {
+		log.Println("Wails App: Failed to launch Python backend: ", err)
+		runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+			Type:    runtime.ErrorDialog,
+			Title:   "Critical Error",
+			Message: "The internal Python backend could not be started. Communication with DaVinci will not work. \nError: " + err.Error(),
+		})
+		a.CloseApp()
+		return
+	}
+	log.Println("Wails App: Python backend launch sequence initiated.")
+	pythonReadinessTimeout := 30 * time.Second
+	log.Printf("Wails App: Waiting up to %s for Python backend to signal readiness...", pythonReadinessTimeout)
+
+	select {
+	case <-a.pythonReadyChan:
+		log.Println("Wails App: Python backend has signaled it is ready.")
+		a.pythonReady = true // <--- SET THE STATUS HERE
+	case <-time.After(pythonReadinessTimeout):
+		log.Printf("Wails App Warning: Timed out waiting for Python backend to signal readiness after %s.", pythonReadinessTimeout)
+	case <-a.ctx.Done(): // Main application context cancelled
+		log.Println("Wails App: Application shutdown initiated while waiting for Python backend.")
+		return
+	}
 }
 
 // Greet returns a greeting for the given name
@@ -308,15 +369,8 @@ func (a *App) GetOrDetectSilencesWithCache(
 	return silences, nil
 }
 
-
 // New method to be called from Wails frontend
 func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb float64) (*PrecomputedWaveformData, error) {
-	// `PrecomputedWaveformData` type is accessible because it's defined in waveform.go (package main) and exported.
-	// `ProcessWavToLogarithmicPeaks` function is accessible for the same reason.
-
-	runtime.LogInfof(a.ctx, "Generating logarithmic waveform for: %s (spp: %d, minDb: %.1f)", filePath, samplesPerPixel, minDb)
-
-	// maxDisplayDb is typically 0.0 for 0dBFS (full scale)
 	maxDb := 0.0
 
 	data, err := ProcessWavToLogarithmicPeaks(filePath, samplesPerPixel, minDb, maxDb)
@@ -326,6 +380,10 @@ func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb
 		return nil, fmt.Errorf("failed to generate waveform for '%s': %v", filePath, err)
 	}
 
-	runtime.LogInfof(a.ctx, "Successfully generated waveform for: %s, Duration: %.2f, Peaks count: %d", filePath, data.Duration, len(data.Peaks))
+	//runtime.LogInfof(a.ctx, "Successfully generated waveform for: %s, Duration: %.2f, Peaks count: %d", filePath, data.Duration, len(data.Peaks))
 	return data, nil
+}
+
+func (a *App) GetPythonReadyStatus() bool {
+	return a.pythonReady
 }

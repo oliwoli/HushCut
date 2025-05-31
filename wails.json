@@ -9,6 +9,5 @@
   "author": {
     "name": "oliwoli",
     "email": "oliverweiss97@gmail.com"
-  },
-  "preBuildHooks": {"linux/*": "/bin/bash ../scripts/preBuild.sh"}
+  }
 }

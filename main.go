@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/logger"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
@@ -31,26 +32,25 @@ type CacheKey struct {
 }
 
 type FileLoader struct {
-    http.Handler
+	http.Handler
 }
 
 func NewFileLoader() *FileLoader {
-    return &FileLoader{}
+	return &FileLoader{}
 }
 
 func (h *FileLoader) ServeHTTP(res http.ResponseWriter, req *http.Request) {
-    var err error
-    requestedFilename := strings.TrimPrefix(req.URL.Path, "/")
-    println("Requesting file:", requestedFilename)
-    fileData, err := os.ReadFile(requestedFilename)
-    if err != nil {
-        res.WriteHeader(http.StatusBadRequest)
-        res.Write([]byte(fmt.Sprintf("Could not load file %s", requestedFilename)))
-    }
+	var err error
+	requestedFilename := strings.TrimPrefix(req.URL.Path, "/")
+	println("Requesting file:", requestedFilename)
+	fileData, err := os.ReadFile(requestedFilename)
+	if err != nil {
+		res.WriteHeader(http.StatusBadRequest)
+		res.Write([]byte(fmt.Sprintf("Could not load file %s", requestedFilename)))
+	}
 
-    res.Write(fileData)
+	res.Write(fileData)
 }
-
 
 func main() {
 	// Serve the frontend assets
@@ -64,7 +64,7 @@ func main() {
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
 			Handler: NewFileLoader(),
 		},
 		BackgroundColour: &options.RGBA{R: 40, G: 40, B: 46, A: 1},
@@ -72,6 +72,7 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
+		LogLevel:    logger.INFO,
 		AlwaysOnTop: true,
 		Frameless:   true,
 	})
