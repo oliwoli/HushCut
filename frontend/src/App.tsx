@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { Toaster } from "./components/ui/sonner";
 import { Label } from "@/components/ui/label";
 import { LogSlider } from "./components/ui/volumeSlider";
 import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
@@ -24,6 +26,7 @@ import RemoveSilencesButton from "./lib/PythonRunner";
 import { CloseApp } from "@wails/go/main/App";
 import { ActiveFile, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
+import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui/fileSelector";
 
 EventsOn("showToast", (data) => {
@@ -120,6 +123,11 @@ export default function App() {
       // if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, []); // Empty dependency array ensures this runs once on mount
+
+  useWindowFocus(
+    () => toast.success("Window is focused"),
+    () => console.log("Tab is blurred")
+  );
 
   const createActiveFileFromTimelineItem = (
     item: main.TimelineItem,
@@ -504,6 +512,17 @@ export default function App() {
                   {/* python status tester */}
                   <Button onClick={() => console.log(SyncWithDavinci())}>
                     Python Test
+                  </Button>
+                  <Toaster />
+                  <Button
+                    onClick={() =>
+                      toast.success("Connected to DaVinci", {
+                        dismissible: true,
+                        position: "bottom-left",
+                      })
+                    }
+                  >
+                    Success
                   </Button>
                 </div>
               </div>
