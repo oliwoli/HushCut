@@ -41,7 +41,7 @@ export function useSilenceData(
 
     try {
       const result = await GetOrDetectSilencesWithCache(
-        activeFile.path,
+        String(activeFile.processedFileName + ".wav"),
         detectionParams.loudnessThreshold,
         detectionParams.minSilenceDurationSeconds,
         detectionParams.paddingLeftSeconds,

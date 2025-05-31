@@ -31,6 +31,13 @@ type CacheKey struct {
 	PaddingRightSeconds       float64 `json:"paddingRightSeconds"`
 }
 
+type WaveformCacheKey struct {
+	FilePath        string // It's advisable to use an absolute/canonical path here if effectiveAudioFolderPath can change
+	SamplesPerPixel int
+	MinDb           float64
+	MaxDb           float64 // maxDb is used by ProcessWavToLogarithmicPeaks
+}
+
 type FileLoader struct {
 	http.Handler
 }

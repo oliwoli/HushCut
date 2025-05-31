@@ -18,10 +18,9 @@ import (
 const relativeAudioFolderName = "wav_files" // User-defined relative folder
 
 var (
-	serverListenAddress      string // Stores "localhost:PORT" for display or "IP:PORT" from listener.Addr()
-	actualPort               int    // The dynamically assigned port
-	effectiveAudioFolderPath string // Resolved absolute path to the audio folder
-	isServerInitialized      bool   // Flag to indicate if server init (port assignment) was successful
+	serverListenAddress string // Stores "localhost:PORT" for display or "IP:PORT" from listener.Addr()
+	actualPort          int    // port for audio server + messages from python backend to go
+	isServerInitialized bool   // Flag to indicate if server init (port assignment) was successful
 )
 
 // --- Data Structures for Python Messages ---
@@ -52,14 +51,14 @@ type ClipInfo struct {
 	SourceIn    float64 `json:"sourceIn"`
 	SourceOut   float64 `json:"sourceOut"`
 }
-type ProjectDataPayload struct {
-	ProjectName     string     `json:"projectName"`
-	TimelineName    string     `json:"timelineName"`
-	SampleRate      int        `json:"sampleRate"`
-	DurationSeconds float64    `json:"durationSeconds"`
-	Clips           []ClipInfo `json:"clips"`
-	// ... other fields your frontend needs
-}
+
+// type ProjectDataPayload struct {
+// 	ProjectName     string     `json:"projectName"`
+// 	TimelineName    string     `json:"timelineName"`
+// 	SampleRate      int        `json:"sampleRate"`
+// 	DurationSeconds float64    `json:"durationSeconds"`
+// 	Clips           []ClipInfo `json:"clips"`
+// }
 
 // --- End Data Structures ---
 
@@ -140,30 +139,64 @@ func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.Han
 	}
 }
 
+func findFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
 // initializes and starts the HTTP server in a goroutine.
 // It sets the global actualPort and serverListenAddress if successful.
 // Returns an error if listener setup fails.
-func LaunchHttpServer(pythonRdyChan chan bool /*, authTokenFromApp string */) error {
-	exePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("error getting executable path: %w", err)
+func (a *App) LaunchHttpServer(pythonRdyChan chan bool) error {
+	targetFolderName := "wav_files"
+
+	var audioFolderPath string
+
+	goExecutablePath, err := os.Executable()
+	if err == nil {
+		goExecutableDir := filepath.Dir(goExecutablePath)
+		pathAlongsideExe := filepath.Join(goExecutableDir, targetFolderName)
+
+		if _, statErr := os.Stat(pathAlongsideExe); statErr == nil {
+			// Found it next to the Go executable!
+			audioFolderPath = pathAlongsideExe
+		} else {
+			// make the folder
+			os.Mkdir(pathAlongsideExe, 0755)
+			audioFolderPath = pathAlongsideExe
+		}
 	}
-	exeDir := filepath.Dir(exePath)
-	effectiveAudioFolderPath = filepath.Join(exeDir, relativeAudioFolderName)
 
-	log.Printf("Audio Server: Attempting to serve .wav files from: %s", effectiveAudioFolderPath)
+	// exePath, err := os.Executable()
+	// if err != nil {
+	// 	return fmt.Errorf("error getting executable path: %w", err)
+	// }
+	// exeDir := filepath.Dir(exePath)
+	a.effectiveAudioFolderPath = audioFolderPath
 
-	if _, err := os.Stat(effectiveAudioFolderPath); os.IsNotExist(err) {
-		log.Printf("Audio Server Warning: The audio folder '%s' does not exist. Please ensure it's created next to the executable.", effectiveAudioFolderPath)
-		// Server will start, but requests for files will fail until the folder exists.
+	log.Printf("Audio Server: Attempting to serve .wav files from: %s", a.effectiveAudioFolderPath)
+
+	if _, err := os.Stat(a.effectiveAudioFolderPath); os.IsNotExist(err) {
+		log.Printf("Audio Server Warning: The audio folder '%s' does not exist. Please ensure it's created next to the executable.", a.effectiveAudioFolderPath)
 	}
 
 	mux := http.NewServeMux()
 
-	// Endpoints
-	coreAudioHandler := http.HandlerFunc(audioFileHandlerWails)
+	// --- ENDPOINTS --- //
+
+	// Audio files
+	coreAudioHandler := http.HandlerFunc(a.audioFileEndpoint)
 	mux.Handle("/", commonMiddleware(coreAudioHandler, false))
 
+	// Ready signal
 	readyHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost { // Allow GET or POST
 			http.Error(w, "Method not allowed for ready signal", http.StatusMethodNotAllowed)
@@ -185,25 +218,27 @@ func LaunchHttpServer(pythonRdyChan chan bool /*, authTokenFromApp string */) er
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Go server acknowledges Python backend readiness.")
 	}
-	// Ensure your Python client calls this exact path, e.g., "/report-ready/python"
 	mux.Handle("/ready", commonMiddleware(http.HandlerFunc(readyHandler), false)) // false: no auth
 
-	listener, err := net.Listen("tcp", "localhost:0") // OS assigns an available port
-	if err != nil {
-		return fmt.Errorf("could not start HTTP server listener: %w", err)
-	}
+	// Main communication endpoint
+	pythonMsgHandlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { a.msgEndpoint(w, r) })
+	mux.Handle("/msg", commonMiddleware(pythonMsgHandlerFunc, false))
 
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		_ = listener.Close() // Clean up
-		return fmt.Errorf("listener address is not a TCP address: %v", listener.Addr())
+	// Server
+	port, err := findFreePort()
+	if err != nil {
+		return fmt.Errorf("could not find free port: %w", err)
 	}
-	actualPort = tcpAddr.Port
+	actualPort = port
 	serverListenAddress = fmt.Sprintf("localhost:%d", actualPort)
 	isServerInitialized = true
 	log.Printf("🎵 Audio Server: Starting on http://%s", serverListenAddress)
-	log.Printf("Audio Server: Serving .wav files from: %s", effectiveAudioFolderPath)
+	log.Printf("Audio Server: Serving .wav files from: %s", a.effectiveAudioFolderPath)
 
+	listener, err := net.Listen("tcp", serverListenAddress)
+	if err != nil {
+		return fmt.Errorf("could not start HTTP server listener: %w", err)
+	}
 	// Start the HTTP server in a new goroutine so it doesn't block
 	go func() {
 		if errServe := http.Serve(listener, mux); errServe != nil && errServe != http.ErrServerClosed {
@@ -218,7 +253,7 @@ func LaunchHttpServer(pythonRdyChan chan bool /*, authTokenFromApp string */) er
 	return nil // Listener setup and goroutine launch successful
 }
 
-func audioFileHandlerWails(writer http.ResponseWriter, request *http.Request) {
+func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Request) {
 	origin := fmt.Sprintf("http://localhost:%d", actualPort)
 	writer.Header().Set("Access-Control-Allow-Origin", origin)
 	writer.Header().Set("Access-Control-Allow-Methods", "GET")
@@ -245,7 +280,7 @@ func audioFileHandlerWails(writer http.ResponseWriter, request *http.Request) {
 		if requestedPath == "/" || requestedPath == "" {
 			welcomeMsg := "Welcome to the internal WAV audio server."
 			if isServerInitialized && serverListenAddress != "" {
-				welcomeMsg += fmt.Sprintf(" Serving from http://%s (folder: %s)", serverListenAddress, effectiveAudioFolderPath)
+				welcomeMsg += fmt.Sprintf(" Serving from http://%s (folder: %s)", serverListenAddress, a.effectiveAudioFolderPath)
 			} else {
 				welcomeMsg += " (Server initializing or encountered an issue)."
 			}
@@ -257,8 +292,8 @@ func audioFileHandlerWails(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	fullPath := filepath.Join(effectiveAudioFolderPath, requestedPath)
-	absEffectiveAudioFolderPath, err := filepath.Abs(effectiveAudioFolderPath)
+	fullPath := filepath.Join(a.effectiveAudioFolderPath, requestedPath)
+	absEffectiveAudioFolderPath, err := filepath.Abs(a.effectiveAudioFolderPath)
 	if err != nil {
 		http.Error(writer, "Internal server error", http.StatusInternalServerError)
 		log.Printf("Audio Server Error: getting absolute path for effectiveAudioFolderPath: %v", err)
@@ -279,10 +314,10 @@ func audioFileHandlerWails(writer http.ResponseWriter, request *http.Request) {
 
 	fileInfo, err := os.Stat(fullPath)
 	if os.IsNotExist(err) {
-		if _, statErr := os.Stat(effectiveAudioFolderPath); os.IsNotExist(statErr) {
-			errMsg := fmt.Sprintf("Audio folder '%s' not found. Please ensure it exists next to the executable and is named '%s'.", effectiveAudioFolderPath, relativeAudioFolderName)
+		if _, statErr := os.Stat(a.effectiveAudioFolderPath); os.IsNotExist(statErr) {
+			errMsg := fmt.Sprintf("Audio folder '%s' not found. Please ensure it exists next to the executable and is named '%s'.", a.effectiveAudioFolderPath, relativeAudioFolderName)
 			http.Error(writer, errMsg, http.StatusInternalServerError)
-			log.Printf("Audio Server Error: Base audio folder not found: %s", effectiveAudioFolderPath)
+			log.Printf("Base audio folder not found: %s", a.effectiveAudioFolderPath)
 			return
 		}
 		http.NotFound(writer, request)
@@ -306,7 +341,7 @@ func audioFileHandlerWails(writer http.ResponseWriter, request *http.Request) {
 	log.Printf("Audio Server Served: %s (Client: %s)", fullPath, request.RemoteAddr)
 }
 
-func (a *App) pythonMessageHandler(w http.ResponseWriter, r *http.Request) {
+func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed for this endpoint", http.StatusMethodNotAllowed)
 		return
@@ -315,7 +350,7 @@ func (a *App) pythonMessageHandler(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Error reading request body", http.StatusInternalServerError)
-		log.Printf("pythonMessageHandler: Error reading body: %v", err)
+		log.Printf("msgEndpoint: Error reading body: %v", err)
 		return
 	}
 	defer r.Body.Close()
@@ -323,18 +358,18 @@ func (a *App) pythonMessageHandler(w http.ResponseWriter, r *http.Request) {
 	var msg PythonMessage
 	if err := json.Unmarshal(body, &msg); err != nil {
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
-		log.Printf("pythonMessageHandler: Error unmarshalling main JSON: %v. Body: %s", err, string(body))
+		log.Printf("msgEndpoint: Error unmarshalling main JSON: %v. Body: %s", err, string(body))
 		return
 	}
 
-	log.Printf("pythonMessageHandler: Received type: '%s'", msg.Type)
+	log.Printf("msgEndpoint: Received type: '%s'", msg.Type)
 
 	switch msg.Type {
 	case "showToast":
 		var data ToastPayload
 		if err := json.Unmarshal(msg.Payload, &data); err != nil {
 			http.Error(w, "Invalid payload for showToast", http.StatusBadRequest)
-			log.Printf("pythonMessageHandler: Error unmarshalling showToast payload: %v", err)
+			log.Printf("msgEndpoint: Error unmarshalling showToast payload: %v", err)
 			return
 		}
 		log.Printf("Go: Emitting 'showToast' event for frontend: %s (Type: %s)", data.Message, data.ToastType)
@@ -344,7 +379,7 @@ func (a *App) pythonMessageHandler(w http.ResponseWriter, r *http.Request) {
 		var data AlertPayload
 		if err := json.Unmarshal(msg.Payload, &data); err != nil {
 			http.Error(w, "Invalid payload for showAlert", http.StatusBadRequest)
-			log.Printf("pythonMessageHandler: Error unmarshalling showAlert payload: %v", err)
+			log.Printf("msgEndpoint: Error unmarshalling showAlert payload: %v", err)
 			return
 		}
 		log.Printf("Go: Emitting 'showAlert' event for frontend: [%s] %s - %s", data.Severity, data.Title, data.Message)
@@ -354,11 +389,11 @@ func (a *App) pythonMessageHandler(w http.ResponseWriter, r *http.Request) {
 		var data ProjectDataPayload
 		if err := json.Unmarshal(msg.Payload, &data); err != nil {
 			http.Error(w, "Invalid payload for projectData", http.StatusBadRequest)
-			log.Printf("pythonMessageHandler: Error unmarshalling projectData payload: %v", err)
+			log.Printf("msgEndpoint: Error unmarshalling projectData payload: %v", err)
 			return
 		}
-		log.Printf("Go: Emitting 'projectData' event for frontend. Project: %s, Timeline: %s, Clips: %d",
-			data.ProjectName, data.TimelineName, len(data.Clips))
+		log.Printf("Go: Emitting 'projectData' event for frontend. Project: %s, Timeline: %s, Files: %d",
+			data.ProjectName, data.Timeline.Name, len(data.Files))
 
 		// Optional: Store this data in a.latestProjectData (with mutex protection if needed)
 		// a.cacheMutex.Lock()
@@ -368,11 +403,24 @@ func (a *App) pythonMessageHandler(w http.ResponseWriter, r *http.Request) {
 		runtime.EventsEmit(a.ctx, "projectDataReceived", data) // Emit the full data
 
 	default:
-		log.Printf("pythonMessageHandler: Received unknown message type: '%s'", msg.Type)
+		log.Printf("msgEndpoint: Received unknown message type: '%s'", msg.Type)
 		http.Error(w, fmt.Sprintf("Unknown message type: %s", msg.Type), http.StatusBadRequest)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "Message received by Go backend.")
+}
+
+func (a *App) GetProjectDataPayloadType() ProjectDataPayload {
+	return ProjectDataPayload{
+		ProjectName: "",
+		Timeline: Timeline{
+			Name:            "",
+			FPS:             0,
+			VideoTrackItems: nil,
+			AudioTrackItems: nil,
+		},
+		Files: nil,
+	}
 }

@@ -5,8 +5,15 @@ export interface SilencePeriod {
 }
 
 export interface ActiveFile {
-  path: string;
-  name: string;
+  id: string;                   // Unique identifier (e.g., TimelineItem.ID or ProcessedFileName if unique)
+  name: string;                 // Display name for the selector (TimelineItem.Name)
+  processedFileName: string;    // Base for the preview URL (TimelineItem.ProcessedFileName)
+  previewUrl: string;           // Full URL to the .wav file
+  sourceStartFrame: number;     // For WaveformPlayer region (TimelineItem.SourceStartFrame)
+  sourceEndFrame: number;       // For WaveformPlayer region (TimelineItem.SourceEndFrame)
+  // Optional: Store original timeline item data if needed elsewhere for convenience
+  // trackIndex: number;
+  // timelineStartFrame: number; // To distinguish from sourceStartFrame for other uses
 }
 
 export interface DetectionParams {

@@ -4,16 +4,30 @@ import {main} from '../models';
 
 export function CloseApp():Promise<void>;
 
-export function GetAudioServerPort():Promise<number>;
+export function DetectSilences(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<Array<main.SilencePeriod>>;
 
 export function GetConfig():Promise<Record<string, any>>;
+
+export function GetGoServerPort():Promise<number>;
 
 export function GetLogarithmicWaveform(arg1:string,arg2:number,arg3:number):Promise<main.PrecomputedWaveformData>;
 
 export function GetOrDetectSilencesWithCache(arg1:string,arg2:string,arg3:string,arg4:number,arg5:number):Promise<Array<main.SilencePeriod>>;
 
-export function Greet(arg1:string):Promise<string>;
+export function GetOrGenerateWaveformWithCache(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
+
+export function GetProjectDataPayloadType():Promise<main.ProjectDataPayload>;
+
+export function GetPythonReadyStatus():Promise<boolean>;
+
+export function LaunchHttpServer(arg1:any):Promise<void>;
+
+export function ProcessWavToLogarithmicPeaks(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
 
 export function RunPythonScriptWithArgs(arg1:Array<string>):Promise<void>;
 
 export function SaveConfig(arg1:Record<string, any>):Promise<void>;
+
+export function SendCommandToPython(arg1:string,arg2:Record<string, any>):Promise<main.PythonCommandResponse>;
+
+export function SyncWithDavinci():Promise<string>;

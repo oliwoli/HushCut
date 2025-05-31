@@ -6,12 +6,16 @@ export function CloseApp() {
   return window['go']['main']['App']['CloseApp']();
 }
 
-export function GetAudioServerPort() {
-  return window['go']['main']['App']['GetAudioServerPort']();
+export function DetectSilences(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['DetectSilences'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetGoServerPort() {
+  return window['go']['main']['App']['GetGoServerPort']();
 }
 
 export function GetLogarithmicWaveform(arg1, arg2, arg3) {
@@ -22,8 +26,24 @@ export function GetOrDetectSilencesWithCache(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['GetOrDetectSilencesWithCache'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function Greet(arg1) {
-  return window['go']['main']['App']['Greet'](arg1);
+export function GetOrGenerateWaveformWithCache(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['GetOrGenerateWaveformWithCache'](arg1, arg2, arg3, arg4);
+}
+
+export function GetProjectDataPayloadType() {
+  return window['go']['main']['App']['GetProjectDataPayloadType']();
+}
+
+export function GetPythonReadyStatus() {
+  return window['go']['main']['App']['GetPythonReadyStatus']();
+}
+
+export function LaunchHttpServer(arg1) {
+  return window['go']['main']['App']['LaunchHttpServer'](arg1);
+}
+
+export function ProcessWavToLogarithmicPeaks(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ProcessWavToLogarithmicPeaks'](arg1, arg2, arg3, arg4);
 }
 
 export function RunPythonScriptWithArgs(arg1) {
@@ -32,4 +52,12 @@ export function RunPythonScriptWithArgs(arg1) {
 
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SendCommandToPython(arg1, arg2) {
+  return window['go']['main']['App']['SendCommandToPython'](arg1, arg2);
+}
+
+export function SyncWithDavinci() {
+  return window['go']['main']['App']['SyncWithDavinci']();
 }

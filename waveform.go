@@ -15,7 +15,7 @@ import (
 	"github.com/go-audio/wav"
 )
 
-func resolvePublicAudioPath(webPath string) (string, error) {
+func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 	var cleanPath string
 
 	// Check if the input is a full URL
@@ -32,11 +32,8 @@ func resolvePublicAudioPath(webPath string) (string, error) {
 	// Normalize the path by removing leading slashes
 	cleanPath = strings.TrimPrefix(cleanPath, "/")
 
-	// Construct the absolute path to the public directory
-	publicDir := filepath.Join(".", "wav_files")
-
 	// Combine and clean the full path
-	fullPath := filepath.Join(publicDir, cleanPath)
+	fullPath := filepath.Join(a.effectiveAudioFolderPath, cleanPath)
 	fullPath = filepath.Clean(fullPath)
 
 	return fullPath, nil
@@ -49,7 +46,7 @@ type PrecomputedWaveformData struct {
 }
 
 // ProcessWavToLogarithmicPeaks processes a WAV file and returns data for a logarithmic dB display.
-func ProcessWavToLogarithmicPeaks(
+func (a *App) ProcessWavToLogarithmicPeaks(
 	webInputPath string,
 	samplesPerPixel int,
 	minDisplayDb float64, // e.g., -60.0
@@ -63,7 +60,7 @@ func ProcessWavToLogarithmicPeaks(
 		return nil, fmt.Errorf("minDisplayDb must be less than maxDisplayDb")
 	}
 
-	absPath, err := resolvePublicAudioPath(webInputPath)
+	absPath, err := a.resolvePublicAudioPath(webInputPath)
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}

@@ -1,8 +1,8 @@
 import copy
 import json
 import os
+import sys
 from typing import Any, Dict
-from uuid import UUID
 import uuid
 import subprocess
 from subprocess import CompletedProcess
@@ -104,3 +104,10 @@ def export_to_json(project_data: Any, output_path: str) -> None:
 
     with open(output_path, "w") as json_file:
         json.dump(project_data, json_file, indent=4, default=fallback_serializer)
+
+
+def send_message(message_type, payload=None):
+    """Sends a structured message to stdout."""
+    message = {"type": message_type, "payload": payload}
+    print(json.dumps(message))
+    sys.stdout.flush() # Important to ensure the message is sent immediately

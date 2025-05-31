@@ -1,6 +1,5 @@
 from typing import Any, List, Dict, Literal, Optional, TypedDict
 
-
 class ClipData(TypedDict):
     source_start_frame: float
     source_end_frame: float  # Inclusive end point/time
@@ -32,6 +31,7 @@ class TimelineItem(TypedDict):
     track_type: Literal["video", "audio", "subtitle"]
     track_index: int
     source_file_path: str
+    processed_file_name: str
     start_frame: float
     end_frame: float
     source_start_frame: float

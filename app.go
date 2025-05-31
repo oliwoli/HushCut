@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,24 +23,32 @@ import (
 
 // App struct
 type App struct {
-	ctx             context.Context
-	silenceCache    map[CacheKey][]SilencePeriod
-	cacheMutex      sync.RWMutex // Mutex for thread-safe access to the cache
-	configPath      string
-	pythonReadyChan chan bool
-	pythonReady     bool
+	ctx                      context.Context
+	silenceCache             map[CacheKey][]SilencePeriod
+	waveformCache            map[WaveformCacheKey]*PrecomputedWaveformData // New cache for waveforms
+	cacheMutex               sync.RWMutex                                  // Mutex for thread-safe access to the cache
+	configPath               string
+	pythonReadyChan          chan bool
+	pythonReady              bool
+	pythonCommandPort        int
+	effectiveAudioFolderPath string // Resolved absolute path to the audio folder
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	// Config path is relative to the CWD of the running application.
-	// For built apps, consider a more robust path (e.g., using os.UserConfigDir()).
 	configPath := "shared/config.json"
-	return &App{configPath: configPath, silenceCache: make(map[CacheKey][]SilencePeriod), pythonReadyChan: make(chan bool, 1)}
+	return &App{
+		configPath:               configPath,
+		silenceCache:             make(map[CacheKey][]SilencePeriod),
+		waveformCache:            make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
+		pythonReadyChan:          make(chan bool, 1),                                  // Buffered channel
+		pythonReady:              false,
+		effectiveAudioFolderPath: "", // FIXME: This needs to be initialized properly!
+	}
 }
 
 // launch python backend and wait for POST /ready on http server endpoint
-func LaunchPythonBackend(port int) error {
+func LaunchPythonBackend(port int, pythonCommandPort int) error {
 	pythonTargetName := "python_backend"
 
 	var determinedPath string
@@ -54,8 +64,10 @@ func LaunchPythonBackend(port int) error {
 		}
 	}
 
-	portArgName := "--port"
-	cmdArgs := []string{portArgName, fmt.Sprintf("%d", port)}
+	cmdArgs := []string{
+		"--go-port", fmt.Sprintf("%d", port),
+		"--listen-on-port", fmt.Sprintf("%d", pythonCommandPort),
+	}
 
 	cmd := exec.Command(determinedPath, cmdArgs...)
 	cmd.Stdout = os.Stdout
@@ -68,7 +80,7 @@ func LaunchPythonBackend(port int) error {
 	return nil
 }
 
-func (a *App) GetAudioServerPort() int {
+func (a *App) GetGoServerPort() int {
 	if !isServerInitialized {
 		log.Println("Wails App: GetAudioServerPort called, but server is not (yet) initialized or failed to start. Returning 0.")
 		return 0 // Or -1, or some other indicator that it's not ready
@@ -79,55 +91,75 @@ func (a *App) GetAudioServerPort() int {
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	log.Println("Wails App: OnStartup called.")
-	log.Println("Wails App: Initializing and launching internal WAV audio server...")
+	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
 
-	if err := LaunchHttpServer(a.pythonReadyChan); err != nil {
-		// The server failed to even set up its listener. This is critical.
-		errMsg := fmt.Sprintf("FATAL: Failed to launch WAV audio server: %v", err)
-		log.Println(errMsg)
-		runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-			Type:    runtime.ErrorDialog,
-			Title:   "Critical Error",
-			Message: "The internal audio server could not be started. Audio playback will not work.\nError: " + err.Error(),
-		})
-		// And potentially os.Exit(1) or disable features.
-	}
-	log.Println("Wails App: WAV audio server launch sequence initiated.")
-	port := a.GetAudioServerPort()
-	if port == 0 {
-		log.Println("Wails App: Failed to get audio server port. Python backend will not be launched.")
+	// Launch the main initialization logic in a separate goroutine
+	go a.initializeBackendsAndPython()
+
+	// set window always on top
+	runtime.WindowSetAlwaysOnTop(a.ctx, true)
+
+	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
+}
+
+func (a *App) initializeBackendsAndPython() {
+	log.Println("Go Routine: Starting backend initialization...")
+
+	// 1. Launch Go's HTTP Server
+	if err := a.LaunchHttpServer(a.pythonReadyChan); err != nil {
+		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Go HTTP server: %v", err)
+		log.Println("Go Routine: " + errMsg)
+		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg) // Notify frontend
 		return
 	}
-	if err := LaunchPythonBackend(port); err != nil {
-		log.Println("Wails App: Failed to launch Python backend: ", err)
-		runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-			Type:    runtime.ErrorDialog,
-			Title:   "Critical Error",
-			Message: "The internal Python backend could not be started. Communication with DaVinci will not work. \nError: " + err.Error(),
-		})
-		a.CloseApp()
+	log.Println("Go Routine: Go HTTP server launch sequence initiated.")
+
+	goHTTPServerPort := a.GetGoServerPort()
+	if goHTTPServerPort == 0 {
+		errMsg := "CRITICAL ERROR: Failed to get Go HTTP server port."
+		log.Println("Go Routine: " + errMsg)
+		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
 		return
 	}
-	log.Println("Wails App: Python backend launch sequence initiated.")
+
+	// 2. Determine port for Python's command server
+	pythonCmdPort, err := findFreePort()
+	if err != nil {
+		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to find free port for Python command server: %v", err)
+		log.Println("Go Routine: " + errMsg)
+		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+		return
+	}
+	a.pythonCommandPort = pythonCmdPort
+	log.Printf("Go Routine: Python command server will use port: %d", a.pythonCommandPort)
+
+	// 3. Launch Python Backend
+	if err := LaunchPythonBackend(goHTTPServerPort, a.pythonCommandPort); err != nil {
+		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Python backend: %v", err)
+		log.Println("Go Routine: " + errMsg)
+		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+		return
+	}
+	log.Println("Go Routine: Python backend launch sequence initiated.")
+
+	// 4. Wait for Python's initial "ready" signal (Python-to-Go)
 	pythonReadinessTimeout := 30 * time.Second
-	log.Printf("Wails App: Waiting up to %s for Python backend to signal readiness...", pythonReadinessTimeout)
+	log.Printf("Go Routine: Waiting up to %s for Python to signal readiness...", pythonReadinessTimeout)
 
 	select {
 	case <-a.pythonReadyChan:
-		log.Println("Wails App: Python backend has signaled it is ready.")
-		a.pythonReady = true // <--- SET THE STATUS HERE
+		log.Println("Go Routine: Python backend has signaled it is ready.")
+		a.pythonReady = true
+		runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": true})
 	case <-time.After(pythonReadinessTimeout):
-		log.Printf("Wails App Warning: Timed out waiting for Python backend to signal readiness after %s.", pythonReadinessTimeout)
+		log.Printf("Go Routine Warning: Timed out waiting for Python backend readiness.")
+		a.pythonReady = false
+		runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": false, "error": "timeout"})
 	case <-a.ctx.Done(): // Main application context cancelled
-		log.Println("Wails App: Application shutdown initiated while waiting for Python backend.")
+		log.Println("Go Routine: Application shutdown requested during Python ready wait.")
 		return
 	}
-}
-
-// Greet returns a greeting for the given name
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
+	log.Println("Go Routine: Backend initialization complete.")
 }
 
 // GetConfig reads config.json. Creates it with defaults if it doesn't exist.
@@ -243,7 +275,7 @@ func (a *App) CloseApp() {
 	// Optionally, you can also perform any cleanup tasks here
 }
 
-func DetectSilences(
+func (a *App) DetectSilences(
 	filePath string,
 	loudnessThreshold string,
 	minSilenceDurationSeconds string,
@@ -252,9 +284,11 @@ func DetectSilences(
 ) ([]SilencePeriod, error) {
 	// ... (ffmpeg setup, LookPath check etc.) ...
 
+	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
+
 	args := []string{
 		"-nostdin",
-		"-i", filePath,
+		"-i", absPath,
 		"-af", fmt.Sprintf("silencedetect=n=%s:d=%s", loudnessThreshold, minSilenceDurationSeconds),
 		"-f", "null",
 		"-",
@@ -265,21 +299,13 @@ func DetectSilences(
 	cmd.Stdout = &outputBuffer
 	cmd.Stderr = &outputBuffer
 
-	// --- Recommended: Improved Error Handling (see point 2 below) ---
 	err := cmd.Run()
-	output := outputBuffer.String() // Get output for parsing or error messages
-
+	output := outputBuffer.String()
 	if err != nil {
-		// ffmpeg failed to run or exited with an error code.
-		// The 'output' string might contain useful error details from ffmpeg.
 		return nil, fmt.Errorf("ffmpeg processing failed: %w. Output: %s", err, output)
 	}
-	// --- End of Recommended Error Handling ---
 
-	// --- PRIMARY FIX HERE ---
-	// Initialize as an empty, non-nil slice
 	detectedSilences := []SilencePeriod{}
-	// OLD way that results in nil: var detectedSilences []SilencePeriod
 
 	silenceStartRegex := regexp.MustCompile(`silence_start:\s*([0-9]+\.?[0-9]*)`)
 	silenceEndRegex := regexp.MustCompile(`silence_end:\s*([0-9]+\.?[0-9]*)`)
@@ -315,11 +341,9 @@ func DetectSilences(
 	}
 
 	if err := scanner.Err(); err != nil {
-		// Return nil for data if there was a scanner error, plus the error
 		return nil, fmt.Errorf("error reading ffmpeg output: %w", err)
 	}
 
-	// If no silences were found, detectedSilences is now an empty slice [], not nil
 	return detectedSilences, nil
 }
 
@@ -355,7 +379,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 	// If DetectSilences itself could be long-running and called by multiple goroutines
 	// for the *same missing key* simultaneously, you might want a more complex
 	// single-flight mechanism. For simplicity, this lock-after-check is common.
-	silences, err := DetectSilences(filePath, loudnessThreshold, minSilenceDurationSeconds, paddingLeftSeconds, paddingRightSeconds)
+	silences, err := a.DetectSilences(filePath, loudnessThreshold, minSilenceDurationSeconds, paddingLeftSeconds, paddingRightSeconds)
 	if err != nil {
 		// Do not cache errors, so subsequent calls can retry.
 		return nil, err
@@ -371,19 +395,161 @@ func (a *App) GetOrDetectSilencesWithCache(
 
 // New method to be called from Wails frontend
 func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb float64) (*PrecomputedWaveformData, error) {
-	maxDb := 0.0
+	maxDb := 0.0 // Consistent with original function; this is now passed to the caching layer.
 
-	data, err := ProcessWavToLogarithmicPeaks(filePath, samplesPerPixel, minDb, maxDb)
+	// The caching function GetOrGenerateWaveformWithCache will handle path resolution
+	// using a.effectiveAudioFolderPath for processing and use the relative path for the cache key.
+	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, minDb, maxDb)
 	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Error generating waveform data for %s: %v", filePath, err))
-		// It's often better to return the error message clearly to the frontend
-		return nil, fmt.Errorf("failed to generate waveform for '%s': %v", filePath, err)
+		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))
+		return nil, fmt.Errorf("failed to get/generate waveform for '%s': %v", filePath, err)
 	}
 
-	//runtime.LogInfof(a.ctx, "Successfully generated waveform for: %s, Duration: %.2f, Peaks count: %d", filePath, data.Duration, len(data.Peaks))
+	// runtime.LogInfof(a.ctx, "Successfully retrieved/generated waveform for: %s, Duration: %.2fs, Peaks: %d",
+	//  filePath, data.Duration, len(data.Peaks))
 	return data, nil
+}
+
+func (a *App) GetOrGenerateWaveformWithCache(
+	webInputPath string,
+	samplesPerPixel int,
+	minDb float64,
+	maxDb float64,
+) (*PrecomputedWaveformData, error) {
+	// First, resolve the webInputPath to a local file system path to check for existence.
+	// This also validates if effectiveAudioFolderPath is set.
+	localFSPath, err := a.resolvePublicAudioPath(webInputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve web input path '%s' for pre-check: %w", webInputPath, err)
+	}
+	if _, statErr := os.Stat(localFSPath); os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("audio file does not exist at resolved path '%s' (from '%s')", localFSPath, webInputPath)
+	} else if statErr != nil {
+		return nil, fmt.Errorf("error stating file at resolved path '%s': %w", localFSPath, statErr)
+	}
+
+	// The cache key uses the original webInputPath as the primary identifier.
+	key := WaveformCacheKey{
+		FilePath:        webInputPath, // Use the URL/web path for the key
+		SamplesPerPixel: samplesPerPixel,
+		MinDb:           minDb,
+		MaxDb:           maxDb,
+	}
+
+	a.cacheMutex.RLock()
+	cachedData, found := a.waveformCache[key]
+	a.cacheMutex.RUnlock()
+
+	if found {
+		// log.Printf("Waveform Cache HIT for: %s, Samples: %d", webInputPath, samplesPerPixel)
+		return cachedData, nil
+	}
+	// log.Printf("Waveform Cache MISS for: %s, Samples: %d", webInputPath, samplesPerPixel)
+
+	// If not found, perform the generation.
+	// Pass the original webInputPath to ProcessWavToLogarithmicPeaks, as it handles its own path resolution.
+	waveformData, err := a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb)
+	if err != nil {
+		// Do not cache errors, so subsequent calls can retry.
+		return nil, fmt.Errorf("error during waveform peak processing for '%s': %w", webInputPath, err)
+	}
+
+	a.cacheMutex.Lock()
+	a.waveformCache[key] = waveformData
+	a.cacheMutex.Unlock()
+
+	return waveformData, nil
 }
 
 func (a *App) GetPythonReadyStatus() bool {
 	return a.pythonReady
+}
+
+// --- New Method to Send Commands to Python ---
+type PythonCommandResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	// Data    interface{} `json:"data,omitempty"` // If Python commands return specific data
+}
+
+func (a *App) SendCommandToPython(commandName string, params map[string]interface{}) (*PythonCommandResponse, error) {
+	if !a.pythonReady || a.pythonCommandPort == 0 { // Check general pythonReady flag
+		return nil, fmt.Errorf("python backend or its command server is not ready (port: %d, ready: %v)", a.pythonCommandPort, a.pythonReady)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/command", a.pythonCommandPort)
+	commandPayload := map[string]interface{}{
+		"command": commandName,
+		"params":  params, // Can be nil if no params
+	}
+	if params == nil {
+		commandPayload["params"] = make(map[string]interface{}) // Ensure params is at least an empty object
+	}
+
+	jsonBody, err := json.Marshal(commandPayload)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling Python command: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("error creating request for Python command: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// --- FUTURE: Add Authorization Token to call Python's command server ---
+	// globalEnableAuthToPython := false // This would be a config
+	// if globalEnableAuthToPython && a.sharedSecretForPython != "" {
+	//  req.Header.Set("Authorization", "Bearer " + a.sharedSecretForPython)
+	// }
+	// --- END FUTURE ---
+
+	log.Printf("Go: Sending command '%s' to Python at %s with payload: %s", commandName, url, string(jsonBody))
+
+	client := &http.Client{Timeout: 20 * time.Second} // Adjust timeout as needed
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error sending command '%s' to Python: %w", commandName, err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body from Python for command '%s': %w", commandName, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Go: Python command server responded with status %d for command '%s'. Body: %s", resp.StatusCode, commandName, string(responseBody))
+		// Attempt to parse Python's structured error
+		var errResp PythonCommandResponse
+		if json.Unmarshal(responseBody, &errResp) == nil && errResp.Message != "" {
+			return &errResp, fmt.Errorf("python command '%s' failed with status %d: %s", commandName, resp.StatusCode, errResp.Message)
+		}
+		return nil, fmt.Errorf("python command '%s' failed with status %d: %s", commandName, resp.StatusCode, string(responseBody))
+	}
+
+	var pyResp PythonCommandResponse
+	if err := json.Unmarshal(responseBody, &pyResp); err != nil {
+		return nil, fmt.Errorf("error unmarshalling Python response for command '%s': %w. Body: %s", commandName, err, string(responseBody))
+	}
+
+	log.Printf("Go: Response from Python for command '%s': Status: '%s', Message: '%s'", commandName, pyResp.Status, pyResp.Message)
+	return &pyResp, nil
+}
+
+func (a *App) SyncWithDavinci() (string, error) {
+	if !a.pythonReady { // Check if Python has signaled its overall readiness
+		return "Python backend is not ready yet.", fmt.Errorf("python backend not ready")
+	}
+	log.Println("Go: Requesting DaVinci sync from Python...")
+	response, err := a.SendCommandToPython("sync", nil) // No params for "sync" in this example
+	if err != nil {
+		log.Printf("Go: Error calling 'sync' on Python: %v", err)
+		// Emit an event to frontend about the error
+		runtime.EventsEmit(a.ctx, "showToast", map[string]string{"message": fmt.Sprintf("Error syncing with DaVinci Resolve: %v", err), "toastType": "error"})
+		return fmt.Sprintf("Error: %v", err), err
+	}
+	// Emit success to frontend
+	//runtime.EventsEmit(a.ctx, "showToast", map[string]string{"message": response.Message, "toastType": "info"})
+	return response.Message, nil
 }

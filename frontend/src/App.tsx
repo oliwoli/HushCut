@@ -14,14 +14,33 @@ import {
 } from "@/components/ui/context-menu";
 
 import { clamp, cn } from "@/lib/utils";
-import { GetAudioServerPort } from "@wails/go/main/App";
+import { GetGoServerPort, SyncWithDavinci } from "@wails/go/main/App";
 import { GetPythonReadyStatus } from "@wails/go/main/App";
+import { EventsOn } from "@wails/runtime/runtime";
+import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveform";
 import RemoveSilencesButton from "./lib/PythonRunner";
-import { CloseApp } from "../wailsjs/go/main/App";
+import { CloseApp } from "@wails/go/main/App";
 import { ActiveFile, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
+import FileSelector from "./components/ui/fileSelector";
+
+EventsOn("showToast", (data) => {
+  console.log("Event: showToast", data);
+  // Simple alert for now, TODO: use nicer shadcn component
+  alert(`Toast [${data.toastType || "info"}]: ${data.message}`);
+});
+
+EventsOn("showAlert", (data) => {
+  console.log("Event: showAlert", data);
+  // Simple alert for now, TODO: use nicer shadcn component
+  alert(`Alert [${data.severity || "info"}]: ${data.title} - ${data.message}`);
+});
+
+EventsOn("projectDataReceived", (projectData: main.ProjectDataPayload) => {
+  console.log("Event: projectDataReceived", projectData);
+});
 
 // Reusable reset button with dimmed default state and hover transition
 function ResetButton({ onClick }: { onClick: () => void }) {
@@ -40,11 +59,11 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 export default function App() {
   const [httpPort, setHttpPort] = useState<Number | null>(null);
   const [currentActiveFile, setCurrentActiveFile] = useState<ActiveFile | null>(
-    {
-      path: `http://localhost:${httpPort}/preview-render.wav`,
-      name: "preview-render.wav",
-    }
-  );
+    null
+  ); // Initialize as null
+  const [projectData, setProjectData] =
+    useState<main.ProjectDataPayload | null>(null);
+
   const [detectionParams, setDetectionParams] =
     useState<DetectionParams | null>(null);
 
@@ -54,30 +73,187 @@ export default function App() {
   );
 
   useEffect(() => {
-    const getHttpPort = async () => {
-      console.log("Getting Audio Port");
+    const getInitialServerInfo = async () => {
+      console.log("App.tsx: Attempting to get Go HTTP server port...");
       try {
-        const port = await GetAudioServerPort();
-        console.log("HTTP Server Port: ", port);
-        setHttpPort(port);
+        const port = await GetGoServerPort(); // Wails function
 
-        console.log("Python ready: ", await GetPythonReadyStatus());
+        if (port && port > 0) {
+          console.log("App.tsx: HTTP Server Port received:", port);
+          setHttpPort(port); // This will trigger a re-render
 
-        const activeFile = {
-          path: `http://localhost:${port}/preview-render.wav`,
-          name: "preview-render.wav",
-        };
-        setCurrentActiveFile(activeFile);
-      } catch (error) {
-        console.error(
-          "Error getting the port of the http audio server:",
-          error
-        );
+          const pyReady = await GetPythonReadyStatus(); // Wails function
+          console.log("App.tsx: Python ready status:", pyReady);
+        } else {
+          console.error(
+            "App.tsx: GetGoServerPort() returned an invalid or zero port:",
+            port
+          );
+          setHttpPort(null);
+          setCurrentActiveFile(null);
+          // Optionally, inform the user that the audio server isn't available
+        }
+      } catch (err) {
+        console.error("App.tsx: Error during initial server info fetch:", err);
         setHttpPort(null);
+        setCurrentActiveFile(null);
+        // Optionally, inform the user
       }
     };
-    getHttpPort();
+    getInitialServerInfo();
   }, []);
+
+  // Effect to register Wails event listeners (runs once on mount)
+  useEffect(() => {
+    const handleProjectData = (data: main.ProjectDataPayload) => {
+      console.log(
+        "Event: projectDataReceived in App.tsx, setting state.",
+        data
+      );
+      setProjectData(data);
+    };
+    // Register the event listener
+    const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
+    // It's good practice to have a cleanup, though Wails might handle it.
+    // If EventsOn returns a function to unlisten, use it here.
+    return () => {
+      // if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []); // Empty dependency array ensures this runs once on mount
+
+  const createActiveFileFromTimelineItem = (
+    item: main.TimelineItem,
+    port: Number
+  ): ActiveFile | null => {
+    if (
+      !item.processed_file_name ||
+      typeof item.source_start_frame !== "number" ||
+      typeof item.source_end_frame !== "number"
+    ) {
+      console.warn(
+        "TimelineItem is missing critical data (ProcessedFileName, SourceStartFrame, or SourceEndFrame):",
+        item
+      );
+      return null;
+    }
+    const id = item.id || item.processed_file_name; // Prefer item.ID if available and unique
+    return {
+      id: id,
+      name: item.name || "Unnamed Track Item", // Fallback for name
+      processedFileName: item.processed_file_name,
+      previewUrl: `http://localhost:${port}/${item.processed_file_name}.wav`,
+      sourceStartFrame: item.source_start_frame,
+      sourceEndFrame: item.source_end_frame,
+    };
+  };
+
+  useEffect(() => {
+    if (!httpPort) {
+      if (currentActiveFile !== null) setCurrentActiveFile(null);
+      return;
+    }
+
+    const initialSystemPreview: ActiveFile = {
+      id: "initial-preview",
+      name: "No audio selected",
+      processedFileName: "", // No specific processed file for this state
+      previewUrl: "", // No URL for this state, or a dummy one if WaveformPlayer needs it
+      sourceStartFrame: 0,
+      sourceEndFrame: 0,
+    };
+
+    let newActiveFileTarget: ActiveFile | null = null;
+    const audioTrackItems = projectData?.timeline?.audio_track_items;
+
+    if (audioTrackItems && audioTrackItems.length > 0) {
+      const sortedAudioItems = [...audioTrackItems].sort((a, b) => {
+        if (a.track_index !== b.track_index)
+          return a.track_index - b.track_index;
+        if (a.start_frame !== b.start_frame)
+          return a.start_frame - b.start_frame;
+        return a.end_frame - b.end_frame;
+      });
+
+      let TId = currentActiveFile?.id;
+      if (currentActiveFile && TId !== "initial-preview") {
+        const currentItemInNewList = sortedAudioItems.find(
+          (item) => (item.id || item.processed_file_name) === TId
+        );
+        if (currentItemInNewList) {
+          newActiveFileTarget = createActiveFileFromTimelineItem(
+            currentItemInNewList,
+            httpPort
+          );
+        }
+      }
+
+      if (!newActiveFileTarget) {
+        // If no current valid selection, or if it was initial
+        for (const item of sortedAudioItems) {
+          // Try to pick the first valid item
+          newActiveFileTarget = createActiveFileFromTimelineItem(
+            item,
+            httpPort
+          );
+          if (newActiveFileTarget) break; // Found a valid one
+        }
+      }
+    }
+
+    if (!newActiveFileTarget) {
+      // If still no target (e.g. no valid items), use initial state
+      newActiveFileTarget = initialSystemPreview;
+    }
+
+    if (
+      currentActiveFile?.id !== newActiveFileTarget.id ||
+      currentActiveFile?.previewUrl !== newActiveFileTarget.previewUrl
+    ) {
+      setCurrentActiveFile(newActiveFileTarget);
+      console.log(
+        "useEffect: currentActiveFile updated to:",
+        newActiveFileTarget
+      );
+    }
+  }, [httpPort, projectData, currentActiveFile?.id]);
+
+  const handleAudioFileSelection = (selectedItemId: string) => {
+    if (
+      !projectData?.timeline?.audio_track_items ||
+      !httpPort ||
+      !selectedItemId
+    ) {
+      console.warn(
+        "Cannot handle file selection: Missing data, port, or selectedItemId"
+      );
+      return;
+    }
+
+    const selectedItem = projectData.timeline.audio_track_items.find(
+      (item) => (item.id || item.processed_file_name) === selectedItemId
+    );
+
+    if (selectedItem) {
+      const newActiveFile = createActiveFileFromTimelineItem(
+        selectedItem,
+        httpPort
+      );
+      if (newActiveFile) {
+        setCurrentActiveFile(newActiveFile);
+        console.log(
+          "FileSelector onFileChange: currentActiveFile set to:",
+          newActiveFile
+        );
+      } else {
+        console.warn(
+          "Failed to create ActiveFile from selected TimelineItem:",
+          selectedItem
+        );
+      }
+    } else {
+      console.warn("Selected TimelineItem not found for ID:", selectedItemId);
+    }
+  };
 
   const DEFAULT_THRESHOLD = -30;
   const DEFAULT_MIN_DURATION = 1.0;
@@ -168,6 +344,19 @@ export default function App() {
         <header className="flex items-center justify-between"></header>
 
         <main className="flex-1 gap-8 mt-8 max-w-screen select-none">
+          {projectData?.files && currentActiveFile?.id && (
+            <FileSelector
+              audioItems={projectData?.timeline?.audio_track_items}
+              currentFileId={currentActiveFile?.id || null}
+              onFileChange={handleAudioFileSelection}
+              disabled={
+                !httpPort ||
+                !projectData?.timeline?.audio_track_items ||
+                projectData.timeline.audio_track_items.length === 0
+              }
+              className="w-full md:w-1/2 lg:w-1/3" // Example responsive width
+            />
+          )}
           <div className="flex flex-col space-y-8">
             {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
@@ -191,11 +380,13 @@ export default function App() {
                 </div>
               </div>
               <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
-                <WaveformPlayer
-                  audioUrl={`http://localhost:${httpPort}/preview-render.wav`}
-                  silenceData={silenceData}
-                  threshold={threshold}
-                />
+                {httpPort && currentActiveFile?.processedFileName && (
+                  <WaveformPlayer
+                    audioUrl={`http://localhost:${httpPort}/${currentActiveFile?.processedFileName}.wav`}
+                    silenceData={silenceData}
+                    threshold={threshold}
+                  />
+                )}
 
                 <div className="space-y-2 w-full">
                   <div className="flex items-center space-x-5">
@@ -309,12 +500,11 @@ export default function App() {
                       padRight={paddingRight}
                       makeNewTimeline={makeNewTimeline}
                     />
-
-                    {/* python status tester */}
-                    <Button onClick={() => console.log(GetPythonReadyStatus())}>
-                      Python Status
-                    </Button>
                   </div>
+                  {/* python status tester */}
+                  <Button onClick={() => console.log(SyncWithDavinci())}>
+                    Python Test
+                  </Button>
                 </div>
               </div>
             </div>
