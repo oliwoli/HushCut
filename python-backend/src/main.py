@@ -7,7 +7,6 @@ from time import time, sleep
 import traceback
 from typing import (
     Any,
-    Dict,
     List,
     Literal,
     Optional,
@@ -48,6 +47,12 @@ from project_orga import (
 
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+# This will be the token Go sends, which Python expects for Go-to-Python commands (future)
+AUTH_TOKEN = None
+ENABLE_COMMAND_AUTH = False  # Master switch for auth on Python's command server
+GO_SERVER_PORT = 0
 
 
 # export timeline to XML
@@ -105,7 +110,7 @@ class AudioFromVideo(TypedDict):
     silence_intervals: List[SilenceInterval]
 
 
-def extract_audio(file: Any, target_folder: str) -> AudioFromVideo | None:
+def extract_audio(file: Any, target_folder: str) -> Optional[AudioFromVideo]:
     filepath = file.get("file_path")
     if not filepath or not os.path.exists(filepath):
         return
@@ -233,6 +238,60 @@ def detect_silence_parallel(
     return results
 
 
+def send_message_to_go(message_type: str, payload: Any):
+    global GO_SERVER_PORT
+    if GO_SERVER_PORT == 0:
+        print(
+            "Python Error: Go server port not configured. Cannot send message to Go.",
+            flush=True,
+        )
+        return False
+
+    url = f"http://localhost:{GO_SERVER_PORT}/msg"  # Your Go endpoint for general messages
+
+    message_data = {"type": message_type, "payload": payload}
+    try:
+        headers = {"Content-Type": "application/json"}
+
+        # This is an independent HTTP request from Python to Go
+        def fallback_serializer(obj):
+            return "<BMDObject>"
+
+        response = requests.post(
+            url,
+            data=json.dumps(message_data, default=fallback_serializer),
+            headers=headers,
+            timeout=5,
+        )  # 5s timeout
+        response.raise_for_status()
+        print(
+            f"Python (to Go): Message type '{message_type}' sent. Go responded: {response.status_code}",
+            flush=True,
+        )
+        return True
+    except requests.exceptions.RequestException as e:
+        print(
+            f"Python (to Go): Error sending message type '{message_type}': {e}",
+            flush=True,
+        )
+        print(f"Payload: {payload}")
+        return False
+
+
+def resolve_import_error_msg(e: Exception) -> None:
+    print(f"Failed to import GetResolve: {e}")
+    print("Check and ensure DaVinci Resolve installation is correct.")
+    send_message_to_go(
+        "showAlert",
+        {
+            "title": "DaVinci Resolve Error",
+            "message": "Failed to import DaVinci Resolve Python API.",
+            "severity": "error",
+        },
+    )
+    return None
+
+
 def get_resolve() -> Any:
     script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
     if script_api_dir:
@@ -250,13 +309,22 @@ def get_resolve() -> Any:
 
         # import DaVinciResolveScript as bmd
     except ImportError as e:
-        print(f"Failed to import GetResolve or its dependencies: {e}")
-        print("Check and ensure DaVinci Resolve installation is correct.")
-        sys.exit(1)
+        resolve_import_error_msg(e)
+        return None
+    except FileNotFoundError as e:
+        resolve_import_error_msg(e)
+        return None
     except Exception as e:
-        print(f"An unexpected error occurred during import: {e}")
-        sys.exit(1)
+        resolve_import_error_msg(e)
+        return None
     resolve = GetResolve()  # noqa
+
+    if not resolve:
+        resolve_import_error_msg(
+            e=Exception("Failed to import DaVinci Resolve Python API.")
+        )
+        return None
+
     return resolve
 
 
@@ -267,10 +335,6 @@ TEMP_DIR = os.path.abspath(TEMP_DIR)
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
 
-# This will be the token Go sends, which Python expects for Go-to-Python commands (future)
-AUTH_TOKEN = None
-ENABLE_COMMAND_AUTH = False # Master switch for auth on Python's command server
-GO_SERVER_PORT = 0
 
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
 
@@ -296,7 +360,9 @@ def get_items_by_tracktype(
             start_frame = item.GetStart()
             item_name = item.GetName()
             media_pool_item = item.GetMediaPoolItem()
-            source_file_path: str = media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
+            source_file_path: str = (
+                media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
+            )
             timeline_item: TimelineItem = {
                 "bmd_item": item,
                 "duration": 0,  # unused, therefore 0 #item.GetDuration(),
@@ -341,7 +407,7 @@ def resync_with_resolve() -> bool:
     if not RESOLVE:
         return False
     return True
-    
+
 
 def main(sync: bool = False) -> Optional[bool]:
     global RESOLVE
@@ -350,26 +416,18 @@ def main(sync: bool = False) -> Optional[bool]:
     if not RESOLVE and not resync_with_resolve():
         message = "Could not connect to DaVinci Resolve. Is it running?"
         send_message_to_go(
-        "showAlert",
-        {
-            "title": "DaVinci Resolve Error",
-            "message": message,
-            "severity": "error"
-        }
+            "showAlert",
+            {"title": "DaVinci Resolve Error", "message": message, "severity": "error"},
         )
         return False
 
-    #switch_to_page("edit")
+    # switch_to_page("edit")
     project = RESOLVE.GetProjectManager().GetCurrentProject()
     if not project:
         message = "Please open a project and open a timeline."
         send_message_to_go(
-        "showAlert",
-        {
-            "title": "No open Project",
-            "message": message,
-            "severity": "error"
-        }
+            "showAlert",
+            {"title": "No open Project", "message": message, "severity": "error"},
         )
         return False
 
@@ -377,12 +435,8 @@ def main(sync: bool = False) -> Optional[bool]:
     if not timeline:
         message = "Please make sure you opened a timeline."
         send_message_to_go(
-        "showAlert",
-        {
-            "title": "No open timeline",
-            "message": message,
-            "severity": "error"
-        }
+            "showAlert",
+            {"title": "No open timeline", "message": message, "severity": "error"},
         )
         return False
 
@@ -412,8 +466,8 @@ def main(sync: bool = False) -> Optional[bool]:
     }
 
     seen_uuids: list[str] = []
-    audio_source_files: list[FileSource] = [] # includes duplicates (true to timeline)
-    audio_sources_set: list[FileSource] = [] # no duplicates
+    audio_source_files: list[FileSource] = []  # includes duplicates (true to timeline)
+    audio_sources_set: list[FileSource] = []  # no duplicates
     for item in audio_track_items:
         source_media_item = get_source_media_from_timeline_item(item)
         if not source_media_item:
@@ -801,98 +855,162 @@ def signal_go_ready(go_server_port: int):
     for attempt in range(max_retries):
         try:
             # Using GET, but POST would also work based on your Go handler
-            response = requests.get(ready_url, timeout=10)  # 10-second timeout for the request
+            response = requests.get(
+                ready_url, timeout=10
+            )  # 10-second timeout for the request
             response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-            print(f"Python Backend: Successfully signaled Go server. Status: {response.status_code}", flush=True)
+            print(
+                f"Python Backend: Successfully signaled Go server. Status: {response.status_code}",
+                flush=True,
+            )
             print(f"Python Backend: Go server response: {response.text}", flush=True)
             return True
         except requests.exceptions.RequestException as e:
-            print(f"Python Backend: Error signaling Go (attempt {attempt + 1}/{max_retries}): {e}", flush=True)
+            print(
+                f"Python Backend: Error signaling Go (attempt {attempt + 1}/{max_retries}): {e}",
+                flush=True,
+            )
             if attempt < max_retries - 1:
-                print(f"Python Backend: Retrying in {retry_delay_seconds} seconds...", flush=True)
+                print(
+                    f"Python Backend: Retrying in {retry_delay_seconds} seconds...",
+                    flush=True,
+                )
                 sleep(retry_delay_seconds)
             else:
-                print(f"Python Backend: Failed to signal Go server after {max_retries} attempts.", flush=True)
+                print(
+                    f"Python Backend: Failed to signal Go server after {max_retries} attempts.",
+                    flush=True,
+                )
                 return False
-    return False # Should not be reached if max_retries > 0
+    return False  # Should not be reached if max_retries > 0
 
 
 class PythonCommandHandler(BaseHTTPRequestHandler):
     def _send_json_response(self, status_code, data_dict):
         self.send_response(status_code)
-        self.send_header('Content-type', 'application/json')
+        self.send_header("Content-type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(data_dict).encode('utf-8'))
+        self.wfile.write(json.dumps(data_dict).encode("utf-8"))
 
     def do_POST(self):
-        if not self.path == '/command':
-            self._send_json_response(404, {"status": "error", "message": "Endpoint not found."})
-        
+        if not self.path == "/command":
+            self._send_json_response(
+                404, {"status": "error", "message": "Endpoint not found."}
+            )
+
         if ENABLE_COMMAND_AUTH:
-            auth_header = self.headers.get('Authorization')
+            auth_header = self.headers.get("Authorization")
             token_valid = False
-            if auth_header and auth_header.startswith('Bearer ') and AUTH_TOKEN:
-                received_token = auth_header.split(' ')[1]
+            if auth_header and auth_header.startswith("Bearer ") and AUTH_TOKEN:
+                received_token = auth_header.split(" ")[1]
                 if received_token == AUTH_TOKEN:
                     token_valid = True
-        
-            if not token_valid:
-                print("Python Command Server: Unauthorized command attempt from Go.", flush=True)
-                self._send_json_response(401, {"status": "error", "message": "Unauthorized"})
-                return
-            print("Python Command Server: Go authenticated successfully for command.", flush=True)
-        else:
-            print("Python Command Server: Command authentication is currently disabled.", flush=True)
 
-        content_length = int(self.headers['Content-Length'])
+            if not token_valid:
+                print(
+                    "Python Command Server: Unauthorized command attempt from Go.",
+                    flush=True,
+                )
+                self._send_json_response(
+                    401, {"status": "error", "message": "Unauthorized"}
+                )
+                return
+            print(
+                "Python Command Server: Go authenticated successfully for command.",
+                flush=True,
+            )
+        else:
+            print(
+                "Python Command Server: Command authentication is currently disabled.",
+                flush=True,
+            )
+
+        content_length = int(self.headers["Content-Length"])
         post_data_bytes = self.rfile.read(content_length)
         try:
-            data = json.loads(post_data_bytes.decode('utf-8'))
-            command = data.get('command')
-            params = data.get('params', {})
+            data = json.loads(post_data_bytes.decode("utf-8"))
+            command = data.get("command")
+            params = data.get("params", {})
 
-            print(f"Python Command Server: Received command '{command}' with params: {params}", flush=True)
-            
+            print(
+                f"Python Command Server: Received command '{command}' with params: {params}",
+                flush=True,
+            )
+
             response_payload = {}
             # --- Implement your command handlers here ---
-            if command == 'sync':
+            if command == "sync":
                 response_payload = {"status": "success", "message": "Command received."}
                 self._send_json_response(200, response_payload)
                 main(sync=True)
                 return
-            elif command == 'makeFinalTimeline':
+            elif command == "makeFinalTimeline":
                 print("Python: Simulating final timeline generation...", flush=True)
-                response_payload = {"status": "success", "message": "Final timeline generation started."}
-            elif command == 'saveProject':
+                response_payload = {
+                    "status": "success",
+                    "message": "Final timeline generation started.",
+                }
+            elif command == "saveProject":
                 print("Python: Simulating project save...", flush=True)
-                response_payload = {"status": "success", "message": "Project save command received."}
-            elif command == 'setPlayhead':
-                time_value = params.get('time') # e.g., {"time": "01:00:10:00"} or {"time": 70.5}
+                response_payload = {
+                    "status": "success",
+                    "message": "Project save command received.",
+                }
+            elif command == "setPlayhead":
+                time_value = params.get(
+                    "time"
+                )  # e.g., {"time": "01:00:10:00"} or {"time": 70.5}
                 if time_value is not None:
-                    print(f"Python: Simulating set playhead to {time_value}...", flush=True)
-                    response_payload = {"status": "success", "message": f"Playhead position set to {time_value}."}
+                    print(
+                        f"Python: Simulating set playhead to {time_value}...",
+                        flush=True,
+                    )
+                    response_payload = {
+                        "status": "success",
+                        "message": f"Playhead position set to {time_value}.",
+                    }
                 else:
-                    self._send_json_response(400, {"status": "error", "message": "Missing 'time' parameter for setPlayhead."})
+                    self._send_json_response(
+                        400,
+                        {
+                            "status": "error",
+                            "message": "Missing 'time' parameter for setPlayhead.",
+                        },
+                    )
                     return
             else:
-                self._send_json_response(400, {"status": "error", "message": f"Unknown command: {command}"})
+                self._send_json_response(
+                    400, {"status": "error", "message": f"Unknown command: {command}"}
+                )
                 return
-            
+
             self._send_json_response(200, response_payload)
 
         except json.JSONDecodeError:
             print("Python Command Server: Invalid JSON received from Go.", flush=True)
-            self._send_json_response(400, {"status": "error", "message": "Invalid JSON format in request body."})
+            self._send_json_response(
+                400,
+                {"status": "error", "message": "Invalid JSON format in request body."},
+            )
         except Exception as e:
-            print(f"Python Command Server: Error processing command '{command}': {e}", flush=True)
+            print(
+                f"Python Command Server: Error processing command '{command}': {e}",
+                flush=True,
+            )
             full_trace = traceback.format_exc()
             print(full_trace)
-            self._send_json_response(500, {"status": "error", "message": f"Internal server error: {str(e)}"})
+            self._send_json_response(
+                500, {"status": "error", "message": f"Internal server error: {str(e)}"}
+            )
+
 
 def run_python_command_server(listen_port: int):
-    server_address = ('localhost', listen_port)
+    server_address = ("localhost", listen_port)
     httpd = HTTPServer(server_address, PythonCommandHandler)
-    print(f"Python Command Server: Listening for Go commands on localhost:{listen_port}...", flush=True)
+    print(
+        f"Python Command Server: Listening for Go commands on localhost:{listen_port}...",
+        flush=True,
+    )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -900,50 +1018,26 @@ def run_python_command_server(listen_port: int):
     httpd.server_close()
 
 
-def send_message_to_go(message_type: str, payload: Any):
-    global GO_SERVER_PORT
-    if GO_SERVER_PORT == 0:
-        print("Python Error: Go server port not configured. Cannot send message to Go.", flush=True)
-        return False
-    
-    url = f"http://localhost:{GO_SERVER_PORT}/msg" # Your Go endpoint for general messages
-    
-    message_data = {
-        "type": message_type,
-        "payload": payload
-    }
-    try:
-        headers = {"Content-Type": "application/json"}
-        # This is an independent HTTP request from Python to Go
-        def fallback_serializer(obj):
-            return "<BMDObject>"
-        
-        response = requests.post(url, data=json.dumps(message_data, default=fallback_serializer), headers=headers, timeout=5) # 5s timeout
-        response.raise_for_status()
-        print(f"Python (to Go): Message type '{message_type}' sent. Go responded: {response.status_code}", flush=True)
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"Python (to Go): Error sending message type '{message_type}': {e}", flush=True)
-        print(f"Payload: {payload}")
-        return False
-
-
 def init():
     global GO_SERVER_PORT
     parser = argparse.ArgumentParser()
-    parser.add_argument('-threshold', type=float)
-    parser.add_argument('-gp', '--go-port', type=int) # port to communicate with http server
-    parser.add_argument('-lp', '--listen-on-port', type=int) # port to receive commands from go
-    parser.add_argument('--auth-token', type=str) # authorization token
-    parser.add_argument('-min_duration', type=float)
-    parser.add_argument('-padding_l', type=float)
-    parser.add_argument('-padding_r', type=float)
-    parser.add_argument('-s', '--sync', action='store_true')
+    parser.add_argument("-threshold", type=float)
+    parser.add_argument(
+        "-gp", "--go-port", type=int
+    )  # port to communicate with http server
+    parser.add_argument(
+        "-lp", "--listen-on-port", type=int
+    )  # port to receive commands from go
+    parser.add_argument("--auth-token", type=str)  # authorization token
+    parser.add_argument("-min_duration", type=float)
+    parser.add_argument("-padding_l", type=float)
+    parser.add_argument("-padding_r", type=float)
+    parser.add_argument("-s", "--sync", action="store_true")
     args = parser.parse_args()
 
     GO_SERVER_PORT = args.go_port
-    
-   # --- FUTURE: Store shared secret ---
+
+    # --- FUTURE: Store shared secret ---
     # global EXPECTED_GO_COMMAND_TOKEN, ENABLE_COMMAND_AUTH
     # if args.auth-token:
     #     EXPECTED_GO_COMMAND_TOKEN = args.auth-token
@@ -951,11 +1045,15 @@ def init():
     #     print(f"Python Command Server: Will expect Go to authenticate commands with the shared secret.", flush=True)
 
     print(f"Python Backend: Go's server port: {args.go_port}", flush=True)
-    print(f"Python Backend: Will listen for commands on port: {args.listen_on_port}", flush=True)
-
+    print(
+        f"Python Backend: Will listen for commands on port: {args.listen_on_port}",
+        flush=True,
+    )
 
     # Start Python's own HTTP server (for Go commands) in a separate thread
-    command_server_thread = threading.Thread(target=run_python_command_server, args=(args.listen_on_port,), daemon=True)
+    command_server_thread = threading.Thread(
+        target=run_python_command_server, args=(args.listen_on_port,), daemon=True
+    )
     command_server_thread.start()
 
     # Perform other Python initializations...
@@ -963,17 +1061,26 @@ def init():
 
     # Signal to Go that Python (including its command server) is ready
     if not signal_go_ready(args.go_port):
-        print("Python Backend: CRITICAL - Could not signal main readiness to Go application.", flush=True)
+        print(
+            "Python Backend: CRITICAL - Could not signal main readiness to Go application.",
+            flush=True,
+        )
         # Consider how to handle this - maybe try to stop the command_server_thread or sys.exit(1)
     else:
-        print("Python Backend: Successfully signaled main readiness to Go application.", flush=True)
-    
-    print("Python Backend: Running. Command server is active in a background thread.", flush=True)
+        print(
+            "Python Backend: Successfully signaled main readiness to Go application.",
+            flush=True,
+        )
+
+    print(
+        "Python Backend: Running. Command server is active in a background thread.",
+        flush=True,
+    )
     try:
-        command_server_thread.join() # Keep main thread alive while server thread is running
+        command_server_thread.join()  # Keep main thread alive while server thread is running
     except KeyboardInterrupt:
         print("Python Backend: Main thread interrupted. Shutting down.", flush=True)
-    
+
     print("Python Backend: Exiting.", flush=True)
 
     sys.exit(1)
@@ -983,7 +1090,6 @@ if __name__ == "__main__":
     script_time = time()
 
     init()
-
 
     # main(sync=args.sync)
     # script_end_time = time()
