@@ -22,6 +22,8 @@ export function GetPythonReadyStatus():Promise<boolean>;
 
 export function LaunchHttpServer(arg1:any):Promise<void>;
 
+export function MakeFinalTimeline(arg1:main.ProjectDataPayload):Promise<string>;
+
 export function ProcessWavToLogarithmicPeaks(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
 
 export function RunPythonScriptWithArgs(arg1:Array<string>):Promise<void>;

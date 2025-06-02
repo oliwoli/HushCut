@@ -126,343 +126,312 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     }, [audioUrl]);
 
     useEffect(() => {
-        if (wavesurferRef.current) {
-            wavesurferRef.current.destroy();
-            wavesurferRef.current = null;
-        }
-        if (!waveformContainerRef.current || !minimapContainerRef.current) {
-            return;
-        }
-        if (
-            !audioUrl ||
-            !precomputedData ||
-            !precomputedData.peaks ||
-            precomputedData.peaks.length === 0 ||
-            precomputedData.duration <= 0
-        ) {
-            if (audioUrl && (!audioUrl || !precomputedData))
-                setIsLoading(true); // Keep loading if URL exists but data not ready
-            else if (!audioUrl) setIsLoading(false); // No URL, not loading
-            return;
-        }
+      if (wavesurferRef.current) {
+        wavesurferRef.current.destroy();
+        wavesurferRef.current = null;
+      }
+      if (!waveformContainerRef.current || !minimapContainerRef.current) {
+        return;
+      }
+      if (
+        !audioUrl ||
+        !precomputedData ||
+        !precomputedData.peaks ||
+        precomputedData.peaks.length === 0 ||
+        precomputedData.duration <= 0
+      ) {
+        if (audioUrl && (!audioUrl || !precomputedData))
+          setIsLoading(true); // Keep loading if URL exists but data not ready
+        else if (!audioUrl) setIsLoading(false); // No URL, not loading
+        return;
+      }
 
-        console.log("WS Init: Initializing WaveSurfer with precomputed peaks.");
-        setIsLoading(true);
-        setCurrentTime(0);
+      console.log("WS Init: Initializing WaveSurfer with precomputed peaks.");
+      setIsLoading(true);
+      setCurrentTime(0);
 
-        const wsRegions = RegionsPlugin.create();
-        regionsPluginRef.current = wsRegions;
+      const wsRegions = RegionsPlugin.create();
+      regionsPluginRef.current = wsRegions;
 
-        // 3. Initialize Minimap Plugin
-        const wsMinimap = Minimap.create({
-            container: minimapContainerRef.current, // Target for the minimap
-            waveColor: "#666666", // Lighter color for minimap waveform
-            progressColor: "#666666", // Lighter progress color
-            height: 40, // Desired height of the minimap
-            dragToSeek: true, // Allows seeking by dragging on the minimap, true by default
-            cursorWidth: 2,
-            cursorColor: "#e64b3d",
-            peaks: [precomputedData.peaks],
-            duration: precomputedData.duration,
-            normalize: false,
-            barAlign: "bottom",
-        }
+      // 3. Initialize Minimap Plugin
+      const wsMinimap = Minimap.create({
+        container: minimapContainerRef.current, // Target for the minimap
+        waveColor: "#666666", // Lighter color for minimap waveform
+        progressColor: "#666666", // Lighter progress color
+        height: 40, // Desired height of the minimap
+        dragToSeek: true, // Allows seeking by dragging on the minimap, true by default
+        cursorWidth: 2,
+        cursorColor: "#e64b3d",
+        peaks: [precomputedData.peaks],
+        duration: precomputedData.duration,
+        normalize: false,
+        barAlign: "bottom",
+      });
+
+      const wsOptions: WaveSurferOptions = {
+        container: waveformContainerRef.current,
+        dragToSeek: true,
+        waveColor: "#777777",
+        progressColor: "#777777", // This is the main waveform progress color, distinct from minimap
+        cursorColor: "#e64b3d",
+        cursorWidth: 2,
+        height: "auto",
+        width: "auto",
+        fillParent: true,
+        barAlign: "bottom",
+        interact: true,
+        url: audioUrl,
+        peaks: [precomputedData.peaks],
+        duration: precomputedData.duration,
+        normalize: false,
+        plugins: [wsRegions, wsMinimap], // 4. Add Minimap to plugins
+        backend: "MediaElement",
+        mediaControls: false,
+        autoCenter: false,
+        autoScroll: true,
+        hideScrollbar: false, // Good to have when using minimap for navigation
+        minPxPerSec: 15, // Optional: Adjust initial zoom of main waveform
+      };
+
+      try {
+        const ws = WaveSurfer.create(wsOptions);
+        ws.registerPlugin(
+          ZoomPlugin.create({
+            // the amount of zoom per wheel step, e.g. 0.5 means a 50% magnification per scroll
+            scale: 0.01,
+            // Optionally, specify the maximum pixels-per-second factor while zooming
+            maxZoom: 180,
+            exponentialZooming: true,
+          })
         );
 
-        const wsOptions: WaveSurferOptions = {
-            container: waveformContainerRef.current,
-            dragToSeek: true,
-            waveColor: "#777777",
-            progressColor: "#777777", // This is the main waveform progress color, distinct from minimap
-            cursorColor: "#e64b3d",
-            cursorWidth: 2,
-            height: "auto",
-            width: "auto",
-            fillParent: true,
-            barAlign: "bottom",
-            interact: true,
-            url: audioUrl,
-            peaks: [precomputedData.peaks],
-            duration: precomputedData.duration,
-            normalize: false,
-            plugins: [wsRegions, wsMinimap], // 4. Add Minimap to plugins
-            backend: "MediaElement",
-            mediaControls: false,
-            autoCenter: false,
-            autoScroll: true,
-            hideScrollbar: false, // Good to have when using minimap for navigation
-            minPxPerSec: 15, // Optional: Adjust initial zoom of main waveform
-        };
+        wavesurferRef.current = ws;
 
-        try {
-            const ws = WaveSurfer.create(wsOptions);
-            ws.registerPlugin(
-                ZoomPlugin.create({
-                    // the amount of zoom per wheel step, e.g. 0.5 means a 50% magnification per scroll
-                    scale: 0.01,
-                    // Optionally, specify the maximum pixels-per-second factor while zooming
-                    maxZoom: 180,
-                    exponentialZooming: true,
-                }),
-            )
-
-            wavesurferRef.current = ws;
-
-            ws.on("ready", () => {
-                console.log("WaveSurfer: 'ready'.");
-                setIsLoading(false);
-                const internalDuration = ws.getDuration();
-                if (
-                    Math.abs(internalDuration - (precomputedData?.duration || 0)) > 0.01
-                ) {
-                    setDuration(internalDuration);
-                }
-                if (regionsPluginRef.current && silenceDataRef.current) {
-                    updateSilenceRegions(
-                        regionsPluginRef.current,
-                        silenceDataRef.current
-                    );
-                }
-            });
-            ws.on("play", () => setIsPlaying(true));
-            ws.on("pause", () => setIsPlaying(false));
-            ws.on("finish", () => {
-                setIsPlaying(false);
-                ws.setTime(0);
-                setCurrentTime(0);
-            }); // Reset to start on finish
-
-            ws.on("interaction", (newTime: number) => {
-                ws.setTime(newTime);
-                setCurrentTime(newTime); // Keep updating React state for the current time display
-            });
-
-            ws.on("zoom", (newPixelsPerSecond) => { // The parameter is the new pixels-per-second scale
-                // console.log(`Zoom event: new px/s = ${newPixelsPerSecond}`); // For debugging
-
-                const mainWs = wavesurferRef.current;
-                if (!mainWs || !mainWs.getDuration()) { // Ensure ws is valid and has a duration
-                    return;
-                }
-
-                const currentTime = mainWs.getCurrentTime();    // This is our anchor point
-                const containerWidth = mainWs.getWidth();       // Width of the visible waveform area
-
-                // Calculate the absolute pixel position of the currentTime on the newly scaled waveform
-                const pixelPositionOfPlayhead = currentTime * newPixelsPerSecond;
-
-                // Calculate the target scrollLeft value to place the playhead in the center
-                let targetScrollLeft = pixelPositionOfPlayhead - (containerWidth / 2);
-
-                // Optional but recommended: Clamp the scroll value to prevent overscrolling
-                // (scrolling beyond the beginning or end of the waveform)
-                const totalWaveformWidth = mainWs.getDuration() * newPixelsPerSecond;
-                const maxScrollPossible = Math.max(0, totalWaveformWidth - containerWidth);
-                targetScrollLeft = Math.max(0, Math.min(targetScrollLeft, maxScrollPossible));
-
-                console.log(`Centering scroll: targetScrollLeft = ${targetScrollLeft}`); // For debugging
-
-                // Apply the new scroll position
-                mainWs.setScroll(0);
-            });
-
-            ws.on("timeupdate", (time: number) => {
-                //ws.setScroll(-1550);
-                //ws.setScrollTime(time);
-
-                setCurrentTime(time); // Keep updating React state for the current time display
-
-                if (
-                    ws.isPlaying() &&
-                    skipRegionsEnabledRef.current &&
-                    silenceDataForSkippingRef.current?.length
-                ) {
-                    for (const region of silenceDataForSkippingRef.current) {
-                        const epsilon = 0.01; // A small buffer to avoid floating point issues or skipping too late
-
-                        if (region.start > time) {
-                            // all other regions are going to come after this one, we can break
-                            break;
-                        }
-
-                        if (
-                            region.end > region.start &&
-                            time >= region.start &&
-                            time < region.end - epsilon
-                        ) {
-                            ws.setTime(region.end);
-                            break;
-                        }
-                    }
-                }
-            });
-            ws.on("error", (err: Error | string) => {
-                console.error("WaveSurfer error:", err);
-                setIsLoading(false);
-                setIsPlaying(false);
-            });
-
-            const scrollWrapper = ws.getWrapper(); // Get the scrollable wrapper element
-            if (scrollWrapper) {
-                // Store original cursor and set initial "grab" cursor
-                originalCursorRef.current = scrollWrapper.style.cursor;
-                //scrollWrapper.style.cursor = 'grab';
-
-                const handleGlobalMouseMove = (event: MouseEvent) => {
-                    if (!isPanningRef.current || !wavesurferRef.current) return; // Check main ws ref too
-
-                    event.preventDefault(); // Prevent other actions during drag
-                    const wsInstance = wavesurferRef.current;
-                    const deltaX = event.clientX - panStartXRef.current;
-                    let newScrollLeft = panInitialScrollLeftRef.current - deltaX; // Subtract delta to move content with mouse
-
-                    // Optional: Clamp scroll position to prevent overscrolling
-                    // const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
-                    // newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
-
-                    wsInstance.setScroll(newScrollLeft);
-                };
-
-                const handleGlobalMouseUp = (event: MouseEvent) => {
-                    if (!isPanningRef.current) return;
-
-                    // Only truly act if it was a middle mouse drag, though isPanningRef should cover this
-                    isPanningRef.current = false;
-                    scrollWrapper.style.cursor = originalCursorRef.current
-
-                    document.removeEventListener('mousemove', handleGlobalMouseMove);
-                    document.removeEventListener('mouseup', handleGlobalMouseUp);
-                };
-
-                const handleWaveformMouseDown = (event: MouseEvent) => {
-                    const wsInstance = wavesurferRef.current;
-                    if (!wsInstance) return;
-
-                    // Check for middle mouse button (event.button === 1)
-                    if (event.button === 1) {
-                        event.preventDefault(); // Prevent default middle-click actions (like autoscroll)
-                        event.stopPropagation(); // Prevent other listeners on WaveSurfer from acting on this
-
-                        isPanningRef.current = true;
-                        panStartXRef.current = event.clientX;
-                        panInitialScrollLeftRef.current = wsInstance.getScroll();
-
-                        scrollWrapper.style.cursor = 'grabbing';
-
-                        // Add listeners to the document to capture mouse moves outside the wrapper
-                        document.addEventListener('mousemove', handleGlobalMouseMove);
-                        document.addEventListener('mouseup', handleGlobalMouseUp);
-                    }
-                };
-
-                scrollWrapper.addEventListener('mousedown', handleWaveformMouseDown);
-            }
-
-
-        } catch (error: any) {
-            console.error(
-                "Error during WaveSurfer create/load:",
-                error.message || error
+        ws.on("ready", () => {
+          console.log("WaveSurfer: 'ready'.");
+          setIsLoading(false);
+          const internalDuration = ws.getDuration();
+          if (
+            Math.abs(internalDuration - (precomputedData?.duration || 0)) > 0.01
+          ) {
+            setDuration(internalDuration);
+          }
+          if (regionsPluginRef.current && silenceDataRef.current) {
+            updateSilenceRegions(
+              regionsPluginRef.current,
+              silenceDataRef.current
             );
-            setIsLoading(false);
-            setIsPlaying(false);
-        }
+          }
+        });
+        ws.on("play", () => setIsPlaying(true));
+        ws.on("pause", () => setIsPlaying(false));
+        ws.on("finish", () => {
+          setIsPlaying(false);
+          ws.setTime(0);
+          setCurrentTime(0);
+        }); // Reset to start on finish
 
-        // --- Event listeners for the MINIMAP plugin instance ---
-        if (wsMinimap) {
-            const onMinimapDrag = (relativeX: number) => {
-                const mainWs = wavesurferRef.current;
-                if (!mainWs) return
-                const mainDuration = mainWs.getDuration(); // Use main wavesurfer's duration
-                if (mainDuration > 0) {
-                    const newTime = relativeX * mainDuration;
-                    //console.log(`Minimap Drag event: newTime ${newTime.toFixed(3)} (relativeX: ${relativeX})`);
-                    setCurrentTime(newTime);
-                    mainWs.setTime(newTime);
-                    const pixelsPerSecond = mainWs.options.minPxPerSec;
-                    const timeToCenter = mainWs.getCurrentTime();
-                    const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
-                    const containerWidth = mainWs.getWidth();
-                    let targetScrollPx = pixelPositionOfTimeToCenter - (containerWidth / 2);
-                    mainWs.setScroll(targetScrollPx);
-                }
+        ws.on("interaction", (newTime: number) => {
+          ws.setTime(newTime);
+          setCurrentTime(newTime); // Keep updating React state for the current time display
+        });
 
-            };
-            wsMinimap.on('drag', onMinimapDrag);
+        ws.on("timeupdate", (time: number) => {
+          //ws.setScroll(-1550);
+          //ws.setScrollTime(time);
 
-            const onMinimapClick = (relativeX: number, _relativeY: number) => {
-                const mainWs = wavesurferRef.current;
-                if (mainWs) {
-                    const mainDuration = mainWs.getDuration();
-                    if (mainDuration > 0) {
-                        const newTime = relativeX * mainDuration;
-                        // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
-                        setCurrentTime(newTime);
-                        mainWs.setTime(newTime);
-                        const pixelsPerSecond = mainWs.options.minPxPerSec;
-                        const timeToCenter = mainWs.getCurrentTime();
-                        const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
-                        const containerWidth = mainWs.getWidth();
-                        let targetScrollPx = pixelPositionOfTimeToCenter - (containerWidth / 2);
-                        mainWs.setScroll(targetScrollPx);
-                    }
-                }
-            };
-            wsMinimap.on('click', onMinimapClick);
-        }
+          setCurrentTime(time); // Keep updating React state for the current time display
 
-        return () => {
-            if (wavesurferRef.current) {
-                console.log("WaveSurfer cleanup: Destroying instance.");
-                wavesurferRef.current.destroy(); // This also destroys registered plugins like minimap
-                wavesurferRef.current = null;
+          if (
+            ws.isPlaying() &&
+            skipRegionsEnabledRef.current &&
+            silenceDataForSkippingRef.current?.length
+          ) {
+            for (const region of silenceDataForSkippingRef.current) {
+              const epsilon = 0.01; // A small buffer to avoid floating point issues or skipping too late
+
+              if (region.start > time) {
+                // all other regions are going to come after this one, we can break
+                break;
+              }
+
+              if (
+                region.end > region.start &&
+                time >= region.start &&
+                time < region.end - epsilon
+              ) {
+                ws.setTime(region.end);
+                break;
+              }
             }
+          }
+        });
+        ws.on("error", (err: Error | string) => {
+          console.error("WaveSurfer error:", err);
+          setIsLoading(false);
+          setIsPlaying(false);
+        });
+
+        const scrollWrapper = ws.getWrapper(); // Get the scrollable wrapper element
+        if (scrollWrapper) {
+          // Store original cursor and set initial "grab" cursor
+          originalCursorRef.current = scrollWrapper.style.cursor;
+          //scrollWrapper.style.cursor = 'grab';
+
+          const handleGlobalMouseMove = (event: MouseEvent) => {
+            if (!isPanningRef.current || !wavesurferRef.current) return; // Check main ws ref too
+
+            event.preventDefault(); // Prevent other actions during drag
+            const wsInstance = wavesurferRef.current;
+            const deltaX = event.clientX - panStartXRef.current;
+            let newScrollLeft = panInitialScrollLeftRef.current - deltaX; // Subtract delta to move content with mouse
+
+            // Optional: Clamp scroll position to prevent overscrolling
+            // const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
+            // newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
+
+            wsInstance.setScroll(newScrollLeft);
+          };
+
+          const handleGlobalMouseUp = (event: MouseEvent) => {
+            if (!isPanningRef.current) return;
+
+            // Only truly act if it was a middle mouse drag, though isPanningRef should cover this
+            isPanningRef.current = false;
+            scrollWrapper.style.cursor = originalCursorRef.current;
+
+            document.removeEventListener("mousemove", handleGlobalMouseMove);
+            document.removeEventListener("mouseup", handleGlobalMouseUp);
+          };
+
+          const handleWaveformMouseDown = (event: MouseEvent) => {
+            const wsInstance = wavesurferRef.current;
+            if (!wsInstance) return;
+
+            // Check for middle mouse button (event.button === 1)
+            if (event.button === 1) {
+              event.preventDefault(); // Prevent default middle-click actions (like autoscroll)
+              event.stopPropagation(); // Prevent other listeners on WaveSurfer from acting on this
+
+              isPanningRef.current = true;
+              panStartXRef.current = event.clientX;
+              panInitialScrollLeftRef.current = wsInstance.getScroll();
+
+              scrollWrapper.style.cursor = "grabbing";
+
+              // Add listeners to the document to capture mouse moves outside the wrapper
+              document.addEventListener("mousemove", handleGlobalMouseMove);
+              document.addEventListener("mouseup", handleGlobalMouseUp);
+            }
+          };
+
+          scrollWrapper.addEventListener("mousedown", handleWaveformMouseDown);
+        }
+      } catch (error: any) {
+        console.error(
+          "Error during WaveSurfer create/load:",
+          error.message || error
+        );
+        setIsLoading(false);
+        setIsPlaying(false);
+      }
+
+      // --- Event listeners for the MINIMAP plugin instance ---
+      if (wsMinimap) {
+        const onMinimapDrag = (relativeX: number) => {
+          const mainWs = wavesurferRef.current;
+          if (!mainWs) return;
+          const mainDuration = mainWs.getDuration(); // Use main wavesurfer's duration
+          if (mainDuration > 0) {
+            const newTime = relativeX * mainDuration;
+            //console.log(`Minimap Drag event: newTime ${newTime.toFixed(3)} (relativeX: ${relativeX})`);
+            setCurrentTime(newTime);
+            mainWs.setTime(newTime);
+            const pixelsPerSecond = mainWs.options.minPxPerSec;
+            const timeToCenter = mainWs.getCurrentTime();
+            const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
+            const containerWidth = mainWs.getWidth();
+            let targetScrollPx =
+              pixelPositionOfTimeToCenter - containerWidth / 2;
+            mainWs.setScroll(targetScrollPx);
+          }
         };
+        wsMinimap.on("drag", onMinimapDrag);
 
+        const onMinimapClick = (relativeX: number, _relativeY: number) => {
+          const mainWs = wavesurferRef.current;
+          if (mainWs) {
+            const mainDuration = mainWs.getDuration();
+            if (mainDuration > 0) {
+              const newTime = relativeX * mainDuration;
+              // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
+              setCurrentTime(newTime);
+              mainWs.setTime(newTime);
+              const pixelsPerSecond = mainWs.options.minPxPerSec;
+              const timeToCenter = mainWs.getCurrentTime();
+              const pixelPositionOfTimeToCenter =
+                timeToCenter * pixelsPerSecond;
+              const containerWidth = mainWs.getWidth();
+              let targetScrollPx =
+                pixelPositionOfTimeToCenter - containerWidth / 2;
+              mainWs.setScroll(targetScrollPx);
+            }
+          }
+        };
+        wsMinimap.on("click", onMinimapClick);
+      }
 
-        // Dependencies: audioUrl (for new file), precomputedData (when it's fetched/updated), audioUrl (when it's ready)
-        // minimapContainerRef.current is not a reactive dependency in the same way, its existence is checked.
+      return () => {
+        if (wavesurferRef.current) {
+          console.log("WaveSurfer cleanup: Destroying instance.");
+          wavesurferRef.current.destroy(); // This also destroys registered plugins like minimap
+          wavesurferRef.current = null;
+        }
+      };
+
+      // Dependencies: audioUrl (for new file), precomputedData (when it's fetched/updated), audioUrl (when it's ready)
+      // minimapContainerRef.current is not a reactive dependency in the same way, its existence is checked.
     }, [audioUrl, precomputedData]);
 
     const updateSilenceRegions = useCallback(
-        (
-            regionsPlugin: RegionsPlugin | null,
-            sData: SilencePeriod[] | null | undefined
-        ) => {
-            if (!regionsPlugin) return;
-            regionsPlugin.clearRegions();
-            const regionsContainerEl = (regionsPlugin as any).regionsContainer as
-                | HTMLElement
-                | undefined;
-            if (regionsContainerEl) regionsContainerEl.innerHTML = ""; // Ensure visual cleanup
+      (
+        regionsPlugin: RegionsPlugin | null,
+        sData: SilencePeriod[] | null | undefined
+      ) => {
+        if (!regionsPlugin) return;
+        regionsPlugin.clearRegions();
+        const regionsContainerEl = (regionsPlugin as any).regionsContainer as
+          | HTMLElement
+          | undefined;
+        if (regionsContainerEl) regionsContainerEl.innerHTML = ""; // Ensure visual cleanup
 
-            // Debounce adding regions slightly to allow DOM to clear if there were issues
-            const timeoutId = setTimeout(() => {
-                if (regionsPlugin && sData && sData.length > 0) {
-                    sData.forEach((period, index) => {
-                        try {
-                            regionsPlugin.addRegion({
-                                id: `silence-marker_${index}_${period.start.toFixed(
-                                    2
-                                )}-${period.end.toFixed(2)}`,
-                                start: period.start,
-                                end: period.end,
-                                color: "rgba(255, 7, 2, 0.1)",
-                                drag: false,
-                                resize: false,
-                            });
-                        } catch (e) {
-                            console.warn(
-                                `Failed to add region: ${(e as Error).message}`,
-                                period
-                            );
-                        }
-                    });
-                }
-            }, 30); // Small delay
-            return () => clearTimeout(timeoutId); // Cleanup timeout
-        },
-        []
+        // Debounce adding regions slightly to allow DOM to clear if there were issues
+        const timeoutId = setTimeout(() => {
+          if (regionsPlugin && sData && sData.length > 0) {
+            sData.forEach((period, index) => {
+              try {
+                regionsPlugin.addRegion({
+                  id: `silence-marker_${index}_${period.start.toFixed(
+                    2
+                  )}-${period.end.toFixed(2)}`,
+                  start: period.start,
+                  end: period.end,
+                  color: "rgba(250, 7, 2, 0.15)",
+                  drag: false,
+                  resize: false,
+                });
+              } catch (e) {
+                console.warn(
+                  `Failed to add region: ${(e as Error).message}`,
+                  period
+                );
+              }
+            });
+          }
+        }, 30); // Small delay
+        return () => clearTimeout(timeoutId); // Cleanup timeout
+      },
+      []
     );
 
     useEffect(() => {

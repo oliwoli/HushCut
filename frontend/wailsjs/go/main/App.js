@@ -42,6 +42,10 @@ export function LaunchHttpServer(arg1) {
   return window['go']['main']['App']['LaunchHttpServer'](arg1);
 }
 
+export function MakeFinalTimeline(arg1) {
+  return window['go']['main']['App']['MakeFinalTimeline'](arg1);
+}
+
 export function ProcessWavToLogarithmicPeaks(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ProcessWavToLogarithmicPeaks'](arg1, arg2, arg3, arg4);
 }

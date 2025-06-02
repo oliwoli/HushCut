@@ -1,5 +1,6 @@
 import math
 from local_types import SilenceInterval, EditInstruction, ClipData
+from functools import lru_cache
 
 
 # --- Helper functions (merge_intervals, map_source_to_timeline) ---
@@ -32,8 +33,7 @@ def map_source_to_timeline(source_frame_time: float, clip_data: ClipData) -> flo
     timeline_offset = float(clip_data["start_frame"]) - clip_data["source_start_frame"]
     return source_frame_time + timeline_offset
 
-
-# --- Main Function (Ceil Start / Floor End for Robustness) ---
+@lru_cache
 def create_edits_with_optional_silence(
     clip_data: ClipData,
     silences: list[SilenceInterval],
@@ -224,13 +224,11 @@ def create_edits_with_optional_silence(
 
     # --- Optional Diagnostic Check ---
     if not keep_silence_segments and len(edited_clips) > 1:
-        has_issue = False
         for i in range(len(edited_clips) - 1):
             # Check only enabled segments if keep_silence_segments is True? No, check all for this diagnostic.
             clip1_end = edited_clips[i]["end_frame"]
             clip2_start = edited_clips[i + 1]["start_frame"]
             if clip2_start != clip1_end + 1:
-                has_issue = True
                 print(f"PROBLEM DETECTED between segment {i} and {i+1}:")
                 print(f"  Seg {i} ends: {clip1_end}")
                 print(f"  Seg {i+1} starts: {clip2_start}")

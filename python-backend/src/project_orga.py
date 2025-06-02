@@ -1,6 +1,6 @@
 from typing import Any, Dict, Optional, Set, TypedDict
-import time
-from pprint import pprint
+
+import misc_utils
 
 from local_types import ProjectData
 
@@ -122,6 +122,7 @@ def map_media_pool_items_to_folders(
                 "bmd_media_pool_item" in file_info["fileSource"]):
             
             bmd_item = file_info["fileSource"]["bmd_media_pool_item"]
+            # check if bmd_item is str "<BMDObject>"                
             if bmd_item is not None:
                 try:
                     media_id = bmd_item.GetMediaId()
@@ -231,6 +232,21 @@ def move_clips_to_temp_folder(
     clips_no_filepaths = []
     clips_filepaths = []
     for item in item_folder_map.values():
+        bmd_mp_item = item["bmd_media_pool_item"]
+        if not bmd_mp_item:
+            continue
+        
+        media_id_to_store = bmd_mp_item.GetMediaId()
+        
+        if media_id_to_store:
+            success = bmd_mp_item.SetThirdPartyMetadata({"silence_detect_uuid": media_id_to_store})
+            if success:
+                print(f"Set metadata for '{bmd_mp_item.GetName()}' with MediaID: {media_id_to_store}")
+            else:
+                print(f"Warning: Failed to set metadata for clip '{bmd_mp_item.GetName()}' (MediaID: {media_id_to_store})")
+        else:
+            print(f"Warning: Clip '{bmd_mp_item.GetName()}' has no MediaID at metadata setting time. Skipping metadata set.")
+
         if not item["file_path"]:
             clips_no_filepaths.append(item["bmd_media_pool_item"])
         else:
@@ -304,7 +320,7 @@ def restore_clips_from_temp_folder(
     clips_by_original_folder_data: dict[str, dict[str, Any]] = {}
 
     if not clips_in_temp_folder:
-        print(f"No clips found in temporary folder.")
+        print("No clips found in temporary folder.")
         return False
 
     print(

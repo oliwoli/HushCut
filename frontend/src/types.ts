@@ -7,6 +7,7 @@ export interface SilencePeriod {
 export interface ActiveFile {
   id: string;                   // Unique identifier (e.g., TimelineItem.ID or ProcessedFileName if unique)
   name: string;                 // Display name for the selector (TimelineItem.Name)
+  sourceFilePath: string;       // Full path to the source file (TimelineItem.SourceFilePath)
   processedFileName: string;    // Base for the preview URL (TimelineItem.ProcessedFileName)
   previewUrl: string;           // Full URL to the .wav file
   sourceStartFrame: number;     // For WaveformPlayer region (TimelineItem.SourceStartFrame)

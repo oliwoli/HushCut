@@ -41,11 +41,16 @@ body {
   box-sizing: border-box;
   -moz-box-sizing: border-box;
   -webkit-box-sizing: border-box;
+  box-shadow: inset 0px 6px 15px 5px rgba(0,0,0,0.15);
   border: 1px solid rgb(155, 0, 0);
   border-top: none;
   border-bottom: none;
   border-radius: 0;
   z-index: 20;
+}
+
+::part(region\ silence-marker_1_36.96-39.58) {
+  mix-blend-mode: multiply;
 }
 
 * {

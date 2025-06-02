@@ -75,6 +75,33 @@ export default function App() {
     detectionParams
   );
 
+  const handleSyncClick = () => {
+    toast.promise(SyncWithDavinci(), {
+      loading: "Syncing with DaVinci Resolve…",
+      success: () => "Successfully synced with DaVinci Resolve",
+      error: (err: any) =>
+        err ? `Sync failed. ${err.message || err}` : "Sync failed.",
+    });
+  };
+
+  // effect to update projectData with silenceData
+  useEffect(() => {
+    if (!projectData || !silenceData) return;
+    const newProjectData = projectData;
+    const files = projectData.files;
+    if (!files) return;
+    for (const file of Object.values(files)) {
+      if (file.fileSource.file_path === currentActiveFile?.sourceFilePath) {
+        file.silenceDetections = silenceData;
+      }
+    }
+    console.log(
+      "App.tsx: Updated projectData with silenceData:",
+      newProjectData
+    );
+    setProjectData(newProjectData);
+  }, [silenceData]);
+
   useEffect(() => {
     const getInitialServerInfo = async () => {
       console.log("App.tsx: Attempting to get Go HTTP server port...");
@@ -96,6 +123,9 @@ export default function App() {
           setCurrentActiveFile(null);
           // Optionally, inform the user that the audio server isn't available
         }
+
+        // initial sync with python
+        await SyncWithDavinci();
       } catch (err) {
         console.error("App.tsx: Error during initial server info fetch:", err);
         setHttpPort(null);
@@ -149,6 +179,7 @@ export default function App() {
     return {
       id: id,
       name: item.name || "Unnamed Track Item", // Fallback for name
+      sourceFilePath: item.source_file_path,
       processedFileName: item.processed_file_name,
       previewUrl: `http://localhost:${port}/${item.processed_file_name}.wav`,
       sourceStartFrame: item.source_start_frame,
@@ -165,6 +196,7 @@ export default function App() {
     const initialSystemPreview: ActiveFile = {
       id: "initial-preview",
       name: "No audio selected",
+      sourceFilePath: "", // No specific source file for this state
       processedFileName: "", // No specific processed file for this state
       previewUrl: "", // No URL for this state, or a dummy one if WaveformPlayer needs it
       sourceStartFrame: 0,
@@ -396,7 +428,6 @@ export default function App() {
                     threshold={threshold}
                   />
                 )}
-
                 <div className="space-y-2 w-full">
                   <div className="flex items-center space-x-5">
                     <Label className="font-medium w-32 flex-row-reverse">
@@ -418,7 +449,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-
                 <div className="space-y-2 flex-1">
                   <div className="flex items-baseline space-x-5">
                     <Label className="font-medium w-32 text-right flex-row-reverse">
@@ -484,7 +514,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-
                 <div className="flex flex-col space-y-8 w-full">
                   {/* test
                   <audio
@@ -502,19 +531,19 @@ export default function App() {
                       />
                       <Label className="text-base">Make new timeline</Label>
                     </div>
-                    <RemoveSilencesButton
-                      threshold={threshold}
-                      minDuration={minDuration}
-                      padLeft={paddingLeft}
-                      padRight={paddingRight}
-                      makeNewTimeline={makeNewTimeline}
-                    />
+                    {projectData && (
+                      <RemoveSilencesButton projectData={projectData} />
+                    )}
                   </div>
                   {/* python status tester */}
-                  <Button onClick={() => console.log(SyncWithDavinci())}>
-                    Python Test
-                  </Button>
-                  <Toaster />
+                  <Button onClick={() => handleSyncClick()}>Python Test</Button>
+                  <Toaster
+                    toastOptions={{
+                      classNames: {
+                        toast: "min-w-[10px] w-auto bg-red-400", // set your desired min and max width here
+                      },
+                    }}
+                  />
                   <Button
                     onClick={() =>
                       toast.success("Connected to DaVinci", {

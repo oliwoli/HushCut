@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -364,6 +367,8 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("msgEndpoint: Received type: '%s'", msg.Type)
 
+	taskIDFromQuery := r.URL.Query().Get("task_id")
+
 	switch msg.Type {
 	case "showToast":
 		var data ToastPayload
@@ -383,7 +388,31 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("Go: Emitting 'showAlert' event for frontend: [%s] %s - %s", data.Severity, data.Title, data.Message)
-		runtime.EventsEmit(a.ctx, "showAlert", data)
+		//runtime.EventsEmit(a.ctx, "showAlert", data)
+		if taskIDFromQuery != "" {
+			log.Printf("msgEndpoint: Received showAlert with taskID '%s'", taskIDFromQuery)
+			a.pendingMu.Lock()
+			respCh, ok := a.pendingTasks[taskIDFromQuery]
+			a.pendingMu.Unlock()
+
+			if ok {
+				log.Printf("msgEndpoint: Found pending task for ID %s. Preparing to send success response.", taskIDFromQuery)
+				commandResp := PythonCommandResponse{
+					Status:  "error",
+					Message: data.Message,
+				}
+
+				select {
+				case respCh <- commandResp:
+					runtime.EventsEmit(a.ctx, "showAlert", data)
+				default:
+					log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel was full or listener gone.", taskIDFromQuery)
+				}
+			} else {
+				log.Printf("msgEndpoint: Warning - Received showAlert with taskID '%s', but no pending task found. Emitting to frontend only.", taskIDFromQuery)
+				runtime.EventsEmit(a.ctx, "showAlert", data)
+			}
+		}
 
 	case "projectData":
 		var data ProjectDataPayload
@@ -400,7 +429,36 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 		// a.latestProjectData = &data
 		// a.cacheMutex.Unlock()
 
-		runtime.EventsEmit(a.ctx, "projectDataReceived", data) // Emit the full data
+		if taskIDFromQuery != "" {
+			log.Printf("msgEndpoint: Received projectData with taskID '%s'", taskIDFromQuery)
+			a.pendingMu.Lock()
+			respCh, ok := a.pendingTasks[taskIDFromQuery]
+			a.pendingMu.Unlock()
+
+			if ok {
+				log.Printf("msgEndpoint: Found pending task for ID %s. Preparing to send success response.", taskIDFromQuery)
+				commandResp := PythonCommandResponse{
+					Status:  "success",
+					Message: fmt.Sprintf("Sync data processed. Project: %s, Timeline: %s", data.ProjectName, data.Timeline.Name),
+				}
+
+				// Send the response back to the SyncWithDavinci goroutine
+				// This is a blocking send if the channel buffer is full.
+				// SyncWithDavinci has a buffer of 1 and is waiting.
+				select {
+				case respCh <- commandResp:
+					log.Printf("msgEndpoint: Successfully sent response to SyncWithDavinci via channel for task %s", taskIDFromQuery)
+					runtime.EventsEmit(a.ctx, "projectDataReceived", data)
+				default:
+					log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel was full or listener gone.", taskIDFromQuery)
+				}
+			} else {
+				log.Printf("msgEndpoint: Warning - Received projectData with taskID '%s', but no pending task found. Emitting to frontend only.", taskIDFromQuery)
+				runtime.EventsEmit(a.ctx, "projectDataReceived", data)
+			}
+		}
+
+		//runtime.EventsEmit(a.ctx, "projectDataReceived", data) // Emit the full data
 
 	default:
 		log.Printf("msgEndpoint: Received unknown message type: '%s'", msg.Type)
@@ -423,4 +481,149 @@ func (a *App) GetProjectDataPayloadType() ProjectDataPayload {
 		},
 		Files: nil,
 	}
+}
+
+type PythonCommandResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	// Data    interface{} `json:"data,omitempty"` // If Python commands return specific data
+}
+
+func (a *App) SendCommandToPython(commandName string, params map[string]interface{}) (*PythonCommandResponse, error) {
+	if !a.pythonReady || a.pythonCommandPort == 0 { // Check general pythonReady flag
+		return nil, fmt.Errorf("python backend or its command server is not ready (port: %d, ready: %v)", a.pythonCommandPort, a.pythonReady)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/command", a.pythonCommandPort)
+	commandPayload := map[string]interface{}{
+		"command": commandName,
+		"params":  params, // Can be nil if no params
+	}
+	if params == nil {
+		commandPayload["params"] = make(map[string]interface{}) // Ensure params is at least an empty object
+	}
+
+	jsonBody, err := json.Marshal(commandPayload)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling Python command: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("error creating request for Python command: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// --- FUTURE: Add Authorization Token to call Python's command server ---
+	// globalEnableAuthToPython := false // This would be a config
+	// if globalEnableAuthToPython && a.sharedSecretForPython != "" {
+	//  req.Header.Set("Authorization", "Bearer " + a.sharedSecretForPython)
+	// }
+	// --- END FUTURE ---
+
+	log.Printf("Go: Sending command '%s' to Python at %s with payload: %s", commandName, url, string(jsonBody))
+
+	client := &http.Client{Timeout: 20 * time.Second} // Adjust timeout as needed
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error sending command '%s' to Python: %w", commandName, err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body from Python for command '%s': %w", commandName, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Go: Python command server responded with status %d for command '%s'. Body: %s", resp.StatusCode, commandName, string(responseBody))
+		// Attempt to parse Python's structured error
+		var errResp PythonCommandResponse
+		if json.Unmarshal(responseBody, &errResp) == nil && errResp.Message != "" {
+			return &errResp, fmt.Errorf("python command '%s' failed with status %d: %s", commandName, resp.StatusCode, errResp.Message)
+		}
+		return nil, fmt.Errorf("python command '%s' failed with status %d: %s", commandName, resp.StatusCode, string(responseBody))
+	}
+
+	var pyResp PythonCommandResponse
+	if err := json.Unmarshal(responseBody, &pyResp); err != nil {
+		return nil, fmt.Errorf("error unmarshalling Python response for command '%s': %w. Body: %s", commandName, err, string(responseBody))
+	}
+
+	log.Printf("Go: Response from Python for command '%s': Status: '%s', Message: '%s'", commandName, pyResp.Status, pyResp.Message)
+	return &pyResp, nil
+}
+
+func (a *App) SyncWithDavinci() (string, error) {
+	if !a.pythonReady {
+		return "", fmt.Errorf("python backend not ready")
+	}
+
+	// 1) Generate a unique taskId
+	taskID := uuid.NewString()
+
+	// 2) Create a channel and register it in pendingTasks
+	respCh := make(chan PythonCommandResponse, 1)
+
+	a.pendingMu.Lock()
+	a.pendingTasks[taskID] = respCh
+	a.pendingMu.Unlock()
+
+	// 3) Build params for Python: include taskID and callbackUrl
+	params := map[string]interface{}{
+		"taskId": taskID,
+	}
+
+	// 4) Send command to Python (immediate “command received”)
+	pyResp, err := a.SendCommandToPython("sync", params)
+	if err != nil {
+		// Clean up the channel & map if Python didn’t ACK
+		a.pendingMu.Lock()
+		delete(a.pendingTasks, taskID)
+		a.pendingMu.Unlock()
+		return "", fmt.Errorf("error sending sync command to Python: %w", err)
+	}
+	if pyResp.Status != "success" {
+		// Python responded with some error
+		a.pendingMu.Lock()
+		delete(a.pendingTasks, taskID)
+		a.pendingMu.Unlock()
+		return "", fmt.Errorf("python command error: %s", pyResp.Message)
+	}
+	// At this point, Python has definitely “ACK‐ed” the request, so we can block.
+
+	// 5) Wait for the final callback from Python (no timeout here)
+	finalResponse := <-respCh
+
+	// 6) Cleanup
+	a.pendingMu.Lock()
+	delete(a.pendingTasks, taskID)
+	a.pendingMu.Unlock()
+
+	// 7) Check status
+	if finalResponse.Status != "success" {
+		return "", fmt.Errorf("error: %s", finalResponse.Message)
+	}
+
+	log.Printf("Go: Python reported success: %s", finalResponse.Message)
+
+	// 8) Return whatever message or data you like. Let’s return the Message.
+	return finalResponse.Message, nil
+}
+
+func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (string, error) {
+	if !a.pythonReady { // Check if Python has signaled its overall readiness
+		return "Python backend is not ready yet.", fmt.Errorf("python backend not ready")
+	}
+	log.Println("Go: Requesting final timeline from Python...")
+	response, err := a.SendCommandToPython("makeFinalTimeline", map[string]any{"projectData": projectData}) // No params for "sync" in this example
+	if err != nil {
+		log.Printf("Go: Error calling 'makeFinalTimeline' on Python: %v", err)
+		// Emit an event to frontend about the error
+		runtime.EventsEmit(a.ctx, "showToast", map[string]string{"message": fmt.Sprintf("Error making final timeline: %v", err), "toastType": "error"})
+		return fmt.Sprintf("Error: %v", err), err
+	}
+	// Emit success to frontend
+	//runtime.EventsEmit(a.ctx, "showToast", map[string]string{"message": response.Message, "toastType": "info"})
+	return response.Message, nil
 }

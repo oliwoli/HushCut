@@ -12,6 +12,10 @@ def uuid_from_path(path: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, path)
 
 
+def uuid4() -> uuid.UUID:
+    return uuid.uuid4()
+
+
 def sec_to_frames(seconds: float, fps: float) -> float:
     """Converts time in seconds to frame number using ceiling."""
     if fps <= 0:
