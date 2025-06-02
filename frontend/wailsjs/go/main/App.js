@@ -42,6 +42,10 @@ export function LaunchHttpServer(arg1) {
   return window['go']['main']['App']['LaunchHttpServer'](arg1);
 }
 
+export function LaunchPythonBackend(arg1, arg2) {
+  return window['go']['main']['App']['LaunchPythonBackend'](arg1, arg2);
+}
+
 export function MakeFinalTimeline(arg1) {
   return window['go']['main']['App']['MakeFinalTimeline'](arg1);
 }

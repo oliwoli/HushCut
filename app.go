@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -26,6 +27,7 @@ type App struct {
 	waveformCache            map[WaveformCacheKey]*PrecomputedWaveformData // New cache for waveforms
 	cacheMutex               sync.RWMutex                                  // Mutex for thread-safe access to the cache
 	configPath               string
+	pythonCmd         		 *exec.Cmd
 	pythonReadyChan          chan bool
 	pythonReady              bool
 	pythonCommandPort        int
@@ -49,7 +51,7 @@ func NewApp() *App {
 }
 
 // launch python backend and wait for POST /ready on http server endpoint
-func LaunchPythonBackend(port int, pythonCommandPort int) error {
+func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 	pythonTargetName := "python_backend"
 
 	var determinedPath string
@@ -73,6 +75,7 @@ func LaunchPythonBackend(port int, pythonCommandPort int) error {
 	cmd := exec.Command(determinedPath, cmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	a.pythonCmd = cmd
 
 	if err := cmd.Start(); err != nil {
 		return err
@@ -101,6 +104,41 @@ func (a *App) startup(ctx context.Context) {
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
+}
+
+func (a *App) shutdown(ctx context.Context) {
+	a.ctx = ctx
+	log.Println("Wails App: OnShutdown called.")
+
+	if a.pythonCmd != nil && a.pythonCmd.Process != nil {
+		log.Printf("Shutting down Python process with PID %d...", a.pythonCmd.Process.Pid)
+
+		var terminateErr error
+		if runtime.Environment(a.ctx).Platform == "windows" {
+			terminateErr = a.pythonCmd.Process.Kill() // Immediate kill on Windows
+		} else {
+			terminateErr = a.pythonCmd.Process.Signal(syscall.SIGTERM) // Graceful shutdown on Unix
+		}
+
+		if terminateErr != nil {
+			log.Printf("Failed to terminate Python process: %v", terminateErr)
+			return
+		}
+
+		// Wait for graceful shutdown
+		done := make(chan error)
+		go func() { done <- a.pythonCmd.Wait() }()
+
+		select {
+		case err := <-done:
+			log.Printf("Python process exited: %v", err)
+		case <-time.After(5 * time.Second):
+			log.Println("Python process did not exit gracefully; force killing it.")
+			if killErr := a.pythonCmd.Process.Kill(); killErr != nil {
+				log.Printf("Failed to kill Python process: %v", killErr)
+			}
+		}
+	}
 }
 
 func (a *App) initializeBackendsAndPython() {
@@ -135,7 +173,7 @@ func (a *App) initializeBackendsAndPython() {
 	log.Printf("Go Routine: Python command server will use port: %d", a.pythonCommandPort)
 
 	// 3. Launch Python Backend
-	if err := LaunchPythonBackend(goHTTPServerPort, a.pythonCommandPort); err != nil {
+	if err := a.LaunchPythonBackend(goHTTPServerPort, a.pythonCommandPort); err != nil {
 		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Python backend: %v", err)
 		log.Println("Go Routine: " + errMsg)
 		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
