@@ -1,4 +1,9 @@
 import { useEffect, useState } from "react";
+import { clamp, cn } from "@/lib/utils";
+import { useSilenceData } from "./hooks/useSilenceData";
+import { useWindowFocus } from "./hooks/hooks";
+
+// UI components
 import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -7,14 +12,12 @@ import { Toaster } from "./components/ui/sonner";
 import { Label } from "@/components/ui/label";
 import { LogSlider } from "./components/ui/volumeSlider";
 import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
-
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,19 +29,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-import { clamp, cn } from "@/lib/utils";
+// custom components
+import WaveformPlayer from "./components/audio/waveform";
+import RemoveSilencesButton from "./lib/PythonRunner";
+import { ActiveClip, DetectionParams } from "./types";
+import FileSelector from "./components/ui/fileSelector";
+
+// wails imports
 import { GetGoServerPort, SyncWithDavinci } from "@wails/go/main/App";
 import { GetPythonReadyStatus } from "@wails/go/main/App";
 import { EventsOn } from "@wails/runtime/runtime";
-import { main } from "@wails/go/models";
-
-import WaveformPlayer from "./components/audio/waveform";
-import RemoveSilencesButton from "./lib/PythonRunner";
 import { CloseApp } from "@wails/go/main/App";
-import { ActiveClip, DetectionParams } from "./types";
-import { useSilenceData } from "./hooks/useSilenceData";
-import { useWindowFocus } from "./hooks/hooks";
-import FileSelector from "./components/ui/fileSelector";
+import { main } from "@wails/go/models";
+import { GetLogarithmicWaveform } from "@wails/go/main/App";
 
 EventsOn("showToast", (data) => {
   console.log("Event: showToast", data);
@@ -75,10 +78,10 @@ export default function App() {
   const [detectionParams, setDetectionParams] =
     useState<DetectionParams | null>(null);
 
-  const { silenceData, isLoading, error, refetch } = useSilenceData(
-    currentActiveClip,
-    detectionParams
-  );
+  const [activeClipFullPeakData, setActiveClipFullPeakData] =
+    useState<main.PrecomputedWaveformData | null>(null);
+
+  const { silenceData } = useSilenceData(currentActiveClip, detectionParams);
 
   const handleSync = () => {
     toast.promise(SyncWithDavinci(), {
@@ -169,6 +172,65 @@ export default function App() {
       // if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, []); // Empty dependency array ensures this runs once on mount
+
+  // Fetch full peak data when currentActiveClip (specifically its audioUrl) changes
+  useEffect(() => {
+    if (!currentActiveClip?.previewUrl || !currentActiveClip.sourceFilePath) {
+      // Use previewUrl which is the audio path
+      setActiveClipFullPeakData(null);
+      return;
+    }
+
+    let isCancelled = false;
+    const fetchFullPeaks = async () => {
+      console.log(
+        "App.tsx: Fetching full peak data for:",
+        currentActiveClip.previewUrl
+      );
+      try {
+        // Assuming GetLogarithmicWaveform takes the publicly accessible URL
+        // or the backend can resolve currentActiveClip.sourceFilePath if needed.
+        // The current WaveformPlayer uses audioUrl (previewUrl) for GetLogarithmicWaveform
+        const data = await GetLogarithmicWaveform(
+          currentActiveClip.previewUrl,
+          256,
+          -60.0
+        );
+        if (!isCancelled) {
+          if (
+            data &&
+            data.peaks &&
+            data.peaks.length > 0 &&
+            data.duration > 0
+          ) {
+            setActiveClipFullPeakData(data);
+            console.log("App.tsx: Full peak data fetched:", data.duration);
+          } else {
+            console.warn(
+              "App.tsx: Received invalid peak data for",
+              currentActiveClip.previewUrl,
+              data
+            );
+            setActiveClipFullPeakData(null);
+          }
+        }
+      } catch (e) {
+        if (!isCancelled) {
+          setActiveClipFullPeakData(null);
+        }
+        console.error(
+          "App.tsx: Error fetching full peak data for",
+          currentActiveClip.previewUrl,
+          e
+        );
+      }
+    };
+
+    fetchFullPeaks();
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentActiveClip?.previewUrl, currentActiveClip?.sourceFilePath]);
 
   useWindowFocus(
     () => handleSync(),
@@ -442,13 +504,27 @@ export default function App() {
                 </div>
               </div>
               <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
-                {httpPort && currentActiveClip?.processedFileName && (
-                  <WaveformPlayer
-                    audioUrl={`http://localhost:${httpPort}/${currentActiveClip?.processedFileName}.wav`}
-                    silenceData={silenceData}
-                    threshold={threshold}
-                  />
-                )}
+                {httpPort &&
+                  currentActiveClip?.previewUrl &&
+                  typeof currentActiveClip?.sourceStartFrame === "number" && // Ensure these exist
+                  typeof currentActiveClip?.sourceEndFrame === "number" &&
+                  projectData?.timeline?.fps && // Ensure project FPS is available
+                  activeClipFullPeakData && ( // Ensure full peak data is loaded
+                    <WaveformPlayer
+                      // Key prop helps React re-mount the component if the essential source changes,
+                      // ensuring WaveSurfer re-initializes cleanly.
+                      key={
+                        currentActiveClip.id +
+                        "_" +
+                        currentActiveClip.previewUrl
+                      }
+                      activeClip={currentActiveClip}
+                      fullFilePeakData={activeClipFullPeakData}
+                      projectFrameRate={projectData.timeline.fps} // Pass project FPS
+                      silenceData={silenceData} // Still source-relative seconds
+                      threshold={threshold}
+                    />
+                  )}
                 <div className="space-y-2 w-full">
                   <div className="flex items-center space-x-5">
                     <Label className="font-medium w-32 flex-row-reverse">
