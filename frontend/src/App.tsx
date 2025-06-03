@@ -35,7 +35,7 @@ import { main } from "@wails/go/models";
 import WaveformPlayer from "./components/audio/waveform";
 import RemoveSilencesButton from "./lib/PythonRunner";
 import { CloseApp } from "@wails/go/main/App";
-import { ActiveFile, DetectionParams } from "./types";
+import { ActiveClip, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
 import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui/fileSelector";
@@ -66,7 +66,7 @@ function ResetButton({ onClick }: { onClick: () => void }) {
 
 export default function App() {
   const [httpPort, setHttpPort] = useState<Number | null>(null);
-  const [currentActiveFile, setCurrentActiveFile] = useState<ActiveFile | null>(
+  const [currentActiveClip, setCurrentActiveClip] = useState<ActiveClip | null>(
     null
   ); // Initialize as null
   const [projectData, setProjectData] =
@@ -76,17 +76,17 @@ export default function App() {
     useState<DetectionParams | null>(null);
 
   const { silenceData, isLoading, error, refetch } = useSilenceData(
-    currentActiveFile,
+    currentActiveClip,
     detectionParams
   );
 
-  const handleSyncClick = () => {
+  const handleSync = () => {
     toast.promise(SyncWithDavinci(), {
       loading: "Syncing with DaVinci Resolve…",
       success: (response: main.PythonCommandResponse) => {
         console.log("SyncWithDavinci success:", response);
         setProjectData(response.data);
-        return "Successfully synced with DaVinci Resolve";
+        return "Synced with DaVinci Resolve";
       },
       error: (err: any) => {
         console.error("SyncWithDavinci error:", err);
@@ -118,35 +118,17 @@ export default function App() {
     });
   }, []);
 
-  // effect to update projectData with silenceData
-  useEffect(() => {
-    if (!projectData || !silenceData) return;
-    const newProjectData = projectData;
-    const files = projectData.files;
-    if (!files) return;
-    for (const file of Object.values(files)) {
-      if (file.fileSource.file_path === currentActiveFile?.sourceFilePath) {
-        file.silenceDetections = silenceData;
-      }
-    }
-    console.log(
-      "App.tsx: Updated projectData with silenceData:",
-      newProjectData
-    );
-    setProjectData(newProjectData);
-  }, [silenceData]);
-
   useEffect(() => {
     const getInitialServerInfo = async () => {
       console.log("App.tsx: Attempting to get Go HTTP server port...");
       try {
-        const port = await GetGoServerPort(); // Wails function
+        const port = await GetGoServerPort();
 
         if (port && port > 0) {
           console.log("App.tsx: HTTP Server Port received:", port);
           setHttpPort(port); // This will trigger a re-render
 
-          const pyReady = await GetPythonReadyStatus(); // Wails function
+          const pyReady = await GetPythonReadyStatus();
           console.log("App.tsx: Python ready status:", pyReady);
         } else {
           console.error(
@@ -154,7 +136,7 @@ export default function App() {
             port
           );
           setHttpPort(null);
-          setCurrentActiveFile(null);
+          setCurrentActiveClip(null);
           // Optionally, inform the user that the audio server isn't available
         }
 
@@ -163,7 +145,7 @@ export default function App() {
       } catch (err) {
         console.error("App.tsx: Error during initial server info fetch:", err);
         setHttpPort(null);
-        setCurrentActiveFile(null);
+        setCurrentActiveClip(null);
         // Optionally, inform the user
       }
     };
@@ -189,7 +171,7 @@ export default function App() {
   }, []); // Empty dependency array ensures this runs once on mount
 
   useWindowFocus(
-    () => toast.success("Window is focused"),
+    () => handleSync(),
     () => console.log("Tab is blurred"),
     { fireOnMount: false, throttleMs: 500 }
   );
@@ -197,7 +179,7 @@ export default function App() {
   const createActiveFileFromTimelineItem = (
     item: main.TimelineItem,
     port: Number
-  ): ActiveFile | null => {
+  ): ActiveClip | null => {
     if (
       !item.processed_file_name ||
       typeof item.source_start_frame !== "number" ||
@@ -221,12 +203,13 @@ export default function App() {
     };
   };
 
+  // set active file
   useEffect(() => {
     const init = async () => {
       if (!httpPort) {
         const port = await GetGoServerPort();
         setHttpPort(port);
-        if (currentActiveFile !== null) setCurrentActiveFile(null);
+        if (currentActiveClip !== null) setCurrentActiveClip(null);
         console.log("No httpPort, setting currentActiveFile to null.");
       }
     };
@@ -234,11 +217,11 @@ export default function App() {
 
     if (!httpPort) return;
 
-    let newActiveFileTarget: ActiveFile | null = null;
+    let newActiveFileTarget: ActiveClip | null = null;
     const audioTrackItems = projectData?.timeline?.audio_track_items;
 
     if (!audioTrackItems || audioTrackItems.length === 0) {
-      setCurrentActiveFile(null);
+      setCurrentActiveClip(null);
       return;
     }
 
@@ -248,8 +231,8 @@ export default function App() {
       return a.end_frame - b.end_frame;
     });
 
-    let TId = currentActiveFile?.id;
-    if (currentActiveFile && TId !== "initial-preview") {
+    let TId = currentActiveClip?.id;
+    if (currentActiveClip && TId !== "initial-preview") {
       const currentItemInNewList = sortedAudioItems.find(
         (item) => (item.id || item.processed_file_name) === TId
       );
@@ -271,16 +254,16 @@ export default function App() {
     }
 
     if (
-      currentActiveFile?.id !== newActiveFileTarget?.id ||
-      currentActiveFile?.previewUrl !== newActiveFileTarget?.previewUrl
+      currentActiveClip?.id !== newActiveFileTarget?.id ||
+      currentActiveClip?.previewUrl !== newActiveFileTarget?.previewUrl
     ) {
-      setCurrentActiveFile(newActiveFileTarget);
+      setCurrentActiveClip(newActiveFileTarget);
       console.log(
         "useEffect: currentActiveFile updated to:",
         newActiveFileTarget
       );
     }
-  }, [httpPort, projectData, currentActiveFile?.id]);
+  }, [httpPort, projectData, currentActiveClip?.id]);
 
   const handleAudioFileSelection = (selectedItemId: string) => {
     if (
@@ -304,7 +287,7 @@ export default function App() {
         httpPort
       );
       if (newActiveFile) {
-        setCurrentActiveFile(newActiveFile);
+        setCurrentActiveClip(newActiveFile);
         console.log(
           "FileSelector onFileChange: currentActiveFile set to:",
           newActiveFile
@@ -334,7 +317,7 @@ export default function App() {
 
   const [paddingLeft, setPaddingLeft] = useState(DEFAULT_PADDING);
   const [paddingRight, setPaddingRight] = useState(DEFAULT_PADDING);
-  const [makeNewTimeline, setMakeNewTimeline] = useState(false);
+  //const [makeNewTimeline, setMakeNewTimeline] = useState(false);
   const [paddingLocked, setPaddingLinked] = useState(true);
 
   const handlePaddingChange = (side: "left" | "right", value: number) => {
@@ -379,9 +362,7 @@ export default function App() {
             >
               <XIcon className="scale-90" strokeWidth={2.5} />
             </Button>
-            <h1 className="text-sm font-normal text-neutral-200">
-              DR. Silence
-            </h1>
+            <h1 className="text-sm font-normal text-neutral-200">Pruner</h1>
             <div className="flex items-center space-x-2">
               <Button
                 size="icon"
@@ -424,10 +405,10 @@ export default function App() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-          {projectData?.files && currentActiveFile?.id && (
+          {projectData?.files && currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
-              currentFileId={currentActiveFile?.id || null}
+              currentFileId={currentActiveClip?.id || null}
               onFileChange={handleAudioFileSelection}
               disabled={
                 !httpPort ||
@@ -461,9 +442,9 @@ export default function App() {
                 </div>
               </div>
               <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
-                {httpPort && currentActiveFile?.processedFileName && (
+                {httpPort && currentActiveClip?.processedFileName && (
                   <WaveformPlayer
-                    audioUrl={`http://localhost:${httpPort}/${currentActiveFile?.processedFileName}.wav`}
+                    audioUrl={`http://localhost:${httpPort}/${currentActiveClip?.processedFileName}.wav`}
                     silenceData={silenceData}
                     threshold={threshold}
                   />
@@ -571,12 +552,14 @@ export default function App() {
                       />
                       <Label className="text-base">Make new timeline</Label>
                     </div> */}
-                    {projectData && (
-                      <RemoveSilencesButton projectData={projectData} />
+                    {projectData && detectionParams && (
+                      <RemoveSilencesButton
+                        projectData={projectData}
+                        keepSilenceSegments={false}
+                        detectionParams={detectionParams}
+                      />
                     )}
                   </div>
-                  {/* python status tester */}
-                  <Button onClick={() => handleSyncClick()}>Python Test</Button>
                   <Toaster
                     toastOptions={{
                       classNames: {
@@ -584,16 +567,6 @@ export default function App() {
                       },
                     }}
                   />
-                  <Button
-                    onClick={() =>
-                      toast.success("Connected to DaVinci", {
-                        dismissible: true,
-                        position: "bottom-left",
-                      })
-                    }
-                  >
-                    Success
-                  </Button>
                 </div>
               </div>
             </div>

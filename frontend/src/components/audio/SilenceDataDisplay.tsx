@@ -1,10 +1,10 @@
 // src/components/SilenceDataDisplay.tsx (or your existing audioprocessor.tsx, refactored)
 
 import React from "react";
-import type { ActiveFile, SilencePeriod } from "../../types";
+import type { ActiveClip, SilencePeriod } from "../../types";
 
 interface SilenceDataLogProps {
-  activeFile: ActiveFile | null; // For displaying the name, etc.
+  activeFile: ActiveClip | null; // For displaying the name, etc.
   silenceData: SilencePeriod[] | null;
   isLoading: boolean;
   error: string | null;

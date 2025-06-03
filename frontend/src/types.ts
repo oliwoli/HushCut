@@ -4,7 +4,7 @@ export interface SilencePeriod {
   end: number;
 }
 
-export interface ActiveFile {
+export interface ActiveClip {
   id: string;                   // Unique identifier (e.g., TimelineItem.ID or ProcessedFileName if unique)
   name: string;                 // Display name for the selector (TimelineItem.Name)
   sourceFilePath: string;       // Full path to the source file (TimelineItem.SourceFilePath)
