@@ -440,6 +440,7 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 				commandResp := PythonCommandResponse{
 					Status:  "success",
 					Message: fmt.Sprintf("Sync data processed. Project: %s, Timeline: %s", data.ProjectName, data.Timeline.Name),
+					Data:    data,
 				}
 
 				// Send the response back to the SyncWithDavinci goroutine
@@ -484,9 +485,9 @@ func (a *App) GetProjectDataPayloadType() ProjectDataPayload {
 }
 
 type PythonCommandResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-	// Data    interface{} `json:"data,omitempty"` // If Python commands return specific data
+	Status  string      `json:"status"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"` // If Python commands return specific data
 }
 
 func (a *App) SendCommandToPython(commandName string, params map[string]interface{}) (*PythonCommandResponse, error) {
@@ -554,9 +555,9 @@ func (a *App) SendCommandToPython(commandName string, params map[string]interfac
 	return &pyResp, nil
 }
 
-func (a *App) SyncWithDavinci() (string, error) {
+func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) {
 	if !a.pythonReady {
-		return "", fmt.Errorf("python backend not ready")
+		return nil, fmt.Errorf("python backend not ready")
 	}
 
 	// 1) Generate a unique taskId
@@ -581,14 +582,14 @@ func (a *App) SyncWithDavinci() (string, error) {
 		a.pendingMu.Lock()
 		delete(a.pendingTasks, taskID)
 		a.pendingMu.Unlock()
-		return "", fmt.Errorf("error sending sync command to Python: %w", err)
+		return nil, fmt.Errorf("error sending sync command to Python: %w", err)
 	}
 	if pyResp.Status != "success" {
 		// Python responded with some error
 		a.pendingMu.Lock()
 		delete(a.pendingTasks, taskID)
 		a.pendingMu.Unlock()
-		return "", fmt.Errorf("python command error: %s", pyResp.Message)
+		return nil, fmt.Errorf("python command error: %s", pyResp.Message)
 	}
 	// At this point, Python has definitely “ACK‐ed” the request, so we can block.
 
@@ -602,13 +603,13 @@ func (a *App) SyncWithDavinci() (string, error) {
 
 	// 7) Check status
 	if finalResponse.Status != "success" {
-		return "", fmt.Errorf("error: %s", finalResponse.Message)
+		return nil, fmt.Errorf("error: %s", finalResponse.Message)
 	}
 
 	log.Printf("Go: Python reported success: %s", finalResponse.Message)
 
 	// 8) Return whatever message or data you like. Let’s return the Message.
-	return finalResponse.Message, nil
+	return &finalResponse, nil
 }
 
 func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (string, error) {

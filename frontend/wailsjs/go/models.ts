@@ -241,6 +241,7 @@ export namespace main {
 	export class PythonCommandResponse {
 	    status: string;
 	    message: string;
+	    data?: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new PythonCommandResponse(source);
@@ -250,6 +251,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.status = source["status"];
 	        this.message = source["message"];
+	        this.data = source["data"];
 	    }
 	}
 	

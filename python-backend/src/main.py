@@ -612,28 +612,39 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     script_start_time: float = time()
     project_unchanged = False
     if not RESOLVE and not resync_with_resolve():
+        PROJECT_DATA = ProjectData()
         message = "Could not connect to DaVinci Resolve. Is it running?"
         send_message_to_go(
             "showAlert",
             {"title": "DaVinci Resolve Error", "message": message, "severity": "error"},
             task_id=task_id
         )
+        send_message_to_go(
+            "projectData",
+            PROJECT_DATA,
+        )
         return False
 
     PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
     
     if not PROJECT:
+        PROJECT_DATA = ProjectData()
         message = "Please open a project and open a timeline."
         send_message_to_go(
             "showAlert",
             {"title": "No open Project", "message": message, "severity": "error"},
             task_id=task_id
         )
+        send_message_to_go(
+            "projectData",
+            PROJECT_DATA,
+        )
         return False
 
     TIMELINE = PROJECT.GetCurrentTimeline()
     if not TIMELINE:
-        message = "Please make sure you opened a timeline."
+        PROJECT_DATA = ProjectData()
+        message = "Please open a timeline."
         send_message_to_go(
             "showAlert",
             {"title": "No open timeline", "message": message, "severity": "error"},

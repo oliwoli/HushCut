@@ -15,6 +15,17 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
 import { clamp, cn } from "@/lib/utils";
 import { GetGoServerPort, SyncWithDavinci } from "@wails/go/main/App";
 import { GetPythonReadyStatus } from "@wails/go/main/App";
@@ -33,12 +44,6 @@ EventsOn("showToast", (data) => {
   console.log("Event: showToast", data);
   // Simple alert for now, TODO: use nicer shadcn component
   alert(`Toast [${data.toastType || "info"}]: ${data.message}`);
-});
-
-EventsOn("showAlert", (data) => {
-  console.log("Event: showAlert", data);
-  // Simple alert for now, TODO: use nicer shadcn component
-  alert(`Alert [${data.severity || "info"}]: ${data.title} - ${data.message}`);
 });
 
 EventsOn("projectDataReceived", (projectData: main.ProjectDataPayload) => {
@@ -78,11 +83,40 @@ export default function App() {
   const handleSyncClick = () => {
     toast.promise(SyncWithDavinci(), {
       loading: "Syncing with DaVinci Resolve…",
-      success: () => "Successfully synced with DaVinci Resolve",
-      error: (err: any) =>
-        err ? `Sync failed. ${err.message || err}` : "Sync failed.",
+      success: (response: main.PythonCommandResponse) => {
+        console.log("SyncWithDavinci success:", response);
+        setProjectData(response.data);
+        return "Successfully synced with DaVinci Resolve";
+      },
+      error: (err: any) => {
+        console.error("SyncWithDavinci error:", err);
+        toast.error(
+          err ? `Sync failed. ${err.message || err}` : "Sync failed."
+        );
+        setProjectData(null);
+        return "Sync failed.";
+      },
     });
   };
+
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertData, setAlertData] = useState({
+    title: "",
+    message: "",
+    severity: "info",
+  });
+
+  useEffect(() => {
+    EventsOn("showAlert", (data) => {
+      console.log("Event: showAlert", data);
+      setAlertData({
+        title: data.title || "No title",
+        message: data.message || "No message",
+        severity: data.severity || "info",
+      });
+      setAlertOpen(true);
+    });
+  }, []);
 
   // effect to update projectData with silenceData
   useEffect(() => {
@@ -188,67 +222,57 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!httpPort) {
-      if (currentActiveFile !== null) setCurrentActiveFile(null);
-      return;
-    }
-
-    const initialSystemPreview: ActiveFile = {
-      id: "initial-preview",
-      name: "No audio selected",
-      sourceFilePath: "", // No specific source file for this state
-      processedFileName: "", // No specific processed file for this state
-      previewUrl: "", // No URL for this state, or a dummy one if WaveformPlayer needs it
-      sourceStartFrame: 0,
-      sourceEndFrame: 0,
+    const init = async () => {
+      if (!httpPort) {
+        const port = await GetGoServerPort();
+        setHttpPort(port);
+        if (currentActiveFile !== null) setCurrentActiveFile(null);
+        console.log("No httpPort, setting currentActiveFile to null.");
+      }
     };
+    init();
+
+    if (!httpPort) return;
 
     let newActiveFileTarget: ActiveFile | null = null;
     const audioTrackItems = projectData?.timeline?.audio_track_items;
 
-    if (audioTrackItems && audioTrackItems.length > 0) {
-      const sortedAudioItems = [...audioTrackItems].sort((a, b) => {
-        if (a.track_index !== b.track_index)
-          return a.track_index - b.track_index;
-        if (a.start_frame !== b.start_frame)
-          return a.start_frame - b.start_frame;
-        return a.end_frame - b.end_frame;
-      });
+    if (!audioTrackItems || audioTrackItems.length === 0) {
+      setCurrentActiveFile(null);
+      return;
+    }
 
-      let TId = currentActiveFile?.id;
-      if (currentActiveFile && TId !== "initial-preview") {
-        const currentItemInNewList = sortedAudioItems.find(
-          (item) => (item.id || item.processed_file_name) === TId
+    const sortedAudioItems = [...audioTrackItems].sort((a, b) => {
+      if (a.track_index !== b.track_index) return a.track_index - b.track_index;
+      if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
+      return a.end_frame - b.end_frame;
+    });
+
+    let TId = currentActiveFile?.id;
+    if (currentActiveFile && TId !== "initial-preview") {
+      const currentItemInNewList = sortedAudioItems.find(
+        (item) => (item.id || item.processed_file_name) === TId
+      );
+      if (currentItemInNewList) {
+        newActiveFileTarget = createActiveFileFromTimelineItem(
+          currentItemInNewList,
+          httpPort
         );
-        if (currentItemInNewList) {
-          newActiveFileTarget = createActiveFileFromTimelineItem(
-            currentItemInNewList,
-            httpPort
-          );
-        }
-      }
-
-      if (!newActiveFileTarget) {
-        // If no current valid selection, or if it was initial
-        for (const item of sortedAudioItems) {
-          // Try to pick the first valid item
-          newActiveFileTarget = createActiveFileFromTimelineItem(
-            item,
-            httpPort
-          );
-          if (newActiveFileTarget) break; // Found a valid one
-        }
       }
     }
 
     if (!newActiveFileTarget) {
-      // If still no target (e.g. no valid items), use initial state
-      newActiveFileTarget = initialSystemPreview;
+      // If no current valid selection, or if it was initial
+      for (const item of sortedAudioItems) {
+        // Try to pick the first valid item
+        newActiveFileTarget = createActiveFileFromTimelineItem(item, httpPort);
+        if (newActiveFileTarget) break; // Found a valid one
+      }
     }
 
     if (
-      currentActiveFile?.id !== newActiveFileTarget.id ||
-      currentActiveFile?.previewUrl !== newActiveFileTarget.previewUrl
+      currentActiveFile?.id !== newActiveFileTarget?.id ||
+      currentActiveFile?.previewUrl !== newActiveFileTarget?.previewUrl
     ) {
       setCurrentActiveFile(newActiveFileTarget);
       console.log(
@@ -385,6 +409,21 @@ export default function App() {
         <header className="flex items-center justify-between"></header>
 
         <main className="flex-1 gap-8 mt-8 max-w-screen select-none">
+          <AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{alertData.title}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {alertData.message}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogAction onClick={() => setAlertOpen(false)}>
+                  Continue
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           {projectData?.files && currentActiveFile?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
@@ -415,8 +454,9 @@ export default function App() {
                     <br />
                     Threshold
                   </p>
-                  <span className="text-sm text-zinc-100 whitespace-nowrap">
-                    {threshold.toFixed(2)} dB
+                  <span className="text-xs text-zinc-100 whitespace-nowrap font-mono tracking-tighter">
+                    {threshold.toFixed(2)}{" "}
+                    <span className="opacity-80">dB</span>
                   </span>
                 </div>
               </div>
@@ -521,8 +561,8 @@ export default function App() {
                     controls
                   /> */}
 
-                  <div className="items-center space-y-2">
-                    <div className="flex items-center space-x-2">
+                  <div className="items-center space-y-2 mt-4">
+                    {/* <div className="flex items-center space-x-2">
                       <Checkbox
                         checked={makeNewTimeline}
                         onCheckedChange={(checked) =>
@@ -530,7 +570,7 @@ export default function App() {
                         }
                       />
                       <Label className="text-base">Make new timeline</Label>
-                    </div>
+                    </div> */}
                     {projectData && (
                       <RemoveSilencesButton projectData={projectData} />
                     )}

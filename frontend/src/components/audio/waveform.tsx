@@ -486,74 +486,74 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     );
 
     return (
-        <div className="overflow-hidden mx-2">
-            <div
-                ref={waveformContainerRef}
-                className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-visible relative"
-            >
-                <canvas className="absolute inset-0 z-0" />
+      <div className="overflow-hidden mx-2">
+        <div
+          ref={waveformContainerRef}
+          className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-visible relative"
+        >
+          <canvas className="absolute inset-0 z-0" />
 
-                {/* Threshold overlay line */}
-                <div
-                    className="absolute w-full h-[2px] rounded-full bg-teal-400 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.6)]"
-                    style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
-                />
+          {/* Threshold overlay line */}
+          <div
+            className="absolute w-full h-[2px] rounded-full bg-teal-400 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.6)]"
+            style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
+          />
 
-                {/* <div
+          {/* <div
                     className="absolute top-0 w-[2px] h-full bg-white z-[30] pointer-events-none"
                     style={{ left: `${currentTime * (wavesurferRef.current?.options.minPxPerSec || 0)}px` }} // update dynamically
                 /> */}
 
-                {isLoading && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white z-10">
-                        Loading waveform...
-                    </div>
-                )}
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white z-10">
+              Loading waveform...
             </div>
-
-            <div
-                ref={minimapContainerRef}
-                className="h-[40px] w-full mt-1 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-hidden"
-            >
-            </div>
-
-            <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
-                <button
-                    onClick={handlePlayPause}
-                    disabled={isLoading || !duration}
-                    className="text-gray-400 hover:text-amber-50"
-                >
-                    {isPlaying ? (
-                        <PauseIcon size={34} className="p-1.5" />
-                    ) : (
-                        <PlayIcon size={34} className="p-1.5" />
-                    )}
-                </button>
-                {!isLoading && duration > 0 && (
-                    <button
-                        onClick={toggleSkipRegions}
-                        className={`p-1.5 rounded flex items-center text-xs ${skipRegionsEnabled
-                            ? "text-amber-500 hover:text-amber-400"
-                            : "text-stone-500 dark:hover:text-gray-400"
-                            }`}
-                        title={
-                            skipRegionsEnabled
-                                ? "Disable skipping silent regions"
-                                : "Enable skipping silent regions"
-                        }
-                    >
-                        <RedoDotIcon size={21} className="mr-1" />
-                        {/* Optional text: {skipRegionsEnabled ? "Skip ON" : "Skip OFF"} */}
-                    </button>
-                )}
-                {!isLoading && duration > 0 && (
-                    <span className="ml-2 text-sm gap-1.5 flex pt-1 text-gray-400">
-                        <span>{formattedCurrentTime}</span> /{" "}
-                        <span>{formattedDuration}</span>
-                    </span>
-                )}
-            </div>
+          )}
         </div>
+
+        <div
+          ref={minimapContainerRef}
+          className="h-[40px] w-full mt-1 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-hidden"
+        ></div>
+
+        <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
+          <button
+            onClick={handlePlayPause}
+            disabled={isLoading || !duration}
+            className="text-gray-400 hover:text-amber-50"
+          >
+            {isPlaying ? (
+              <PauseIcon size={34} className="p-1.5" />
+            ) : (
+              <PlayIcon size={34} className="p-1.5" />
+            )}
+          </button>
+          {!isLoading && duration > 0 && (
+            <button
+              onClick={toggleSkipRegions}
+              className={`p-1.5 rounded flex items-center text-xs ${
+                skipRegionsEnabled
+                  ? "text-amber-500 hover:text-amber-400"
+                  : "text-stone-500 dark:hover:text-gray-400"
+              }`}
+              title={
+                skipRegionsEnabled
+                  ? "Disable skipping silent regions"
+                  : "Enable skipping silent regions"
+              }
+            >
+              <RedoDotIcon size={21} className="mr-1" />
+              {/* Optional text: {skipRegionsEnabled ? "Skip ON" : "Skip OFF"} */}
+            </button>
+          )}
+          {!isLoading && duration > 0 && (
+            <span className="ml-2 text-xs gap-1.5 flex pt-1 text-gray-400/80 font-mono tracking-tighter mb-[3px]">
+              <span>{formattedCurrentTime}</span> /{" "}
+              <span>{formattedDuration}</span>
+            </span>
+          )}
+        </div>
+      </div>
     );
 };
 

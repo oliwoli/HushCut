@@ -11,7 +11,7 @@ html {
 
 
 body {
-  font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+  font-family: "Geist", "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
     "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;
 }
@@ -22,6 +22,22 @@ body {
   font-weight: 400;
   src: local(""),
     url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 400;
+  src: local(""),
+    url("assets/fonts/Geist-VariableFont_wght.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "GeistMono";
+  font-style: normal;
+  font-weight: 400;
+  src: local(""),
+    url("assets/fonts/GeistMono-VariableFont_wght.woff2") format("woff2");
 }
 
 #app {
@@ -140,6 +156,11 @@ div[part="minimap-overlay"] {
   background: transparent;
 }
 
+@theme {
+  --font-mono: "GeistMono", monospace;
+}
+
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -220,7 +241,7 @@ div[part="minimap-overlay"] {
   --card-foreground: oklch(0.985 0.002 247.839);
   --popover: oklch(0.21 0.006 285.885);
   --popover-foreground: oklch(0.985 0.002 247.839);
-  --primary: oklch(0.552 0.016 285.938);
+  --primary: oklch(.922 0 0);
   --primary-foreground: oklch(0.21 0.034 264.665);
   --secondary: oklch(0.278 0.033 256.848);
   --secondary-foreground: oklch(0.985 0.002 247.839);
