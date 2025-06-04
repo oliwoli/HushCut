@@ -319,21 +319,50 @@ func (a *App) DetectSilences(
 	minSilenceDurationSeconds float64,
 	paddingLeftSeconds float64,
 	paddingRightSeconds float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
 ) ([]SilencePeriod, error) {
-	// ... (ffmpeg setup, LookPath check etc.) ...
+
+	if clipStartSeconds < 0 {
+		clipStartSeconds = 0
+	}
+
+	if clipEndSeconds > 0 && clipEndSeconds <= clipStartSeconds {
+		return nil, fmt.Errorf("DetectSilences: clipEndSeconds (%.3f) must be greater than clipStartSeconds (%.3f) if a specific end is provided", clipEndSeconds, clipStartSeconds)
+	}
 
 	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
 
 	// format loudnessThreshold from num to num + "dB"
 	loudnessThresholdStr := fmt.Sprintf("%f", loudnessThreshold) + "dB"
 
+	trimFilter := fmt.Sprintf(
+		"atrim=start=%f:end=%f",
+		clipStartSeconds,
+		clipEndSeconds,
+	)
+	mainFilter := fmt.Sprintf(
+		"silencedetect=n=%s:d=%s",
+		loudnessThresholdStr,
+		fmt.Sprintf("%f", minSilenceDurationSeconds),
+	)
+
+	combinedFilter := fmt.Sprintf("%s,%s", trimFilter, mainFilter)
+
+	// outputTarget := "/dev/null"
+	// if runtime.Environment(a.ctx).Platform == "windows" {
+	// 	outputTarget = "NUL"
+	// }
+
 	args := []string{
 		"-nostdin",
 		"-i", absPath,
-		"-af", fmt.Sprintf("silencedetect=n=%s:d=%s", loudnessThresholdStr, fmt.Sprintf("%f", minSilenceDurationSeconds)),
+		"-af", combinedFilter,
 		"-f", "null",
 		"-",
 	}
+
+	log.Println("FFmpeg command: ", args)
 
 	cmd := exec.Command("ffmpeg", args...)
 	var outputBuffer bytes.Buffer
@@ -394,6 +423,8 @@ func (a *App) GetOrDetectSilencesWithCache(
 	minSilenceDurationSeconds float64,
 	paddingLeftSeconds float64,
 	paddingRightSeconds float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
 ) ([]SilencePeriod, error) {
 	key := CacheKey{
 		FilePath:                  filePath,
@@ -416,7 +447,15 @@ func (a *App) GetOrDetectSilencesWithCache(
 	// fmt.Println("Cache miss for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
 
 	// 2. If not found, perform the detection
-	silences, err := a.DetectSilences(filePath, loudnessThreshold, minSilenceDurationSeconds, paddingLeftSeconds, paddingRightSeconds)
+	silences, err := a.DetectSilences(
+		filePath,
+		loudnessThreshold,
+		minSilenceDurationSeconds,
+		paddingLeftSeconds,
+		paddingRightSeconds,
+		clipStartSeconds,
+		clipEndSeconds,
+	)
 	if err != nil {
 		// Do not cache errors, so subsequent calls can retry.
 		return nil, err

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import deepEqual from "fast-deep-equal";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
@@ -31,8 +31,6 @@ import { ActiveClip, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
 import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
-import SimpleRestrictedPlayer from "./components/audio/simpleRestrictedPlayer";
-import MinimalPlayer from "./components/audio/minimalPlayer";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
 
 EventsOn("showToast", (data) => {
@@ -59,18 +57,75 @@ function ResetButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+const DEFAULT_THRESHOLD = -30;
+const DEFAULT_MIN_DURATION = 1.0;
+const MIN_DURATION_LIMIT = 0.01;
+const DEFAULT_PADDING = 0.25;
+
+const getDefaultDetectionParams = (): DetectionParams => ({
+  loudnessThreshold: DEFAULT_THRESHOLD,
+  minSilenceDurationSeconds: DEFAULT_MIN_DURATION,
+  paddingLeftSeconds: DEFAULT_PADDING,
+  paddingRightSeconds: DEFAULT_PADDING,
+  // If you want to store paddingLocked per-clip, add it here:
+  // paddingLocked: true,
+});
+
 export default function App() {
   const [httpPort, setHttpPort] = useState<Number | null>(null);
   const [currentActiveClip, setCurrentActiveClip] = useState<ActiveClip | null>(
     null
-  ); // Initialize as null
+  );
   const [projectData, setProjectData] =
     useState<main.ProjectDataPayload | null>(null);
 
-  const [detectionParams, setDetectionParams] =
-    useState<DetectionParams | null>(null);
+  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
+  const [minDuration, setMinDurationRaw] = useState(DEFAULT_MIN_DURATION);
 
-  const { silenceData } = useSilenceData(currentActiveClip, detectionParams);
+  const setMinDuration = (value: number) => {
+    setMinDurationRaw(clamp(value, MIN_DURATION_LIMIT));
+  };
+
+  const [paddingLeft, setPaddingLeft] = useState(DEFAULT_PADDING);
+  const [paddingRight, setPaddingRight] = useState(DEFAULT_PADDING);
+  //const [makeNewTimeline, setMakeNewTimeline] = useState(false);
+  const [paddingLocked, setPaddingLinked] = useState(true);
+
+  const [allClipDetectionParams, setAllClipDetectionParams] = useState<
+    Record<string, DetectionParams>
+  >({});
+
+  const currentClipEffectiveParams = useMemo<DetectionParams | null>(() => {
+    if (currentActiveClip?.id) {
+      // If params for this clip exist, use them
+      if (allClipDetectionParams[currentActiveClip.id]) {
+        return allClipDetectionParams[currentActiveClip.id];
+      }
+      // If not, it means the clip was just selected and UI defaults are active
+      // We can return a temporary object based on current UI state,
+      // which will soon be saved by the effect below.
+      return {
+        loudnessThreshold: threshold,
+        minSilenceDurationSeconds: minDuration,
+        paddingLeftSeconds: paddingLeft,
+        paddingRightSeconds: paddingRight,
+      };
+    }
+    return getDefaultDetectionParams(); // Or null if you prefer to handle no clip selected differently
+  }, [
+    currentActiveClip?.id,
+    allClipDetectionParams,
+    threshold,
+    minDuration,
+    paddingLeft,
+    paddingRight,
+  ]);
+
+  const { silenceData } = useSilenceData(
+    currentActiveClip,
+    currentClipEffectiveParams,
+    projectData?.timeline?.fps || null
+  );
 
   const [activeClipSegmentPeakData, setActiveClipSegmentPeakData] =
     useState<main.PrecomputedWaveformData | null>(null);
@@ -400,14 +455,14 @@ export default function App() {
     }
   }, [httpPort, projectData, currentActiveClip?.id]);
 
-  const handleAudioFileSelection = (selectedItemId: string) => {
+  const handleAudioClipSelection = (selectedItemId: string) => {
     if (
       !projectData?.timeline?.audio_track_items ||
       !httpPort ||
       !selectedItemId
     ) {
       console.warn(
-        "Cannot handle file selection: Missing data, port, or selectedItemId"
+        "Cannot handle clip selection: Missing data, port, or selectedItemId"
       );
       return;
     }
@@ -438,22 +493,73 @@ export default function App() {
     }
   };
 
-  const DEFAULT_THRESHOLD = -30;
-  const DEFAULT_MIN_DURATION = 1.0;
-  const MIN_DURATION_LIMIT = 0.01;
-  const DEFAULT_PADDING = 0.25;
+  // EFFECT: Load parameters into UI when currentActiveClip changes
+  useEffect(() => {
+    if (currentActiveClip?.id) {
+      const paramsForCurrentClip = allClipDetectionParams[currentActiveClip.id];
+      if (paramsForCurrentClip) {
+        // Load stored params into UI
+        setThreshold(paramsForCurrentClip.loudnessThreshold);
+        setMinDurationRaw(paramsForCurrentClip.minSilenceDurationSeconds); // Use Raw to bypass clamp temporarily if needed, though direct set is fine
+        setPaddingLeft(paramsForCurrentClip.paddingLeftSeconds);
+        setPaddingRight(paramsForCurrentClip.paddingRightSeconds);
+        // If paddingLocked is stored per clip:
+        // setPaddingLinked(paramsForCurrentClip.paddingLocked !== undefined ? paramsForCurrentClip.paddingLocked : true);
+      } else {
+        // No params stored for this clip yet, reset UI to defaults
+        // The next effect will then save these defaults for this new clip.
+        setThreshold(DEFAULT_THRESHOLD);
+        setMinDurationRaw(DEFAULT_MIN_DURATION);
+        setPaddingLeft(DEFAULT_PADDING);
+        setPaddingRight(DEFAULT_PADDING);
+        setPaddingLinked(true); // Reset lock state too
+      }
+    } else {
+      // No active clip, reset UI to defaults (optional, based on desired UX)
+      setThreshold(DEFAULT_THRESHOLD);
+      setMinDurationRaw(DEFAULT_MIN_DURATION);
+      setPaddingLeft(DEFAULT_PADDING);
+      setPaddingRight(DEFAULT_PADDING);
+      setPaddingLinked(true);
+    }
+  }, [currentActiveClip?.id]);
 
-  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
-  const [minDuration, setMinDurationRaw] = useState(DEFAULT_MIN_DURATION);
+  // EFFECT: Save UI parameters to allClipDetectionParams when they change
+  useEffect(() => {
+    if (currentActiveClip?.id) {
+      const newParamsForCurrentClip: DetectionParams = {
+        loudnessThreshold: threshold,
+        minSilenceDurationSeconds: minDuration, // minDuration is already clamped
+        paddingLeftSeconds: paddingLeft,
+        paddingRightSeconds: paddingRight,
+        // If paddingLocked is stored per clip:
+        // paddingLocked: paddingLocked,
+      };
 
-  const setMinDuration = (value: number) => {
-    setMinDurationRaw(clamp(value, MIN_DURATION_LIMIT));
-  };
-
-  const [paddingLeft, setPaddingLeft] = useState(DEFAULT_PADDING);
-  const [paddingRight, setPaddingRight] = useState(DEFAULT_PADDING);
-  //const [makeNewTimeline, setMakeNewTimeline] = useState(false);
-  const [paddingLocked, setPaddingLinked] = useState(true);
+      // Only update if they are actually different, using deepEqual
+      if (
+        !deepEqual(
+          allClipDetectionParams[currentActiveClip.id],
+          newParamsForCurrentClip
+        )
+      ) {
+        setAllClipDetectionParams((prevParams) => ({
+          ...prevParams,
+          [currentActiveClip.id as string]: newParamsForCurrentClip, // Ensure id is string if that's the key type
+        }));
+      }
+    }
+    // This effect runs when any UI parameter changes OR when the current clip changes
+    // (to ensure defaults are saved for a newly selected clip if not already present).
+  }, [
+    threshold,
+    minDuration,
+    paddingLeft,
+    paddingRight,
+    paddingLocked,
+    currentActiveClip?.id,
+    allClipDetectionParams,
+  ]);
 
   const handlePaddingChange = (side: "left" | "right", value: number) => {
     if (paddingLocked) {
@@ -473,16 +579,6 @@ export default function App() {
   };
 
   const titleBarHeight = "2.35rem";
-
-  useEffect(() => {
-    // Update detectionParams when individual parameter states change
-    setDetectionParams({
-      loudnessThreshold: threshold,
-      minSilenceDurationSeconds: minDuration,
-      paddingLeftSeconds: paddingLeft,
-      paddingRightSeconds: paddingRight,
-    });
-  }, [threshold, minDuration, paddingLeft, paddingRight]);
 
   return (
     <>
@@ -530,7 +626,7 @@ export default function App() {
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
               currentFileId={currentActiveClip?.id || null}
-              onFileChange={handleAudioFileSelection}
+              onFileChange={handleAudioClipSelection}
               disabled={
                 !httpPort ||
                 !projectData?.timeline?.audio_track_items ||
@@ -568,7 +664,7 @@ export default function App() {
                   currentActiveClip &&
                   projectData &&
                   projectData.timeline &&
-                  detectionParams && (
+                  currentClipEffectiveParams && (
                     <WaveformPlayer
                       audioUrl={cutAudioSegmentUrl}
                       peakData={activeClipSegmentPeakData}
@@ -578,7 +674,7 @@ export default function App() {
                       }
                       silenceData={silenceData}
                       projectFrameRate={projectData.timeline.fps}
-                      detectionParams={detectionParams}
+                      detectionParams={currentClipEffectiveParams}
                     />
                   )}
                 <div className="space-y-2 w-full">
@@ -669,16 +765,17 @@ export default function App() {
                 </div>
                 <div className="flex flex-col space-y-8 w-full">
                   <div className="items-center space-y-2 mt-4">
-                    {projectData && detectionParams && (
+                    {projectData && currentClipEffectiveParams && (
                       <RemoveSilencesButton
                         projectData={projectData}
                         keepSilenceSegments={false}
-                        detectionParams={detectionParams}
+                        allClipDetectionParams={allClipDetectionParams}
+                        defaultDetectionParams={getDefaultDetectionParams()}
                       />
                     )}
                   </div>
                   <Toaster
-                    position="top-right"
+                    position="bottom-right"
                     toastOptions={{
                       classNames: {
                         toast:

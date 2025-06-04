@@ -1,6 +1,7 @@
 // src/components/PythonRunnerComponent.tsx
 import React, { useEffect, useState, useRef, useCallback } from "react"; // Added useCallback
 import { Button } from "@/components/ui/button";
+import deepEqual from "fast-deep-equal";
 import { SliceIcon } from "lucide-react";
 
 import { EventsOn } from "@wails/runtime/runtime";
@@ -14,137 +15,135 @@ import type { DetectionParams, SilencePeriod } from "../types";
 
 interface PythonRunnerProps {
   projectData: main.ProjectDataPayload;
+  allClipDetectionParams: Record<string, DetectionParams>; // Renamed for clarity in this component
+  defaultDetectionParams: DetectionParams; // Renamed for clarity
   onScriptLog?: (line: string) => void;
   onScriptDone?: (message: string) => void;
   onScriptError?: (error: any) => void;
   buttonText?: string;
   keepSilenceSegments?: boolean;
-  detectionParams: DetectionParams;
 }
 
 function areDetectionParamsEqual(
   params1: DetectionParams | null,
   params2: DetectionParams | null
 ): boolean {
-  if (!params1 && !params2) return true; // Both null, considered equal
-  if (!params1 || !params2) return false; // One is null, other isn't, not equal
+  if (!params1 && !params2) return true;
+  if (!params1 || !params2) return false;
   return (
     params1.loudnessThreshold === params2.loudnessThreshold &&
     params1.minSilenceDurationSeconds === params2.minSilenceDurationSeconds &&
     params1.paddingLeftSeconds === params2.paddingLeftSeconds &&
     params1.paddingRightSeconds === params2.paddingRightSeconds
-    // Add checks for any other fields in DetectionParams if they exist
   );
 }
 
-// Helper function (as defined above)
 // Helper function
 async function prepareProjectDataWithEdits(
   projectDataInput: main.ProjectDataPayload,
-  // For now, we still use the single detectionParams from props.
-  // This will change when we implement per-clip params.
-  detectionParams: DetectionParams,
-  keepSilenceSegments: boolean
+  allClipParams: Record<string, DetectionParams>,
+  keepSilenceSegments: boolean,
+  defaultParams: DetectionParams
+  // FPS is implicitly available in projectDataInput.timeline.fps
 ): Promise<main.ProjectDataPayload> {
-  // Deep copy to avoid mutating the input
   let workingProjectData: main.ProjectDataPayload = JSON.parse(
     JSON.stringify(projectDataInput)
   );
 
+  if (
+    !workingProjectData.timeline?.audio_track_items ||
+    !workingProjectData.timeline.fps || // Ensure FPS is available
+    workingProjectData.timeline.fps <= 0
+  ) {
+    console.warn(
+      "prepareProjectDataWithEdits: No audio track items found, or missing/invalid timeline FPS."
+    );
+    return workingProjectData;
+  }
+  const timelineFps = workingProjectData.timeline.fps;
+
   console.log(
-    "prepareProjectDataWithEdits: Starting parallel fetching of silence detections..."
+    "prepareProjectDataWithEdits: Starting fetching of silence detections per clip segment..."
   );
-  const uniqueSourceFiles = new Map<string, { processedFileName: string }>();
 
-  workingProjectData.timeline?.audio_track_items?.forEach((item) => {
-    if (item.source_file_path && item.processed_file_name) {
-      uniqueSourceFiles.set(item.source_file_path, {
-        processedFileName: item.processed_file_name,
-      });
-    }
-  });
-  // Add similar for video_track_items if they also use silence detection
+  const allClipSilencesMapForGo: Record<string, SilencePeriod[]> = {};
 
-  // Create an array of promises for fetching silence data for each file
-  const silenceDetectionPromises = Array.from(uniqueSourceFiles.entries()).map(
-    async ([filePath, fileInfo]) => {
-      const fileDataInProject = workingProjectData.files[filePath]; // Note: this is from the copied workingProjectData
-      if (!fileDataInProject) {
+  const itemProcessingPromises =
+    workingProjectData.timeline.audio_track_items.map(async (item) => {
+      const clipId = item.id; // Ensure item.id is the correct key used in allClipParams
+
+      if (
+        !item.processed_file_name ||
+        !clipId ||
+        typeof item.source_start_frame !== "number" ||
+        typeof item.source_end_frame !== "number"
+      ) {
         console.warn(
-          `prepareProjectDataWithEdits: File data not found for ${filePath} in working copy. Returning empty silences for this file.`
+          "Skipping item due to missing processed_file_name, id, or invalid frame numbers:",
+          item.name,
+          item.id
         );
-        // Return a structure that allows associating filePath with empty/failed detection
-        return {
-          filePath,
-          silenceDetections: [] as Array<main.SilenceInterval>,
-        };
+        allClipSilencesMapForGo[clipId] = []; // Ensure an entry even if skipped
+        return;
       }
-      const cacheKey = fileInfo.processedFileName + ".wav";
-      console.log(
-        `prepareProjectDataWithEdits: - Queuing fetch for: ${cacheKey}`
-      );
+
+      const itemSpecificParams = allClipParams[clipId] || defaultParams;
+      const filePathForGo = item.processed_file_name + ".wav";
+      const clipStartSeconds = item.source_start_frame / timelineFps;
+      const clipEndSeconds = item.source_end_frame / timelineFps;
+
+      if (clipEndSeconds <= clipStartSeconds) {
+        console.warn(
+          `Skipping silence detection for item ${
+            item.name
+          } (${clipId}) due to invalid segment: start ${clipStartSeconds.toFixed(
+            3
+          )}s, end ${clipEndSeconds.toFixed(3)}s.`
+        );
+        allClipSilencesMapForGo[clipId] = [];
+        return item;
+      }
+
+      // console.log(
+      //   `prepareProjectDataWithEdits: - Queuing fetch for item ${item.name} (${clipId}), file: ${filePathForGo}, ` +
+      //   `segment: ${clipStartSeconds.toFixed(3)}s to ${clipEndSeconds.toFixed(3)}s. Params: `, itemSpecificParams
+      // );
+
       try {
-        const silencePeriods: SilencePeriod[] =
+        // GetOrDetectSilencesWithCache returns SilencePeriod[] matching Go's struct (for JSON marshalling)
+        const silencePeriodsForGo: SilencePeriod[] =
           await GetOrDetectSilencesWithCache(
-            cacheKey,
-            detectionParams.loudnessThreshold,
-            detectionParams.minSilenceDurationSeconds,
-            detectionParams.paddingLeftSeconds,
-            detectionParams.paddingRightSeconds
+            filePathForGo,
+            itemSpecificParams.loudnessThreshold,
+            itemSpecificParams.minSilenceDurationSeconds,
+            itemSpecificParams.paddingLeftSeconds,
+            itemSpecificParams.paddingRightSeconds,
+            clipStartSeconds,
+            clipEndSeconds
           );
-
-        // Convert to the structure expected by FileData.silenceDetections
-        // Ensure this matches the type (main.SilenceInterval might have Start/End or start/end)
-        const silenceIntervalsForFile: Array<main.SilenceInterval> =
-          silencePeriods.map(
-            (p) =>
-              ({
-                start: p.start, // these are in SECONDS
-                end: p.end, // these are in SECONDS
-              } as main.SilenceInterval)
-          ); // Adjust casing if main.SilenceInterval has Start/End
-
-        // console.log(`prepareProjectDataWithEdits: - Fetched for ${cacheKey}: ${silenceIntervalsForFile.length} periods`);
-        return { filePath, silenceDetections: silenceIntervalsForFile };
+        allClipSilencesMapForGo[clipId] = silencePeriodsForGo;
       } catch (err) {
         console.error(
-          `prepareProjectDataWithEdits: Failed to fetch silences for ${cacheKey}:`,
+          `prepareProjectDataAndGetEdits: Failed to fetch silences for item ${item.name} (${clipId}):`,
           err
         );
-        // Return empty silences for this file on error to not break Promise.all
-        return {
-          filePath,
-          silenceDetections: [] as Array<main.SilenceInterval>,
-        };
+        allClipSilencesMapForGo[clipId] = []; // Store empty array on error
       }
-    }
-  );
+    });
 
-  // Wait for all silence detection promises to resolve
-  const allSilenceResults = await Promise.all(silenceDetectionPromises);
-
-  // Now, update workingProjectData with the results from all promises
-  allSilenceResults.forEach((result) => {
-    // Ensure file exists in the working copy before assigning
-    if (workingProjectData.files[result.filePath]) {
-      workingProjectData.files[result.filePath].silenceDetections =
-        result.silenceDetections;
-    } else {
-      // This case should ideally not happen if uniqueSourceFiles was derived correctly from workingProjectData
-      console.warn(
-        `prepareProjectDataWithEdits: FilePath ${result.filePath} not found in workingProjectData.files after parallel fetch. This is unexpected.`
-      );
-    }
-  });
+  await Promise.all(itemProcessingPromises);
 
   console.log(
-    "prepareProjectDataWithEdits: All silence detections fetched (in parallel)."
+    "prepareProjectDataWithEdits: All per-clip segment silence detections processed."
   );
 
-  console.log("prepareProjectDataWithEdits: Calculating edit instructions...");
+  console.log(
+    "prepareProjectDataWithEdits: Calculating final edit instructions..."
+  );
   const projectDataWithEdits = await CalculateAndStoreEditsForTimeline(
     workingProjectData,
-    keepSilenceSegments
+    keepSilenceSegments,
+    allClipSilencesMapForGo
   );
   console.log("prepareProjectDataWithEdits: Edit instructions calculated.");
   return projectDataWithEdits;
@@ -153,32 +152,42 @@ async function prepareProjectDataWithEdits(
 const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const {
     projectData: initialProjectData,
+    allClipDetectionParams,
+    defaultDetectionParams,
     onScriptLog,
     onScriptDone,
     onScriptError,
     buttonText = "Prune Silences",
     keepSilenceSegments = false,
-    detectionParams,
   } = props;
 
   const [processedData, setProcessedData] =
     useState<main.ProjectDataPayload | null>(null);
   const processedDataInputRef = useRef<main.ProjectDataPayload | null>(null);
-  const [paramsForProcessedData, setParamsForProcessedData] =
-    useState<DetectionParams | null>(null);
+  // This state will now store the map of params used for the `processedData`
+  const [paramsMapForProcessedData, setParamsMapForProcessedData] =
+    useState<Record<string, DetectionParams> | null>(null);
 
   const [isProcessingClick, setIsProcessingClick] = useState(false);
   const [isProcessingHover, setIsProcessingHover] = useState(false);
+
   const initialProjectDataRef = useRef(initialProjectData);
+  const allClipParamsRef = useRef(allClipDetectionParams);
+  const defaultParamsRef = useRef(defaultDetectionParams);
 
   useEffect(() => {
     initialProjectDataRef.current = initialProjectData;
+    allClipParamsRef.current = allClipDetectionParams;
+    defaultParamsRef.current = defaultDetectionParams;
+
     if (processedData) {
       const isInputDataStale =
         processedDataInputRef.current !== initialProjectData;
-      const areParamsStale =
-        paramsForProcessedData &&
-        !areDetectionParamsEqual(detectionParams, paramsForProcessedData);
+      // Use deepEqual for comparing the entire map of parameters
+      const areParamsStale = !deepEqual(
+        allClipDetectionParams,
+        paramsMapForProcessedData
+      );
 
       if (isInputDataStale || areParamsStale) {
         if (isInputDataStale)
@@ -187,19 +196,19 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
           );
         if (areParamsStale)
           console.log(
-            "Invalidating processedData due to detectionParams prop change."
+            "Invalidating processedData due to allClipDetectionParams change."
           );
 
         setProcessedData(null);
         processedDataInputRef.current = null;
-        setParamsForProcessedData(null);
+        setParamsMapForProcessedData(null); // Reset the stored params map
       }
     }
   }, [
     initialProjectData,
-    detectionParams,
+    allClipDetectionParams,
     processedData,
-    paramsForProcessedData,
+    paramsMapForProcessedData,
   ]);
 
   useEffect(() => {
@@ -224,69 +233,62 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   }, [onScriptLog, onScriptDone]);
 
   const handleMouseEnter = useCallback(async () => {
-    // Use current prop values directly for checks and operations
-    const currentInitialData = initialProjectDataRef.current; // More reliable than initialProjectData prop directly in async
-    const currentDetectionParams = detectionParams; // Current prop detectionParams
+    const currentInitialData = initialProjectDataRef.current;
+    const currentAllClipParams = allClipParamsRef.current; // Use ref
+    const currentDefaultParams = defaultParamsRef.current; // Use ref
 
     if (isProcessingHover || !currentInitialData || isProcessingClick) {
       return;
     }
 
-    // Staleness check:
     if (
       processedData &&
       processedDataInputRef.current === currentInitialData &&
-      paramsForProcessedData &&
-      areDetectionParamsEqual(currentDetectionParams, paramsForProcessedData)
+      // Use deepEqual for comparing the map of params
+      deepEqual(currentAllClipParams, paramsMapForProcessedData)
     ) {
       console.log(
-        "Hover: Data already processed for current input and params."
+        "Hover: Data already processed for current input and params map."
       );
       return;
     }
 
     setIsProcessingHover(true);
     console.log(
-      "Hover: Starting silent pre-processing (data or params changed)..."
+      "Hover: Starting silent pre-processing (data or params map changed)..."
     );
 
     try {
-      // Pass currentDetectionParams to the helper
       const result = await prepareProjectDataWithEdits(
         currentInitialData,
-        currentDetectionParams, // Use the params active at the start of hover
-        keepSilenceSegments
+        currentAllClipParams,
+        keepSilenceSegments,
+        currentDefaultParams
       );
 
-      // Before setting state, verify that the inputs haven't changed *during* this async operation.
-      // This ensures we don't apply a result calculated with stale inputs if props changed rapidly.
+      // Check if props have changed *during* the async operation
       if (
         initialProjectDataRef.current === currentInitialData &&
-        areDetectionParamsEqual(detectionParams, currentDetectionParams) // Compare current prop `detectionParams` with those used for this run
+        deepEqual(allClipParamsRef.current, currentAllClipParams)
       ) {
         setProcessedData(result);
-        processedDataInputRef.current = currentInitialData; // The data it was based on
-        setParamsForProcessedData(currentDetectionParams); // The params used for this result
-        console.log("Hover: Silent pre-processing complete.");
+        processedDataInputRef.current = currentInitialData;
+        setParamsMapForProcessedData(currentAllClipParams); // Store the map that was used
+        // console.log("Hover: Silent pre-processing complete.");
       } else {
-        console.log(
-          "Hover: Input data or params changed during pre-processing; discarding result."
-        );
+        // console.log("Hover: Input data or params map changed during pre-processing; discarding result.");
       }
     } catch (error) {
       console.error("Hover: Error during silent pre-processing:", error);
     } finally {
       setIsProcessingHover(false);
     }
-    // Ensure all relevant dependencies are included for useCallback
   }, [
     isProcessingHover,
     isProcessingClick,
-    detectionParams, // Current prop
     keepSilenceSegments,
-    initialProjectData, // Prop used for ref and for comparison post-async
     processedData,
-    paramsForProcessedData,
+    paramsMapForProcessedData,
   ]);
 
   const handleClick = async () => {
@@ -294,14 +296,24 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       console.warn("Click: Processing already in progress.");
       return;
     }
-    // Use current prop values directly
     const currentInitialData = initialProjectDataRef.current;
-    const currentDetectionParams = detectionParams;
+    const currentAllClipParams = allClipParamsRef.current; // Use ref
+    const currentDefaultParams = defaultParamsRef.current; // Use ref
 
     if (!currentInitialData) {
       console.error("Click: Initial project data is not available.");
       if (onScriptError)
         onScriptError("Initial project data is not available.");
+      return;
+    }
+    if (
+      !currentInitialData?.timeline?.fps ||
+      currentInitialData.timeline.fps <= 0
+    ) {
+      console.error(
+        "Cannot process: Missing or invalid timeline FPS from project data."
+      );
+      if (onScriptError) onScriptError("Missing or invalid timeline FPS.");
       return;
     }
 
@@ -311,34 +323,27 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     try {
       let dataToSend: main.ProjectDataPayload;
 
-      // Staleness check for using existing processedData
       if (
         processedData &&
         processedDataInputRef.current === currentInitialData &&
-        paramsForProcessedData &&
-        areDetectionParamsEqual(currentDetectionParams, paramsForProcessedData)
+        // Use deepEqual for comparing the map of params
+        deepEqual(currentAllClipParams, paramsMapForProcessedData)
       ) {
         console.log(
-          "Click: Using existing pre-processed data (input and params match)."
+          "Click: Using existing pre-processed data (input and params map match)."
         );
         dataToSend = processedData;
       } else {
-        if (isProcessingHover) {
-          console.log(
-            "Click: Hover pre-processing is (or was recently) active. Will prepare data independently if needed."
-          );
-        }
-        console.log(
-          "Click: No fresh pre-processed data, params mismatch, or data stale. Preparing data now..."
-        );
+        // console.log("Click: No fresh pre-processed data or params map mismatch/stale. Preparing data now...");
         dataToSend = await prepareProjectDataWithEdits(
           currentInitialData,
-          currentDetectionParams, // Use current params for this run
-          keepSilenceSegments
+          currentAllClipParams,
+          keepSilenceSegments,
+          currentDefaultParams
         );
         setProcessedData(dataToSend);
         processedDataInputRef.current = currentInitialData;
-        setParamsForProcessedData(currentDetectionParams); // Store params used for this result
+        setParamsMapForProcessedData(currentAllClipParams); // Store the map that was used
       }
 
       console.log("Click: Making final timeline...");
