@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,26 +28,22 @@ var (
 	isServerInitialized bool   // Flag to indicate if server init (port assignment) was successful
 )
 
-// --- Data Structures for Python Messages ---
 type PythonMessage struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"` // Delay parsing payload until type is known
 }
 
-// Payload for toasts/progress
 type ToastPayload struct {
 	Message   string `json:"message"`
 	ToastType string `json:"toastType,omitempty"` // e.g., "info", "success", "warning", "error"
 }
 
-// Payload for alerts/popups
 type AlertPayload struct {
 	Title    string `json:"title"`
 	Message  string `json:"message"`
 	Severity string `json:"severity"` // e.g., "info", "warning", "error"
 }
 
-// Payload for your main project/timeline data (customize as needed)
 type ClipInfo struct {
 	Name        string  `json:"name"`
 	FilePath    string  `json:"filePath"` // Absolute path to the audio file for Go to serve
@@ -55,15 +53,18 @@ type ClipInfo struct {
 	SourceOut   float64 `json:"sourceOut"`
 }
 
-// type ProjectDataPayload struct {
-// 	ProjectName     string     `json:"projectName"`
-// 	TimelineName    string     `json:"timelineName"`
-// 	SampleRate      int        `json:"sampleRate"`
-// 	DurationSeconds float64    `json:"durationSeconds"`
-// 	Clips           []ClipInfo `json:"clips"`
-// }
+type PythonCommandResponse struct {
+	Status  string      `json:"status"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+	// Alert
+	ShouldShowAlert bool   `json:"shouldShowAlert,omitempty"`
+	AlertTitle      string `json:"alertTitle,omitempty"`
+	AlertMessage    string `json:"alertMessage,omitempty"`
+	AlertSeverity   string `json:"alertSeverity,omitempty"` // "info", "warning", "error"
 
-// --- End Data Structures ---
+	AlertIssued bool `json:"alertIssued,omitempty"`
+}
 
 func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
@@ -227,6 +228,9 @@ func (a *App) LaunchHttpServer(pythonRdyChan chan bool) error {
 	pythonMsgHandlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { a.msgEndpoint(w, r) })
 	mux.Handle("/msg", commonMiddleware(pythonMsgHandlerFunc, false))
 
+	// Clip rendering endpoint
+	mux.HandleFunc("/render_clip", commonMiddleware(http.HandlerFunc(a.handleRenderClip), false))
+
 	// Server
 	port, err := findFreePort()
 	if err != nil {
@@ -340,13 +344,161 @@ func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Reques
 	}
 
 	writer.Header().Set("Content-Type", "audio/wav")
+	writer.Header().Set("Accept-Ranges", "bytes") // Good for media seeking
+
 	http.ServeFile(writer, request, fullPath)
 	log.Printf("Audio Server Served: %s (Client: %s)", fullPath, request.RemoteAddr)
 }
 
+// (Assuming a.effectiveAudioFolderPath is correctly set up as in your original code)
+
+func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
+	// Allow GET and HEAD. HEAD is useful for players to check content length/type without downloading.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		log.Printf("RenderClip: Method %s blocked for: %s", r.Method, r.URL.Path)
+		return
+	}
+
+	query := r.URL.Query()
+	fileName := query.Get("file")
+	startStr := query.Get("start")
+	endStr := query.Get("end")
+
+	if fileName == "" || startStr == "" || endStr == "" {
+		http.Error(w, "Missing required query parameters: file, start, end", http.StatusBadRequest)
+		log.Printf("RenderClip: Missing parameters. File: '%s', Start: '%s', End: '%s'", fileName, startStr, endStr)
+		return
+	}
+
+	startSeconds, errStart := strconv.ParseFloat(startStr, 64)
+	endSeconds, errEnd := strconv.ParseFloat(endStr, 64)
+
+	if errStart != nil || errEnd != nil || startSeconds < 0 || endSeconds <= startSeconds {
+		http.Error(w, "Invalid start or end time parameters", http.StatusBadRequest)
+		log.Printf("RenderClip: Invalid time parameters. Start: '%s' (err: %v), End: '%s' (err: %v)", startStr, errStart, endStr, errEnd)
+		return
+	}
+
+	cleanFileName := filepath.Base(fileName)
+	if cleanFileName != fileName || strings.Contains(fileName, "..") || strings.ContainsAny(fileName, "/\\") {
+		http.Error(w, "Invalid file name parameter", http.StatusBadRequest)
+		log.Printf("RenderClip: Invalid file name (potential traversal): '%s'", fileName)
+		return
+	}
+
+	originalFilePath := filepath.Join(a.effectiveAudioFolderPath, cleanFileName)
+
+	if _, err := os.Stat(originalFilePath); os.IsNotExist(err) {
+		http.NotFound(w, r)
+		log.Printf("RenderClip: Original source file not found: %s", originalFilePath)
+		return
+	}
+
+	log.Printf("RenderClip: Processing request for %s, segment %f to %f seconds. Range: %s",
+		originalFilePath, startSeconds, endSeconds, r.Header.Get("Range"))
+
+	cmd := exec.Command("ffmpeg",
+		"-i", originalFilePath,
+		"-ss", fmt.Sprintf("%f", startSeconds),
+		"-to", fmt.Sprintf("%f", endSeconds),
+		"-c", "copy",
+		"-f", "wav",
+		"-vn",
+		"pipe:1",
+	)
+
+	ffmpegOutput, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("RenderClip: Error creating StdoutPipe for ffmpeg: %v", err)
+		http.Error(w, "Internal server error (ffmpeg pipe)", http.StatusInternalServerError)
+		return
+	}
+
+	ffmpegErrOutput, err := cmd.StderrPipe()
+	if err != nil {
+		log.Printf("RenderClip: Error creating StderrPipe for ffmpeg: %v", err)
+		// Continue, but we might not get detailed ffmpeg errors
+	}
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("RenderClip: Error starting ffmpeg for %s: %v", originalFilePath, err)
+		http.Error(w, "Internal server error (ffmpeg start)", http.StatusInternalServerError)
+		return
+	}
+
+	var ffmpegErrBuffer bytes.Buffer
+	if ffmpegErrOutput != nil {
+		go func() {
+			_, copyErr := io.Copy(&ffmpegErrBuffer, ffmpegErrOutput)
+			if copyErr != nil {
+				log.Printf("RenderClip: Error copying ffmpeg stderr: %v", copyErr)
+			}
+		}()
+	}
+
+	// Buffer the entire ffmpeg output for this segment
+	var audioData bytes.Buffer
+	bytesCopied, copyErr := io.Copy(&audioData, ffmpegOutput)
+
+	waitErr := cmd.Wait()
+
+	if copyErr != nil {
+		log.Printf("RenderClip: Error piping ffmpeg output to internal buffer for %s: %v. Bytes copied: %d. FFMPEG Stderr: %s",
+			originalFilePath, copyErr, bytesCopied, ffmpegErrBuffer.String())
+		// Avoid writing partial content if pipe broke
+		if !strings.Contains(copyErr.Error(), "read/write on closed pipe") && // Common if client disconnects
+			!strings.Contains(copyErr.Error(), "broken pipe") { // Also common
+			http.Error(w, "Internal server error (ffmpeg stream copy)", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("RenderClip: Continuing despite pipe error during copy, likely client disconnect or ffmpeg finished early. Copied %d bytes.", bytesCopied)
+	}
+
+	if waitErr != nil {
+		log.Printf("RenderClip: ffmpeg command finished with error for %s: %v. Stderr: %s. Bytes copied to buffer: %d",
+			originalFilePath, waitErr, ffmpegErrBuffer.String(), audioData.Len())
+		if audioData.Len() == 0 { // Or some threshold if partial WAVs could be useful
+			http.Error(w, "Internal server error (ffmpeg execution)", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("RenderClip: Warning - ffmpeg exited with error, but some data (%d bytes) was captured. Attempting to serve.", audioData.Len())
+	}
+
+	if audioData.Len() == 0 && bytesCopied == 0 && waitErr == nil && copyErr == nil {
+		log.Printf("RenderClip: ffmpeg produced no output for %s (segment %f-%f). Stderr: %s", originalFilePath, startSeconds, endSeconds, ffmpegErrBuffer.String())
+		// This could happen if the segment is empty or ffmpeg has an issue not reported as an exit error.
+		// Send a custom error or an empty WAV, or just 204 No Content.
+		// For now, let's treat as not found or bad request.
+		http.Error(w, "No content generated for the requested segment.", http.StatusNotFound) // Or http.StatusInternalServerError
+		return
+	}
+
+	log.Printf("RenderClip: Successfully buffered %d bytes for %s (segment %f-%f). Now serving with http.ServeContent.",
+		audioData.Len(), originalFilePath, startSeconds, endSeconds)
+
+	// Create an io.ReadSeeker from the buffered data
+	audioDataReader := bytes.NewReader(audioData.Bytes())
+
+	// Set headers that http.ServeContent might use or that are good practice
+	w.Header().Set("Content-Type", "audio/wav")
+	// Accept-Ranges will be set by ServeContent if the seeker supports it, which bytes.Reader does.
+	// w.Header().Set("Accept-Ranges", "bytes") // Not strictly needed here, ServeContent does it.
+
+	serveName := fmt.Sprintf("rendered_clip_%s_%.2f_%.2f.wav", cleanFileName, startSeconds, endSeconds)
+
+	// Modification time: For dynamic content, time.Now() is okay.
+	// If the content was cached and had a fixed generation time, you'd use that.
+	// Using a fixed time (e.g., based on original file's modtime if transformation is deterministic)
+	// can improve client-side caching if the same segment is requested again.
+	modTime := time.Now()
+
+	http.ServeContent(w, r, serveName, modTime, audioDataReader)
+}
+
 func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed for this endpoint", http.StatusMethodNotAllowed)
+		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -360,106 +512,102 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	var msg PythonMessage
 	if err := json.Unmarshal(body, &msg); err != nil {
-		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
-		log.Printf("msgEndpoint: Error unmarshalling main JSON: %v. Body: %s", err, string(body))
+		http.Error(w, "Invalid JSON format for PythonMessage", http.StatusBadRequest)
+		log.Printf("msgEndpoint: Error unmarshalling PythonMessage: %v. Body: %s", err, string(body))
 		return
 	}
 
 	log.Printf("msgEndpoint: Received type: '%s'", msg.Type)
-
 	taskIDFromQuery := r.URL.Query().Get("task_id")
 
+	// --- New Primary Handler for Task-Related Responses from Python ---
+	if msg.Type == "taskResult" {
+		if taskIDFromQuery == "" {
+			log.Printf("msgEndpoint: Received 'taskResult' without task_id. Ignoring for task channel.")
+			// Optionally, if it has ShouldShowAlert, you could emit a generic alert, but it's cleaner if Python always includes task_id for these.
+			http.Error(w, "'taskResult' requires a task_id", http.StatusBadRequest)
+			return
+		}
+
+		var taskData PythonCommandResponse // This struct now includes ShouldShowAlert etc.
+		if err := json.Unmarshal(msg.Payload, &taskData); err != nil {
+			http.Error(w, "Invalid payload for 'taskResult'", http.StatusBadRequest)
+			log.Printf("msgEndpoint: Error unmarshalling taskResult payload: %v. Body: %s", err, string(msg.Payload))
+			return
+		}
+		log.Printf("msgEndpoint: Received 'taskResult' for taskID '%s'. Status: '%s', ShouldShowAlert: %t",
+			taskIDFromQuery, taskData.Status, taskData.ShouldShowAlert)
+
+		a.pendingMu.Lock()
+		respCh, ok := a.pendingTasks[taskIDFromQuery]
+		a.pendingMu.Unlock()
+
+		if ok {
+			// Send the entire taskData (which includes Python's alert *request*) to SyncWithDavinci
+			select {
+			case respCh <- taskData:
+				log.Printf("msgEndpoint: Successfully sent taskData to SyncWithDavinci channel for task %s", taskIDFromQuery)
+			default:
+				log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel full/listener gone.", taskIDFromQuery)
+				// If SyncWithDavinci is gone but Python wanted an alert, we *could* emit it here as a fallback.
+				// However, this implies SyncWithDavinci might have timed out or errored earlier.
+				if taskData.ShouldShowAlert {
+					log.Printf("msgEndpoint: SyncWithDavinci listener gone for task %s, but Python requested alert. Emitting globally.", taskIDFromQuery)
+					runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+						"title":    taskData.AlertTitle,
+						"message":  taskData.AlertMessage,
+						"severity": taskData.AlertSeverity,
+					})
+				}
+			}
+		} else {
+			log.Printf("msgEndpoint: Warning - Received 'taskResult' for taskID '%s', but no pending task found.", taskIDFromQuery)
+			// Similar to above, if no pending task, but Python wanted an alert for this orphaned task_id.
+			if taskData.ShouldShowAlert {
+				log.Printf("msgEndpoint: No pending task for %s, but Python requested alert. Emitting globally.", taskIDFromQuery)
+				runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+					"title":    taskData.AlertTitle,
+					"message":  taskData.AlertMessage,
+					"severity": taskData.AlertSeverity,
+				})
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "Task result processed.")
+		return // Handled
+	}
+
+	// --- Existing handlers for generic, non-task-specific messages ---
 	switch msg.Type {
 	case "showToast":
 		var data ToastPayload
-		if err := json.Unmarshal(msg.Payload, &data); err != nil {
-			http.Error(w, "Invalid payload for showToast", http.StatusBadRequest)
-			log.Printf("msgEndpoint: Error unmarshalling showToast payload: %v", err)
+		if err := json.Unmarshal(msg.Payload, &data); err != nil { /* ... error handling ... */
 			return
 		}
-		log.Printf("Go: Emitting 'showToast' event for frontend: %s (Type: %s)", data.Message, data.ToastType)
 		runtime.EventsEmit(a.ctx, "showToast", data)
 
-	case "showAlert":
+	case "showAlert": // This is now for alerts NOT related to a SyncWithDavinci task
+		if taskIDFromQuery != "" {
+			log.Printf("msgEndpoint: 'showAlert' with task_id '%s' received. This is likely an old Python flow. Emitting alert globally but not notifying task channel.", taskIDFromQuery)
+		}
 		var data AlertPayload
-		if err := json.Unmarshal(msg.Payload, &data); err != nil {
-			http.Error(w, "Invalid payload for showAlert", http.StatusBadRequest)
-			log.Printf("msgEndpoint: Error unmarshalling showAlert payload: %v", err)
+		if err := json.Unmarshal(msg.Payload, &data); err != nil { /* ... error handling ... */
 			return
 		}
-		log.Printf("Go: Emitting 'showAlert' event for frontend: [%s] %s - %s", data.Severity, data.Title, data.Message)
-		//runtime.EventsEmit(a.ctx, "showAlert", data)
+		runtime.EventsEmit(a.ctx, "showAlert", data) // Global alert
+
+	case "projectData": // This is now for generic data pushes NOT related to a SyncWithDavinci task completion
 		if taskIDFromQuery != "" {
-			log.Printf("msgEndpoint: Received showAlert with taskID '%s'", taskIDFromQuery)
-			a.pendingMu.Lock()
-			respCh, ok := a.pendingTasks[taskIDFromQuery]
-			a.pendingMu.Unlock()
-
-			if ok {
-				log.Printf("msgEndpoint: Found pending task for ID %s. Preparing to send success response.", taskIDFromQuery)
-				commandResp := PythonCommandResponse{
-					Status:  "error",
-					Message: data.Message,
-				}
-
-				select {
-				case respCh <- commandResp:
-					runtime.EventsEmit(a.ctx, "showAlert", data)
-				default:
-					log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel was full or listener gone.", taskIDFromQuery)
-				}
-			} else {
-				log.Printf("msgEndpoint: Warning - Received showAlert with taskID '%s', but no pending task found. Emitting to frontend only.", taskIDFromQuery)
-				runtime.EventsEmit(a.ctx, "showAlert", data)
-			}
+			log.Printf("msgEndpoint: 'projectData' with task_id '%s' received. If this is a task response, Python should use 'taskResult' type.", taskIDFromQuery)
+			// If you need to temporarily support old Python sending projectData as task response:
+			// ... (handle by trying to parse as ProjectDataPayload and sending a minimal PythonCommandResponse to channel)
+			// But it's better to update Python.
 		}
-
-	case "projectData":
 		var data ProjectDataPayload
-		if err := json.Unmarshal(msg.Payload, &data); err != nil {
-			http.Error(w, "Invalid payload for projectData", http.StatusBadRequest)
-			log.Printf("msgEndpoint: Error unmarshalling projectData payload: %v", err)
+		if err := json.Unmarshal(msg.Payload, &data); err != nil { /* ... error handling ... */
 			return
 		}
-		log.Printf("Go: Emitting 'projectData' event for frontend. Project: %s, Timeline: %s, Files: %d",
-			data.ProjectName, data.Timeline.Name, len(data.Files))
-
-		// Optional: Store this data in a.latestProjectData (with mutex protection if needed)
-		// a.cacheMutex.Lock()
-		// a.latestProjectData = &data
-		// a.cacheMutex.Unlock()
-
-		if taskIDFromQuery != "" {
-			log.Printf("msgEndpoint: Received projectData with taskID '%s'", taskIDFromQuery)
-			a.pendingMu.Lock()
-			respCh, ok := a.pendingTasks[taskIDFromQuery]
-			a.pendingMu.Unlock()
-
-			if ok {
-				log.Printf("msgEndpoint: Found pending task for ID %s. Preparing to send success response.", taskIDFromQuery)
-				commandResp := PythonCommandResponse{
-					Status:  "success",
-					Message: fmt.Sprintf("Sync data processed. Project: %s, Timeline: %s", data.ProjectName, data.Timeline.Name),
-					Data:    data,
-				}
-
-				// Send the response back to the SyncWithDavinci goroutine
-				// This is a blocking send if the channel buffer is full.
-				// SyncWithDavinci has a buffer of 1 and is waiting.
-				select {
-				case respCh <- commandResp:
-					log.Printf("msgEndpoint: Successfully sent response to SyncWithDavinci via channel for task %s", taskIDFromQuery)
-					runtime.EventsEmit(a.ctx, "projectDataReceived", data)
-				default:
-					log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel was full or listener gone.", taskIDFromQuery)
-				}
-			} else {
-				log.Printf("msgEndpoint: Warning - Received projectData with taskID '%s', but no pending task found. Emitting to frontend only.", taskIDFromQuery)
-				runtime.EventsEmit(a.ctx, "projectDataReceived", data)
-			}
-		}
-
-		//runtime.EventsEmit(a.ctx, "projectDataReceived", data) // Emit the full data
+		runtime.EventsEmit(a.ctx, "projectDataReceived", data) // Generic data update
 
 	default:
 		log.Printf("msgEndpoint: Received unknown message type: '%s'", msg.Type)
@@ -482,12 +630,6 @@ func (a *App) GetProjectDataPayloadType() ProjectDataPayload {
 		},
 		Files: nil,
 	}
-}
-
-type PythonCommandResponse struct {
-	Status  string      `json:"status"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"` // If Python commands return specific data
 }
 
 func (a *App) SendCommandToPython(commandName string, params map[string]interface{}) (*PythonCommandResponse, error) {
@@ -527,13 +669,13 @@ func (a *App) SendCommandToPython(commandName string, params map[string]interfac
 	client := &http.Client{Timeout: 20 * time.Second} // Adjust timeout as needed
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("error sending command '%s' to Python: %w", commandName, err)
+		return nil, fmt.Errorf("- %w", err)
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error reading response body from Python for command '%s': %w", commandName, err)
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -555,61 +697,73 @@ func (a *App) SendCommandToPython(commandName string, params map[string]interfac
 	return &pyResp, nil
 }
 
-func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) {
+func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your actual PythonCommandResponse type
 	if !a.pythonReady {
+		// This error will be caught by JS, and a toast will be shown. No AlertIssued flag needed.
 		return nil, fmt.Errorf("python backend not ready")
 	}
 
-	// 1) Generate a unique taskId
 	taskID := uuid.NewString()
-
-	// 2) Create a channel and register it in pendingTasks
+	// Use the correct type for PythonCommandResponse, e.g., main.PythonCommandResponse
 	respCh := make(chan PythonCommandResponse, 1)
 
 	a.pendingMu.Lock()
 	a.pendingTasks[taskID] = respCh
 	a.pendingMu.Unlock()
 
-	// 3) Build params for Python: include taskID and callbackUrl
+	// Cleanup deferred to ensure it runs
+	defer func() {
+		a.pendingMu.Lock()
+		delete(a.pendingTasks, taskID)
+		a.pendingMu.Unlock()
+		log.Printf("Go: Cleaned up task %s", taskID)
+	}()
+
 	params := map[string]interface{}{
 		"taskId": taskID,
 	}
 
-	// 4) Send command to Python (immediate “command received”)
-	pyResp, err := a.SendCommandToPython("sync", params)
+	pyAckResp, err := a.SendCommandToPython("sync", params) // This is the initial ACK from Python
 	if err != nil {
-		// Clean up the channel & map if Python didn’t ACK
-		a.pendingMu.Lock()
-		delete(a.pendingTasks, taskID)
-		a.pendingMu.Unlock()
-		return nil, fmt.Errorf("error sending sync command to Python: %w", err)
+		return nil, fmt.Errorf("failed to send command to python: %w", err)
 	}
-	if pyResp.Status != "success" {
-		// Python responded with some error
-		a.pendingMu.Lock()
-		delete(a.pendingTasks, taskID)
-		a.pendingMu.Unlock()
-		return nil, fmt.Errorf("python command error: %s", pyResp.Message)
+	if pyAckResp.Status != "success" {
+		return nil, fmt.Errorf("python command acknowledgement error: %s", pyAckResp.Message)
 	}
-	// At this point, Python has definitely “ACK‐ed” the request, so we can block.
 
-	// 5) Wait for the final callback from Python (no timeout here)
-	finalResponse := <-respCh
+	log.Printf("Go: Waiting for final Python response for task %s...", taskID)
+	finalResponse := <-respCh // Wait for Python's actual processing response
+	log.Printf("Go: Received final Python response for task %s", taskID)
 
-	// 6) Cleanup
-	a.pendingMu.Lock()
-	delete(a.pendingTasks, taskID)
-	a.pendingMu.Unlock()
+	if finalResponse.ShouldShowAlert {
+		log.Printf("Go: Python requested an alert. Title: '%s', Message: '%s', Severity: '%s'",
+			finalResponse.AlertTitle, finalResponse.AlertMessage, finalResponse.AlertSeverity)
 
-	// 7) Check status
+		runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+			"title":    finalResponse.AlertTitle,
+			"message":  finalResponse.AlertMessage,
+			"severity": finalResponse.AlertSeverity,
+		})
+
+		finalResponse.AlertIssued = true
+
+		if finalResponse.Status == "" || finalResponse.Status == "success" { // If Python didn't explicitly set status to error
+			finalResponse.Status = "error" // Default to error if an alert is flagged
+		}
+		if finalResponse.Message == "" && finalResponse.AlertMessage != "" {
+			finalResponse.Message = finalResponse.AlertMessage
+		}
+	}
+
 	if finalResponse.Status != "success" {
-		return nil, fmt.Errorf("error: %s", finalResponse.Message)
+		log.Printf("Go: Python task %s reported status '%s'. AlertIssued: %t. Message: %s",
+			taskID, finalResponse.Status, finalResponse.AlertIssued, finalResponse.Message)
+		return &finalResponse, nil
 	}
 
-	log.Printf("Go: Python reported success: %s", finalResponse.Message)
-
-	// 8) Return whatever message or data you like. Let’s return the Message.
-	return &finalResponse, nil
+	// Python reported success, and no alert was needed (or it was handled)
+	log.Printf("Go: Python task %s reported success. Message: %s", taskID, finalResponse.Message)
+	return &finalResponse, nil // finalResponse.AlertIssued will be false if no alert was processed
 }
 
 func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (string, error) {

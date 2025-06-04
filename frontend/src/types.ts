@@ -18,8 +18,8 @@ export interface ActiveClip {
 }
 
 export interface DetectionParams {
-  loudnessThreshold: string;
-  minSilenceDurationSeconds: string;
+  loudnessThreshold: number;
+  minSilenceDurationSeconds: number;
   paddingLeftSeconds: number;
   paddingRightSeconds: number;
 }

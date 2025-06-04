@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import deepEqual from "fast-deep-equal";
 import { Slider } from "@/components/ui/slider";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { Label } from "@/components/ui/label";
-import { LogSlider } from "./components/ui/volumeSlider";
+import { LogSlider } from "./components/ui-custom/volumeSlider";
 import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
 
 import {
@@ -15,21 +15,14 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-
 import { clamp, cn } from "@/lib/utils";
-import { GetGoServerPort, SyncWithDavinci } from "@wails/go/main/App";
+import {
+  GetGoServerPort,
+  GetLogarithmicWaveform,
+  SyncWithDavinci,
+} from "@wails/go/main/App";
 import { GetPythonReadyStatus } from "@wails/go/main/App";
-import { EventsOn } from "@wails/runtime/runtime";
+import { EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveform";
@@ -38,7 +31,10 @@ import { CloseApp } from "@wails/go/main/App";
 import { ActiveClip, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
 import { useWindowFocus } from "./hooks/hooks";
-import FileSelector from "./components/ui/fileSelector";
+import FileSelector from "./components/ui-custom/fileSelector";
+import SimpleRestrictedPlayer from "./components/audio/simpleRestrictedPlayer";
+import MinimalPlayer from "./components/audio/minimalPlayer";
+import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
 
 EventsOn("showToast", (data) => {
   console.log("Event: showToast", data);
@@ -75,51 +71,190 @@ export default function App() {
   const [detectionParams, setDetectionParams] =
     useState<DetectionParams | null>(null);
 
-  const { silenceData, isLoading, error, refetch } = useSilenceData(
-    currentActiveClip,
-    detectionParams
-  );
+  const { silenceData } = useSilenceData(currentActiveClip, detectionParams);
 
-  const handleSync = () => {
-    toast.promise(SyncWithDavinci(), {
-      loading: "Syncing with DaVinci Resolve…",
-      success: (response: main.PythonCommandResponse) => {
-        console.log("SyncWithDavinci success:", response);
-        setProjectData(response.data);
-        return "Synced with DaVinci Resolve";
-      },
-      error: (err: any) => {
-        console.error("SyncWithDavinci error:", err);
-        toast.error(
-          err ? `Sync failed. ${err.message || err}` : "Sync failed."
+  const [activeClipSegmentPeakData, setActiveClipSegmentPeakData] =
+    useState<main.PrecomputedWaveformData | null>(null);
+
+  // This state will hold the URL for the dynamically rendered clip segment
+  const [cutAudioSegmentUrl, setCutAudioSegmentUrl] = useState<string | null>(
+    null
+  );
+  // Effect to prepare data for WaveformPlayer when currentActiveClip changes
+  useEffect(() => {
+    if (
+      currentActiveClip &&
+      projectData?.timeline?.fps &&
+      httpPort &&
+      typeof currentActiveClip.sourceStartFrame === "number" &&
+      typeof currentActiveClip.sourceEndFrame === "number"
+    ) {
+      const fps = projectData.timeline.fps;
+      const clipStartSeconds = currentActiveClip.sourceStartFrame / fps;
+      const clipEndSeconds = currentActiveClip.sourceEndFrame / fps;
+
+      if (clipEndSeconds <= clipStartSeconds) {
+        console.warn(
+          "App.tsx: Clip end time is before or at start time. Not fetching segment data.",
+          currentActiveClip
+        );
+        setActiveClipSegmentPeakData(null);
+        setCutAudioSegmentUrl(null);
+        return;
+      }
+
+      // 1. Construct the URL for the cut audio segment
+      const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
+        currentActiveClip.processedFileName + ".wav"
+      )}&start=${clipStartSeconds.toFixed(3)}&end=${clipEndSeconds.toFixed(3)}`;
+      setCutAudioSegmentUrl(newCutAudioUrl);
+      console.log("App.tsx: Constructed cutAudioUrl:", newCutAudioUrl);
+
+      // 2. Fetch peak data for this specific segment
+      let isCancelled = false;
+      const fetchClipPeaks = async () => {
+        console.log(
+          "App.tsx: Fetching peak data for clip segment:",
+          currentActiveClip.processedFileName,
+          clipStartSeconds,
+          clipEndSeconds
+        );
+        // setIsLoading(true); // You might have a more general loading state
+        try {
+          const peakDataForSegment = await GetLogarithmicWaveform(
+            currentActiveClip.processedFileName + ".wav", // Pass the base filename
+            256, // samplesPerPixel - adjust as needed
+            -60.0, // dbRange - adjust as needed
+            clipStartSeconds,
+            clipEndSeconds
+          );
+
+          if (!isCancelled) {
+            if (
+              peakDataForSegment &&
+              peakDataForSegment.peaks &&
+              peakDataForSegment.peaks.length > 0 &&
+              peakDataForSegment.duration > 0
+            ) {
+              setActiveClipSegmentPeakData(peakDataForSegment);
+              console.log(
+                "App.tsx: Peak data for clip segment fetched, duration:",
+                peakDataForSegment.duration.toFixed(2)
+              );
+            } else {
+              console.warn(
+                "App.tsx: Received invalid peak data for segment",
+                currentActiveClip.processedFileName,
+                peakDataForSegment
+              );
+              setActiveClipSegmentPeakData(null);
+            }
+          }
+        } catch (e) {
+          if (!isCancelled) {
+            setActiveClipSegmentPeakData(null);
+          }
+          console.error(
+            "App.tsx: Error fetching peak data for segment",
+            currentActiveClip.processedFileName,
+            e
+          );
+        } finally {
+          // if (!isCancelled) setIsLoading(false);
+        }
+      };
+
+      fetchClipPeaks();
+      return () => {
+        isCancelled = true;
+      };
+    } else {
+      // Reset if no valid active clip or necessary data
+      setActiveClipSegmentPeakData(null);
+      setCutAudioSegmentUrl(null);
+    }
+  }, [currentActiveClip, projectData, httpPort]);
+
+  const handleSync = async () => {
+    const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
+
+    const conditionalSetProjectData = (
+      newData: main.ProjectDataPayload | null
+    ) => {
+      if (!deepEqual(projectData, newData)) {
+        // Using fast-deep-equal
+        setProjectData(newData);
+        console.log("handleSync: Project data updated.");
+      } else {
+        console.log(
+          "handleSync: New project data is identical to current; skipping state update for projectData."
+        );
+      }
+    };
+
+    try {
+      const response = await SyncWithDavinci();
+      console.log("SyncWithDavinci response from Go:", response);
+
+      if (response && response.alertIssued) {
+        console.warn(
+          "Sync operation resulted in an alert (issued by Go). Message:",
+          response.message
+        );
+        conditionalSetProjectData(response.data || null);
+        toast.dismiss(loadingToastId);
+      } else if (response && response.status !== "success") {
+        console.error(
+          "Sync failed (Python reported error, no global alert by Go):",
+          response.message
         );
         setProjectData(null);
-        return "Sync failed.";
-      },
-    });
+        toast.error("Sync failed", {
+          id: loadingToastId,
+          description: response.message || "An error occurred during sync.",
+          duration: 5000,
+        });
+      } else if (response && response.status === "success") {
+        conditionalSetProjectData(response.data);
+        toast.success("Synced with DaVinci Resolve", {
+          id: loadingToastId,
+          duration: 1500,
+        });
+      } else {
+        console.error(
+          "SyncWithDavinci: Unexpected response structure from Go",
+          response
+        );
+        setProjectData(null);
+        toast.error("Sync failed: Unexpected response format", {
+          id: loadingToastId,
+          duration: 5000,
+        });
+      }
+    } catch (err: any) {
+      console.error("Error calling SyncWithDavinci or Go-level error:", err);
+      setProjectData(null);
+
+      if (err && err.alertIssued) {
+        toast.dismiss(loadingToastId);
+      } else {
+        const errorMessage =
+          err?.message ||
+          (typeof err === "string" ? err : "An unknown error occurred.");
+        toast.error("Sync Error", {
+          id: loadingToastId,
+          description: `${errorMessage}`,
+          duration: 5000,
+        });
+      }
+    }
   };
 
-  const [alertOpen, setAlertOpen] = useState(false);
-  const [alertData, setAlertData] = useState({
-    title: "",
-    message: "",
-    severity: "info",
-  });
-
-  useEffect(() => {
-    EventsOn("showAlert", (data) => {
-      console.log("Event: showAlert", data);
-      setAlertData({
-        title: data.title || "No title",
-        message: data.message || "No message",
-        severity: data.severity || "info",
-      });
-      setAlertOpen(true);
-    });
-  }, []);
+  const initialInitDone = useRef(false); // Ref to track if the effect has run
 
   useEffect(() => {
     const getInitialServerInfo = async () => {
+      if (initialInitDone.current) return;
       console.log("App.tsx: Attempting to get Go HTTP server port...");
       try {
         const port = await GetGoServerPort();
@@ -140,16 +275,17 @@ export default function App() {
           // Optionally, inform the user that the audio server isn't available
         }
 
-        // initial sync with python
-        await SyncWithDavinci();
+        await handleSync();
       } catch (err) {
         console.error("App.tsx: Error during initial server info fetch:", err);
         setHttpPort(null);
         setCurrentActiveClip(null);
-        // Optionally, inform the user
       }
     };
     getInitialServerInfo();
+    return () => {
+      initialInitDone.current = true;
+    };
   }, []);
 
   // Effect to register Wails event listeners (runs once on mount)
@@ -166,9 +302,9 @@ export default function App() {
     // It's good practice to have a cleanup, though Wails might handle it.
     // If EventsOn returns a function to unlisten, use it here.
     return () => {
-      // if (typeof unsubscribe === 'function') unsubscribe();
+      if (typeof unsubscribe === "function") unsubscribe();
     };
-  }, []); // Empty dependency array ensures this runs once on mount
+  }, []);
 
   useWindowFocus(
     () => handleSync(),
@@ -342,8 +478,8 @@ export default function App() {
   useEffect(() => {
     // Update detectionParams when individual parameter states change
     setDetectionParams({
-      loudnessThreshold: threshold.toString() + "dB",
-      minSilenceDurationSeconds: minDuration.toString(),
+      loudnessThreshold: threshold,
+      minSilenceDurationSeconds: minDuration,
       paddingLeftSeconds: paddingLeft,
       paddingRightSeconds: paddingRight,
     });
@@ -354,7 +490,7 @@ export default function App() {
       {/* TITLE BAR */}
       <ContextMenu>
         <ContextMenuTrigger>
-          <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-50">
+          <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-90">
             <Button
               size={"sm"}
               className="px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 hover:text-white"
@@ -390,21 +526,7 @@ export default function App() {
         <header className="flex items-center justify-between"></header>
 
         <main className="flex-1 gap-8 mt-8 max-w-screen select-none">
-          <AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>{alertData.title}</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {alertData.message}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogAction onClick={() => setAlertOpen(false)}>
-                  Continue
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <GlobalAlertDialog />
           {projectData?.files && currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
@@ -441,14 +563,25 @@ export default function App() {
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col space-y-2 w-full min-w-0 p-2 overflow-visible">
-                {httpPort && currentActiveClip?.processedFileName && (
-                  <WaveformPlayer
-                    audioUrl={`http://localhost:${httpPort}/${currentActiveClip?.processedFileName}.wav`}
-                    silenceData={silenceData}
-                    threshold={threshold}
-                  />
-                )}
+              <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible">
+                {httpPort &&
+                  cutAudioSegmentUrl &&
+                  currentActiveClip &&
+                  projectData &&
+                  projectData.timeline &&
+                  detectionParams && (
+                    <WaveformPlayer
+                      audioUrl={cutAudioSegmentUrl}
+                      peakData={activeClipSegmentPeakData}
+                      clipOriginalStartSeconds={
+                        currentActiveClip.sourceStartFrame /
+                        projectData.timeline.fps
+                      }
+                      silenceData={silenceData}
+                      projectFrameRate={projectData.timeline.fps}
+                      detectionParams={detectionParams}
+                    />
+                  )}
                 <div className="space-y-2 w-full">
                   <div className="flex items-center space-x-5">
                     <Label className="font-medium w-32 flex-row-reverse">
@@ -536,22 +669,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex flex-col space-y-8 w-full">
-                  {/* test
-                  <audio
-                    src={`http://localhost:${audioServerPort}/preview-render.wav`}
-                    controls
-                  /> */}
-
                   <div className="items-center space-y-2 mt-4">
-                    {/* <div className="flex items-center space-x-2">
-                      <Checkbox
-                        checked={makeNewTimeline}
-                        onCheckedChange={(checked) =>
-                          setMakeNewTimeline(checked === true)
-                        }
-                      />
-                      <Label className="text-base">Make new timeline</Label>
-                    </div> */}
                     {projectData && detectionParams && (
                       <RemoveSilencesButton
                         projectData={projectData}
@@ -561,9 +679,11 @@ export default function App() {
                     )}
                   </div>
                   <Toaster
+                    position="top-right"
                     toastOptions={{
                       classNames: {
-                        toast: "min-w-[10px] w-auto bg-red-400", // set your desired min and max width here
+                        toast:
+                          "min-w-[10px] w-auto bg-red-400 mt-10 z-10 absolute",
                       },
                     }}
                   />

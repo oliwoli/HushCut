@@ -3,13 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/url"
 	"os" // If still writing to file, or for file path handling
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
@@ -45,12 +43,13 @@ type PrecomputedWaveformData struct {
 	Peaks    []float64 `json:"peaks"`    // Normalized peak values (0.0 to 1.0) for display, one per pixel/block
 }
 
-// ProcessWavToLogarithmicPeaks processes a WAV file and returns data for a logarithmic dB display.
 func (a *App) ProcessWavToLogarithmicPeaks(
 	webInputPath string,
 	samplesPerPixel int,
 	minDisplayDb float64, // e.g., -60.0
 	maxDisplayDb float64, // e.g., 0.0
+	clipStartSeconds float64,
+	clipEndSeconds float64,
 ) (*PrecomputedWaveformData, error) {
 
 	if samplesPerPixel < 1 {
@@ -58,6 +57,12 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	}
 	if minDisplayDb >= maxDisplayDb {
 		return nil, fmt.Errorf("minDisplayDb must be less than maxDisplayDb")
+	}
+	if clipStartSeconds < 0 {
+		return nil, fmt.Errorf("ClipStartSeconds must be non-negative")
+	}
+	if clipEndSeconds <= clipStartSeconds {
+		return nil, fmt.Errorf("ClipEndSeconds (%.2f) must be greater than ClipStartSeconds (%.2f)", clipEndSeconds, clipStartSeconds)
 	}
 
 	absPath, err := a.resolvePublicAudioPath(webInputPath)
@@ -76,7 +81,6 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		return nil, fmt.Errorf("'%s' is not a valid WAV file", absPath)
 	}
 
-	// Ensure it's 16-bit PCM, as your original code supported this. Adapt if other formats are needed.
 	if decoder.WavAudioFormat != 1 || decoder.BitDepth != 16 {
 		return nil, fmt.Errorf("unsupported WAV format: only 16-bit PCM is supported (got %d-bit, format %d)", decoder.BitDepth, decoder.WavAudioFormat)
 	}
@@ -86,27 +90,58 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		return nil, fmt.Errorf("could not retrieve audio format details from '%s'", absPath)
 	}
 	sampleRate := int(format.SampleRate)
+	if sampleRate == 0 {
+		return nil, fmt.Errorf("file '%s' reported 0 sample rate", absPath)
+	}
 	inputChannels := int(format.NumChannels)
 	if inputChannels == 0 {
 		return nil, fmt.Errorf("file '%s' reported 0 channels", absPath)
 	}
 
-	// Attempt to get duration
-	audioDuration, err := decoder.Duration() // This returns time.Duration
-	if err != nil {
-		// Fallback or error if duration is critical and not found
-		log.Printf("Warning: could not get duration directly from decoder: %v. Will estimate later.", err)
-		// You might need to calculate it based on total samples if this fails.
+	// Determine effective clip range based on audio duration, if known
+	actualClipStartSeconds := clipStartSeconds
+	actualClipEndSeconds := clipEndSeconds
+
+	audioFileDuration, err := decoder.Duration() // This is time.Duration
+	if err == nil {                              // Duration is known
+		fileDurationSeconds := audioFileDuration.Seconds()
+		if actualClipStartSeconds >= fileDurationSeconds {
+			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil // Clip starts after or at EOF
+		}
+		if actualClipEndSeconds > fileDurationSeconds {
+			actualClipEndSeconds = fileDurationSeconds // Trim clip end to file duration
+		}
+		if actualClipEndSeconds <= actualClipStartSeconds { // After trimming, clip might be empty/invalid
+			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil
+		}
+	}
+	// If err != nil for decoder.Duration(), we proceed without knowing the exact file end, relying on EOF.
+
+	startFrameOffset := int(actualClipStartSeconds * float64(sampleRate))
+	endFrameOffset := int(actualClipEndSeconds * float64(sampleRate))
+
+	// If calculated frame offsets result in no frames (e.g., sub-frame duration after clipping)
+	if startFrameOffset >= endFrameOffset {
+		// Calculate the duration of the intended, possibly tiny, clip.
+		effectiveDuration := actualClipEndSeconds - actualClipStartSeconds
+		if effectiveDuration < 0 { // Should not happen due to earlier checks, but safety.
+			effectiveDuration = 0
+		}
+		return &PrecomputedWaveformData{Duration: effectiveDuration, Peaks: []float64{}}, nil
 	}
 
-	var processedPeaks []float64
-	var currentMaxAbsSampleInBlock int32 = 0 // Max absolute sample value in the current block
-	samplesProcessedInBlock := 0
-	totalFramesProcessed := 0
+	numFramesInClip := endFrameOffset - startFrameOffset
+	expectedNumPeaks := 100 // Default capacity
+	if numFramesInClip > 0 && samplesPerPixel > 0 {
+		expectedNumPeaks = (numFramesInClip + samplesPerPixel - 1) / samplesPerPixel
+	}
 
-	// Buffer for reading audio chunks
-	// chunkSize should be a multiple of inputChannels if you are processing frame by frame from it
-	chunkSize := 8192
+	processedPeaks := make([]float64, 0, expectedNumPeaks)
+	var currentMaxAbsSampleInBlock int32 = 0
+	samplesProcessedInBlock := 0
+	currentFrameInFile := 0 // Tracks the current frame index from the beginning of the file
+
+	chunkSize := 8192 // Number of samples (not frames) in each read buffer
 	if chunkSize%inputChannels != 0 {
 		chunkSize = (chunkSize/inputChannels + 1) * inputChannels
 	}
@@ -115,30 +150,37 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		Data:   make([]int, chunkSize),
 	}
 
+processingLoop:
 	for {
-		numSamplesRead, err := decoder.PCMBuffer(pcmBuffer) // numSamplesRead is total samples in this chunk
-		if err == io.EOF {
+		if currentFrameInFile >= endFrameOffset { // Already processed or skipped past the clip end
 			break
 		}
-		if err != nil {
-			return nil, fmt.Errorf("error reading PCM chunk: %w", err)
-		}
+
+		numSamplesRead, readErr := decoder.PCMBuffer(pcmBuffer)
+
 		if numSamplesRead == 0 {
-			break
+			if readErr != io.EOF && readErr != nil {
+				return nil, fmt.Errorf("error reading PCM chunk: %w", readErr)
+			}
+			break // EOF or other reason for no samples
 		}
 
 		samplesInChunk := pcmBuffer.Data[:numSamplesRead]
 		numFramesInChunk := numSamplesRead / inputChannels
-		totalFramesProcessed += numFramesInChunk
 
-		for i := 0; i < numFramesInChunk; i++ { // For each audio frame in the chunk
-			//var sumAbs int64 = 0 // Sum of absolute sample values for multi-channel max, or just use one channel if preferred for true peak
-			// For true peak of a mono signal from stereo, often you take max(abs(L), abs(R))
-			// For simplicity here, let's average then take absolute.
-			// Or, find the sample with the largest absolute magnitude across channels.
+		for i := 0; i < numFramesInChunk; i++ {
+			frameToProcessIndex := currentFrameInFile
+			currentFrameInFile++ // Advance master frame counter
 
-			var maxSampleInFrame int32 = 0 // Max absolute sample value within this multi-channel frame
+			if frameToProcessIndex >= endFrameOffset { // Reached end of clip segment
+				break processingLoop // Break outer loop as well
+			}
+			if frameToProcessIndex < startFrameOffset { // Skip frames before clip start
+				continue
+			}
 
+			// Process sample (within the clip segment)
+			var maxSampleInFrame int32 = 0
 			for ch := 0; ch < inputChannels; ch++ {
 				sampleVal := int32(samplesInChunk[i*inputChannels+ch])
 				absVal := sampleVal
@@ -156,51 +198,46 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 			samplesProcessedInBlock++
 
 			if samplesProcessedInBlock >= samplesPerPixel {
-				// 1. Normalize absolute peak to 0.0 - 1.0 (linear amplitude)
-				// Max possible value for a 16-bit sample is 32767 (not 32768, which is -min)
 				normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
-
-				// 2. Convert to dB
-				var dBValue float64
-				if normalizedLinearPeak < 0.000001 { // Threshold for silence (approx -120dB)
-					dBValue = minDisplayDb
-				} else {
+				dBValue := minDisplayDb
+				if normalizedLinearPeak >= 0.000001 { // Approx -120dB threshold for silence
 					dBValue = 20 * math.Log10(normalizedLinearPeak)
 				}
 
-				// Clamp dBValue to our display range (e.g., -60dB to 0dB)
 				if dBValue < minDisplayDb {
 					dBValue = minDisplayDb
 				} else if dBValue > maxDisplayDb {
 					dBValue = maxDisplayDb
 				}
 
-				// 3. Scale dB to visual height 0.0 - 1.0
 				visualHeight := (dBValue - minDisplayDb) / (maxDisplayDb - minDisplayDb)
-				// Ensure it's strictly within [0,1] due to potential float inaccuracies
 				if visualHeight < 0.0 {
 					visualHeight = 0.0
 				}
 				if visualHeight > 1.0 {
 					visualHeight = 1.0
 				}
-
 				processedPeaks = append(processedPeaks, visualHeight)
 
-				// Reset for the next block
 				currentMaxAbsSampleInBlock = 0
 				samplesProcessedInBlock = 0
 			}
-		}
-	}
+		} // End of frame processing in chunk
 
-	// Handle any remaining samples for the last data point
+		if readErr == io.EOF { // EOF encountered
+			break
+		}
+		if readErr != nil { // Other read error
+			return nil, fmt.Errorf("error reading PCM chunk (mid-file): %w", readErr)
+		}
+	} // End of chunk reading loop (processingLoop)
+
+	// Handle any remaining samples for the last data point if they fall within the clip
 	if samplesProcessedInBlock > 0 {
+		// This block is only processed if samples were accumulated from within the clip range
 		normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
-		var dBValue float64
-		if normalizedLinearPeak < 0.000001 {
-			dBValue = minDisplayDb
-		} else {
+		dBValue := minDisplayDb
+		if normalizedLinearPeak >= 0.000001 {
 			dBValue = 20 * math.Log10(normalizedLinearPeak)
 		}
 		if dBValue < minDisplayDb {
@@ -211,21 +248,45 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		visualHeight := (dBValue - minDisplayDb) / (maxDisplayDb - minDisplayDb)
 		if visualHeight < 0.0 {
 			visualHeight = 0.0
-		} else if visualHeight > 1.0 {
+		}
+		if visualHeight > 1.0 {
 			visualHeight = 1.0
 		}
 		processedPeaks = append(processedPeaks, visualHeight)
 	}
 
-	// Recalculate duration based on frames processed if initial value was problematic
-	calculatedDuration := float64(totalFramesProcessed) / float64(sampleRate)
-	if audioDuration.Seconds() <= 0 || math.Abs(audioDuration.Seconds()-calculatedDuration) > 0.1 {
-		//log.Printf("Using calculated duration: %.2f seconds (initial was: %.2f)", calculatedDuration, audioDuration.Seconds())
-		audioDuration = time.Duration(calculatedDuration * float64(time.Second))
+	// Calculate the final duration of the segment for which peaks were generated.
+	var finalOutputDuration float64
+
+	// Determine the effective end time of the data used for peaks.
+	// actualClipEndSeconds was already capped by file duration if known.
+	// currentFrameInFile is the number of frames iterated over from the start of the file.
+	effectiveDataEndTimeSeconds := float64(currentFrameInFile) / float64(sampleRate)
+
+	// The peak data cannot extend beyond actualClipEndSeconds (user request, capped by file length)
+	// nor beyond where we actually read data (effectiveDataEndTimeSeconds due to EOF).
+	finalEffectiveEndBoundary := actualClipEndSeconds
+	if effectiveDataEndTimeSeconds < actualClipEndSeconds {
+		finalEffectiveEndBoundary = effectiveDataEndTimeSeconds
+	}
+
+	if finalEffectiveEndBoundary > actualClipStartSeconds {
+		finalOutputDuration = finalEffectiveEndBoundary - actualClipStartSeconds
+	} else {
+		finalOutputDuration = 0 // Clip start was at or after where data ended
+	}
+
+	if finalOutputDuration < 0 { // Safety, should not happen with logic above
+		finalOutputDuration = 0
+	}
+
+	// If no peaks were actually generated (e.g., clip entirely outside data, or zero effective length), duration should be 0.
+	if len(processedPeaks) == 0 {
+		finalOutputDuration = 0
 	}
 
 	return &PrecomputedWaveformData{
-		Duration: audioDuration.Seconds(),
+		Duration: finalOutputDuration,
 		Peaks:    processedPeaks,
 	}, nil
 }

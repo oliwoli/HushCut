@@ -25,17 +25,19 @@ type SilencePeriod struct {
 // CacheKey defines the unique identifier for a silence detection request.
 type CacheKey struct {
 	FilePath                  string  `json:"filePath"` // Using struct tags for potential future use, not strictly necessary for map key
-	LoudnessThreshold         string  `json:"loudnessThreshold"`
-	MinSilenceDurationSeconds string  `json:"minSilenceDurationSeconds"`
+	LoudnessThreshold         float64 `json:"loudnessThreshold"`
+	MinSilenceDurationSeconds float64 `json:"minSilenceDurationSeconds"`
 	PaddingLeftSeconds        float64 `json:"paddingLeftSeconds"`
 	PaddingRightSeconds       float64 `json:"paddingRightSeconds"`
 }
 
 type WaveformCacheKey struct {
-	FilePath        string // It's advisable to use an absolute/canonical path here if effectiveAudioFolderPath can change
-	SamplesPerPixel int
-	MinDb           float64
-	MaxDb           float64 // maxDb is used by ProcessWavToLogarithmicPeaks
+	FilePath         string // It's advisable to use an absolute/canonical path here if effectiveAudioFolderPath can change
+	SamplesPerPixel  int
+	MinDb            float64
+	MaxDb            float64 // maxDb is used by ProcessWavToLogarithmicPeaks
+	ClipStartSeconds float64
+	ClipEndSeconds   float64
 }
 
 type FileLoader struct {
@@ -76,7 +78,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 40, G: 40, B: 46, A: 1},
 		OnStartup:        app.startup,
-		OnShutdown: app.shutdown,
+		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,
 		},

@@ -631,7 +631,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         PROJECT_DATA = ProjectData()
         message = "Please open a project and open a timeline."
         send_message_to_go(
-            "showAlert",
+            "projectData",
             {"title": "No open Project", "message": message, "severity": "error"},
             task_id=task_id
         )
@@ -645,9 +645,21 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     if not TIMELINE:
         PROJECT_DATA = ProjectData()
         message = "Please open a timeline."
+        
+        response_payload = {
+            "status": "error",
+            "message": message, # Overall message for the sync operation
+            "data": PROJECT_DATA,
+            "shouldShowAlert": True,
+            "alertTitle": "No Open Timeline",
+            "alertMessage": message, # Specific message for the alert
+            "alertSeverity": "error",
+        }
+        
+
         send_message_to_go(
-            "showAlert",
-            {"title": "No open timeline", "message": message, "severity": "error"},
+            "taskResult",
+            response_payload,
             task_id=task_id
         )
         return False
@@ -662,7 +674,14 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     if sync:
         print("just syncing, exiting")
         print(f"it took {time() - script_start_time:.2f} seconds for script to finish")
-        send_message_to_go(message_type="projectData", payload=PROJECT_DATA, task_id=task_id)
+
+        response_payload = {
+            "status": "success",
+            "message": "Sync successful!",
+            "data": PROJECT_DATA,
+        }
+
+        send_message_to_go(message_type="taskResult", payload=response_payload, task_id=task_id)
         return
 
     input_otio_path = os.path.join(TEMP_DIR, "pre-edit_timeline_export.otio")
