@@ -27,7 +27,7 @@ type App struct {
 	waveformCache            map[WaveformCacheKey]*PrecomputedWaveformData // New cache for waveforms
 	cacheMutex               sync.RWMutex                                  // Mutex for thread-safe access to the cache
 	configPath               string
-	pythonCmd         		 *exec.Cmd
+	pythonCmd                *exec.Cmd
 	pythonReadyChan          chan bool
 	pythonReady              bool
 	pythonCommandPort        int
@@ -92,7 +92,6 @@ func (a *App) GetGoServerPort() int {
 	return actualPort // Accesses the global from httpserver.go
 }
 
-// startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
@@ -316,8 +315,8 @@ func (a *App) CloseApp() {
 
 func (a *App) DetectSilences(
 	filePath string,
-	loudnessThreshold string,
-	minSilenceDurationSeconds string,
+	loudnessThreshold float64,
+	minSilenceDurationSeconds float64,
 	paddingLeftSeconds float64,
 	paddingRightSeconds float64,
 ) ([]SilencePeriod, error) {
@@ -325,10 +324,13 @@ func (a *App) DetectSilences(
 
 	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
 
+	// format loudnessThreshold from num to num + "dB"
+	loudnessThresholdStr := fmt.Sprintf("%f", loudnessThreshold) + "dB"
+
 	args := []string{
 		"-nostdin",
 		"-i", absPath,
-		"-af", fmt.Sprintf("silencedetect=n=%s:d=%s", loudnessThreshold, minSilenceDurationSeconds),
+		"-af", fmt.Sprintf("silencedetect=n=%s:d=%s", loudnessThresholdStr, fmt.Sprintf("%f", minSilenceDurationSeconds)),
 		"-f", "null",
 		"-",
 	}
@@ -388,8 +390,8 @@ func (a *App) DetectSilences(
 
 func (a *App) GetOrDetectSilencesWithCache(
 	filePath string,
-	loudnessThreshold string,
-	minSilenceDurationSeconds string,
+	loudnessThreshold float64,
+	minSilenceDurationSeconds float64,
 	paddingLeftSeconds float64,
 	paddingRightSeconds float64,
 ) ([]SilencePeriod, error) {
@@ -414,10 +416,6 @@ func (a *App) GetOrDetectSilencesWithCache(
 	// fmt.Println("Cache miss for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
 
 	// 2. If not found, perform the detection
-	// Note: We call the standalone DetectSilences function here.
-	// If DetectSilences itself could be long-running and called by multiple goroutines
-	// for the *same missing key* simultaneously, you might want a more complex
-	// single-flight mechanism. For simplicity, this lock-after-check is common.
 	silences, err := a.DetectSilences(filePath, loudnessThreshold, minSilenceDurationSeconds, paddingLeftSeconds, paddingRightSeconds)
 	if err != nil {
 		// Do not cache errors, so subsequent calls can retry.
@@ -433,12 +431,11 @@ func (a *App) GetOrDetectSilencesWithCache(
 }
 
 // New method to be called from Wails frontend
-func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb float64) (*PrecomputedWaveformData, error) {
+func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
 	maxDb := 0.0 // Consistent with original function; this is now passed to the caching layer.
 
 	// The caching function GetOrGenerateWaveformWithCache will handle path resolution
-	// using a.effectiveAudioFolderPath for processing and use the relative path for the cache key.
-	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, minDb, maxDb)
+	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
 	if err != nil {
 		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))
 		return nil, fmt.Errorf("failed to get/generate waveform for '%s': %v", filePath, err)
@@ -454,6 +451,8 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	samplesPerPixel int,
 	minDb float64,
 	maxDb float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
 ) (*PrecomputedWaveformData, error) {
 	// First, resolve the webInputPath to a local file system path to check for existence.
 	// This also validates if effectiveAudioFolderPath is set.
@@ -469,10 +468,12 @@ func (a *App) GetOrGenerateWaveformWithCache(
 
 	// The cache key uses the original webInputPath as the primary identifier.
 	key := WaveformCacheKey{
-		FilePath:        webInputPath, // Use the URL/web path for the key
-		SamplesPerPixel: samplesPerPixel,
-		MinDb:           minDb,
-		MaxDb:           maxDb,
+		FilePath:         webInputPath, // Use the URL/web path for the key
+		SamplesPerPixel:  samplesPerPixel,
+		MinDb:            minDb,
+		MaxDb:            maxDb,
+		ClipStartSeconds: clipStartSeconds,
+		ClipEndSeconds:   clipEndSeconds,
 	}
 
 	a.cacheMutex.RLock()
@@ -487,7 +488,7 @@ func (a *App) GetOrGenerateWaveformWithCache(
 
 	// If not found, perform the generation.
 	// Pass the original webInputPath to ProcessWavToLogarithmicPeaks, as it handles its own path resolution.
-	waveformData, err := a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb)
+	waveformData, err := a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
 	if err != nil {
 		// Do not cache errors, so subsequent calls can retry.
 		return nil, fmt.Errorf("error during waveform peak processing for '%s': %w", webInputPath, err)

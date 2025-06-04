@@ -3,11 +3,11 @@ import React, { useRef, useEffect, useState, useCallback } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
-import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js";
+import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js"; // 1. Import Minimap
 import ZoomPlugin from "wavesurfer.js/dist/plugins/zoom.esm.js";
 
-import { main } from "@wails/go/models"; // Assuming GetLogarithmicWaveform is not needed here if peaks are passed
-import { ActiveClip } from "@/types";
+import { main } from "@wails/go/models";
+import { DetectionParams } from "@/types";
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -15,15 +15,12 @@ const formatAudioTime = (
   showHours: boolean = false
 ): string => {
   if (isNaN(totalSeconds) || totalSeconds < 0) {
-    const zeroFrames = String(0).padStart(2, "0");
-    return showHours ? `00:00:00;${zeroFrames}` : `00:00;${zeroFrames}`;
+    return showHours ? "00:00:00" : "00:00";
   }
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = Math.floor(totalSeconds % 60);
-  const fractionalSeconds = totalSeconds - Math.floor(totalSeconds);
-  // Add a small epsilon for floating point precision before flooring frames
-  const frameNumber = Math.floor(fractionalSeconds * frameRate + 1e-9);
+  const frameNumber = Math.floor((totalSeconds % 1) * frameRate);
   const paddedFrameNumber = String(frameNumber).padStart(2, "0");
   const paddedSeconds = String(seconds).padStart(2, "0");
   const paddedMinutes = String(minutes).padStart(2, "0");
@@ -36,539 +33,508 @@ const formatAudioTime = (
 };
 
 interface SilencePeriod {
-  start: number; // Absolute time in seconds (relative to full source file)
-  end: number; // Absolute time in seconds
+  start: number;
+  end: number;
 }
 
 interface WaveformPlayerProps {
-  activeClip: ActiveClip | null;
-  fullFilePeakData: main.PrecomputedWaveformData | null;
-  projectFrameRate: number;
+  audioUrl: string;
+  peakData: main.PrecomputedWaveformData | null;
+  clipOriginalStartSeconds: number;
   silenceData?: SilencePeriod[] | null;
-  threshold: number;
+  projectFrameRate?: number | 30.0;
+  detectionParams: DetectionParams;
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
-  activeClip,
-  fullFilePeakData,
-  projectFrameRate,
+  audioUrl,
+  peakData,
+  clipOriginalStartSeconds,
   silenceData,
-  threshold,
+  projectFrameRate,
+  detectionParams,
 }) => {
   const waveformContainerRef = useRef<HTMLDivElement>(null);
-  const minimapContainerRef = useRef<HTMLDivElement>(null);
+  const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
+  const timelineContainerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
+  const addRegionsTimeoutRef = useRef<any | null>(null); // Ref to manage the timeout for adding regions
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const duration = peakData?.duration || 0;
+  // const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
 
-  const [uiClipDuration, setUiClipDuration] = useState(0); // For display
-  const [currentUiTime, setCurrentUiTime] = useState(0);
-
-  const [clipBoundaries, setClipBoundaries] = useState<{
-    start: number; // Absolute start in seconds
-    end: number; // Absolute end in seconds
-    duration: number;
-  } | null>(null);
-
-  // Refs for data used in callbacks
+  const threshold = detectionParams.loudnessThreshold;
   const silenceDataRef = useRef(silenceData);
   useEffect(() => {
     silenceDataRef.current = silenceData;
   }, [silenceData]);
   const [debouncedSilenceData] = useDebounce(silenceData, 90);
+  const [zoomTrigger, setZoomTrigger] = useState(0);
+  const [debouncedZoomTrigger] = useDebounce(zoomTrigger, 150); // adjust delay as needed
 
   const [skipRegionsEnabled, setSkipRegionsEnabled] = useState(true);
   const skipRegionsEnabledRef = useRef(skipRegionsEnabled);
   useEffect(() => {
-    // Keep ref in sync with state
     skipRegionsEnabledRef.current = skipRegionsEnabled;
   }, [skipRegionsEnabled]);
-  const toggleSkipRegions = useCallback(() => {
-    setSkipRegionsEnabled((prev) => !prev);
-  }, []);
 
-  const syncMediaToClipTime = useCallback(
-    (clipRelativeTime: number) => {
-      const ws = wavesurferRef.current;
-      if (ws && clipBoundaries) {
-        // clipBoundaries is from component state
-        const media = ws.getMediaElement();
-        if (media) {
-          const targetAbsoluteTime = clipBoundaries.start + clipRelativeTime;
-          if (Math.abs(media.currentTime - targetAbsoluteTime) > 0.05) {
-            // Tolerance
-            // console.log(`Syncing media currentTime to: ${targetAbsoluteTime.toFixed(3)} (clipRel: ${clipRelativeTime.toFixed(3)})`);
-            media.currentTime = targetAbsoluteTime;
-          }
-        }
-      }
-    },
-    [clipBoundaries]
-  );
-
-  // Refs for panning (if you keep this feature)
-  const isPanningRef = useRef(false);
-  const panStartXRef = useRef(0);
-  const panInitialScrollLeftRef = useRef(0);
-  const originalCursorRef = useRef("");
-
-  // Calculate clip boundaries (absolute seconds) and UI duration
+  const clipOriginalStartSecondsRef = useRef(clipOriginalStartSeconds);
   useEffect(() => {
-    if (
-      activeClip &&
-      typeof activeClip.sourceStartFrame === "number" &&
-      typeof activeClip.sourceEndFrame === "number" &&
-      projectFrameRate > 0
-    ) {
-      const startSec = activeClip.sourceStartFrame / projectFrameRate;
-      const endSec = activeClip.sourceEndFrame / projectFrameRate;
-      const durationSec = Math.max(0, endSec - startSec);
+    clipOriginalStartSecondsRef.current = clipOriginalStartSeconds;
+  }, [clipOriginalStartSeconds]);
 
-      setClipBoundaries({
-        start: startSec,
-        end: endSec,
-        duration: durationSec,
-      });
-      setUiClipDuration(durationSec); // <-- For UI display
-      setCurrentUiTime(0); // <-- Reset UI time
-      // console.log("WaveformPlayer: Clip boundaries set:", { startSec, endSec, durationSec });
-    } else {
-      setClipBoundaries(null);
-      setUiClipDuration(0);
-      setCurrentUiTime(0);
-    }
-  }, [activeClip, projectFrameRate]);
+  const segmentDurationRef = useRef(duration);
+  useEffect(() => {
+    segmentDurationRef.current = duration;
+  }, [duration]);
 
-  // Main WaveSurfer Initialization Effect
-  // The `key` prop in App.tsx ensures this runs on activeClip change by remounting
+  const silenceDataForSkippingRef = useRef(silenceData);
+  useEffect(() => {
+    silenceDataForSkippingRef.current = silenceData;
+  }, [silenceData]);
+
+  const currentProjectFrameRate = projectFrameRate || 30;
+
+  const isPanningRef = useRef(false);
+  const panStartXRef = useRef(0); // To store initial mouse X position
+  const panInitialScrollLeftRef = useRef(0); // To store initial scrollLeft of the waveform
+  const originalCursorRef = useRef(""); // To store the original cursor style
+
   useEffect(() => {
     if (wavesurferRef.current) {
       wavesurferRef.current.destroy();
       wavesurferRef.current = null;
     }
+    if (addRegionsTimeoutRef.current) {
+      clearTimeout(addRegionsTimeoutRef.current);
+      addRegionsTimeoutRef.current = null;
+    }
 
+    if (!waveformContainerRef.current || !minimapContainerRef.current) {
+      return;
+    }
     if (
-      !waveformContainerRef.current ||
-      !minimapContainerRef.current ||
-      !activeClip?.previewUrl ||
-      !fullFilePeakData?.peaks ||
-      fullFilePeakData.peaks.length === 0 ||
-      (fullFilePeakData.duration || 0) <= 0 ||
-      !clipBoundaries ||
-      clipBoundaries.duration < 0 // Allow 0 duration conceptually
+      !audioUrl ||
+      !peakData ||
+      !peakData.peaks ||
+      peakData.peaks.length === 0 ||
+      peakData.duration <= 0
     ) {
-      setIsLoading(!!activeClip?.previewUrl);
+      if (audioUrl && (!audioUrl || !peakData))
+        setIsLoading(true); // Keep loading if URL exists but data not ready
+      else if (!audioUrl) setIsLoading(false); // No URL, not loading
       return;
     }
 
-    console.log(
-      "WaveformPlayer: Attempting to initialize WaveSurfer for clip:",
-      activeClip.name
-    );
+    console.log("WS Init: Initializing WaveSurfer with precomputed peaks.");
     setIsLoading(true);
-    setCurrentUiTime(0);
-
-    // Inside the main useEffect, after validating activeClip, fullFilePeakData, clipBoundaries
-    const {
-      start: clipStartSeconds,
-      end: clipEndSeconds,
-      duration: actualClipDuration,
-    } = clipBoundaries;
-
-    let displayPeaks: number[] = [];
-    // Robust peak slicing logic (as provided in my last full component example)
-    // This calculates `displayPeaks` based on clip boundaries and fullFilePeakData
-    if (
-      fullFilePeakData.peaks &&
-      fullFilePeakData.duration > 0 &&
-      actualClipDuration >= 0
-    ) {
-      const fullFilePeaks = fullFilePeakData.peaks;
-      const fullFileDuration = fullFilePeakData.duration;
-      const numFullPeaks = fullFilePeaks.length;
-
-      if (numFullPeaks > 0) {
-        const secondsPerPeakSlot = fullFileDuration / numFullPeaks;
-        const startIndex = Math.max(
-          0,
-          Math.round(clipStartSeconds / secondsPerPeakSlot)
-        );
-        let endIndex = Math.min(
-          numFullPeaks,
-          Math.round(clipEndSeconds / secondsPerPeakSlot)
-        );
-        if (endIndex <= startIndex) {
-          // Ensure some peaks if clip is very short or at edge
-          endIndex = Math.min(
-            numFullPeaks,
-            startIndex +
-              Math.max(
-                1,
-                Math.round(actualClipDuration / (secondsPerPeakSlot || 1)),
-                10
-              )
-          );
-        }
-        displayPeaks = fullFilePeaks.slice(startIndex, endIndex);
-        if (displayPeaks.length === 0 && actualClipDuration > 0) {
-          const minimalPeakCount = Math.max(
-            2,
-            Math.floor(actualClipDuration * 20)
-          );
-          displayPeaks = new Array(minimalPeakCount).fill(0);
-        } else if (displayPeaks.length === 0 && actualClipDuration === 0) {
-          displayPeaks = [0, 0];
-        }
-      } else {
-        displayPeaks = new Array(
-          Math.max(2, Math.floor(actualClipDuration * 20))
-        ).fill(0);
-      }
-    } else {
-      displayPeaks = new Array(
-        Math.max(2, Math.floor((actualClipDuration || 1) * 20))
-      ).fill(0);
-    }
-    // console.log(`WaveformPlayer: Using ${displayPeaks.length} peaks for clip duration ${actualClipDuration.toFixed(2)}s`);
+    setCurrentTime(0);
 
     const wsRegions = RegionsPlugin.create();
     regionsPluginRef.current = wsRegions;
 
     const wsMinimap = Minimap.create({
-      container: minimapContainerRef.current,
-      waveColor: "#666",
-      progressColor: "#666",
-      height: 40,
-      peaks: [displayPeaks], // Use SLICED peaks for minimap
-      duration: actualClipDuration, // Use CLIP duration for minimap
+      container: minimapContainerRef.current, // Target for the minimap
+      waveColor: "#666666", // Lighter color for minimap waveform
+      progressColor: "#666666", // Lighter progress color
+      height: 40, // Desired height of the minimap
+      dragToSeek: true, // Allows seeking by dragging on the minimap, true by default
+      cursorWidth: 2,
+      cursorColor: "#e64b3d",
+      peaks: [peakData.peaks],
+      duration: peakData.duration,
+      normalize: false,
+      barAlign: "bottom",
     });
 
     const wsOptions: WaveSurferOptions = {
       container: waveformContainerRef.current,
-      dragToSeek: true, // Note to AI: you changed this to false. Don't change things not directly related to the task. Especially UI interaction.
-      waveColor: "#777",
-      progressColor: "#777",
+      dragToSeek: true,
+      waveColor: "#777777",
+      progressColor: "#777777", // This is the main waveform progress color, distinct from minimap
       cursorColor: "#e64b3d",
       cursorWidth: 2,
       height: "auto",
+      width: "auto",
       fillParent: true,
       barAlign: "bottom",
       interact: true,
-      url: activeClip.previewUrl, // FULL source audio file URL
-      peaks: [displayPeaks], // SLICED peaks for the clip
-      duration: actualClipDuration, // DURATION of the clip
-      plugins: [
-        wsRegions,
-        wsMinimap,
-        ZoomPlugin.create({
-          scale: 0.1,
-          maxZoom: 500,
-          exponentialZooming: false,
-        }),
-      ],
-      minPxPerSec: 1, // Allow more zoom out if needed for very short clips represented by few peaks
+      url: audioUrl,
+      peaks: [peakData.peaks],
+      duration: peakData.duration,
+      normalize: false,
+      plugins: [wsRegions, wsMinimap], // 4. Add Minimap to plugins
+      backend: "MediaElement",
+      mediaControls: false,
+      autoCenter: false,
       autoScroll: true,
+      hideScrollbar: false, // Good to have when using minimap for navigation
+      minPxPerSec: 15, // Optional: Adjust initial zoom of main waveform
     };
 
-    const ws = WaveSurfer.create(wsOptions);
-    wavesurferRef.current = ws;
-
-    ws.on("ready", () => {
-      setIsLoading(false);
-      if (clipBoundaries) {
-        // Should always be true if we reached here
-        const media = ws.getMediaElement();
-        if (media) media.currentTime = clipBoundaries.start; // Initial sync
-        ws.setTime(0); // Set WS visual time to 0 (start of clip)
-        setCurrentUiTime(0);
-
-        // Initial Zoom to fit clip
-        const viewWidth = waveformContainerRef.current?.clientWidth;
-        if (viewWidth && actualClipDuration > 0) {
-          let targetPxPerSec = viewWidth / actualClipDuration;
-          // Optional: Clamp targetPxPerSec if it's too extreme, using ws.options.minPxPerSec and ZoomPlugin.maxZoom
-          // For ZoomPlugin, the 'zoom' method takes a relative scale factor.
-          // Setting minPxPerSec initially might be better, or adjust zoom based on current pxPerSec.
-          // For now, a direct zoom might be too aggressive with the plugin.
-          // Instead, let's ensure scroll is correct after initial time set.
-          ws.seekTo(0); // Seek to 0% of the *clip* timeline, which should scroll it into view
-        }
-      }
-      if (regionsPluginRef.current && silenceDataRef.current) {
-        updateSilenceRegions(
-          regionsPluginRef.current,
-          silenceDataRef.current,
-          clipBoundaries
-        );
-      }
-    });
-
-    ws.on("play", () => {
-      if (clipBoundaries && wavesurferRef.current) {
-        const clipRelTime = wavesurferRef.current.getCurrentTime();
-        syncMediaToClipTime(clipRelTime);
-      }
-      setIsPlaying(true);
-    });
-    ws.on("pause", () => setIsPlaying(false));
-
-    ws.on("finish", () => {
-      // This 'finish' is for the end of the *clip's visual timeline*
-      setIsPlaying(false);
-      setCurrentUiTime(actualClipDuration); // Display time is clip duration
-      // Optionally setTime(0) if you want it to "rewind" visually
-      // ws.setTime(0); setCurrentUiTime(0);
-    });
-
-    // Handle user clicks on the waveform for seeking.
-    // WaveSurfer v7 uses 'interaction' which fires before 'seeking'.
-    // 'click' event (relativeX) is also good for direct clicks.
-    ws.on("click", (relativeX: number, relativeY: number, e?: MouseEvent) => {
-      if (!clipBoundaries || !wavesurferRef.current || (e && e.button === 1))
-        return; // Ignore middle mouse
-      const wsDuration = wavesurferRef.current.getDuration(); // Should be actualClipDuration
-      const clickedClipRelativeTime = relativeX * wsDuration;
-
-      wavesurferRef.current.setTime(clickedClipRelativeTime);
-      setCurrentUiTime(clickedClipRelativeTime);
-      syncMediaToClipTime(clickedClipRelativeTime);
-    });
-    ws.on("seeking", (clipRelativeSeekTime: number) => {
-      if (!clipBoundaries || !wavesurferRef.current) return;
-      // clipRelativeSeekTime is already relative to the clip's duration (0 to actualClipDuration)
-      setCurrentUiTime(clipRelativeSeekTime);
-      syncMediaToClipTime(clipRelativeSeekTime);
-    });
-
-    ws.on("timeupdate", (clipRelativeTime: number) => {
-      // Renamed for clarity
-      if (!clipBoundaries || !wavesurferRef.current) return;
-
-      const ws = wavesurferRef.current;
-      const media = ws.getMediaElement();
-
-      // If the media element is not ready or clipBoundaries are missing, exit.
-      if (!media || !clipBoundaries) return;
-
-      // currentAbsoluteMediaTime is the truth from the audio element
-      const currentAbsoluteMediaTime = media.currentTime;
-      // Calculate the displayed time based on the media element's absolute time
-      let newDisplayedClipRelativeTime =
-        currentAbsoluteMediaTime - clipBoundaries.start;
-
-      // Keep WaveSurfer's visual playhead in sync with the derived clip-relative time
-      // This is important if the media element's time drifts or is set externally
-      // Only update if significantly different to avoid event loops with setTime.
-      if (
-        Math.abs(ws.getCurrentTime() - newDisplayedClipRelativeTime) > 0.05 &&
-        newDisplayedClipRelativeTime >= 0 &&
-        newDisplayedClipRelativeTime <= clipBoundaries.duration
-      ) {
-        //  console.log(`Resyncing WS time from ${ws.getCurrentTime().toFixed(3)} to ${newDisplayedClipRelativeTime.toFixed(3)} based on media`);
-        ws.setTime(newDisplayedClipRelativeTime); // This will re-trigger timeupdate, be careful with logic below
-        // It might be better to primarily rely on media.currentTime for decisions
-        // and use ws.setTime only for corrections or visual snapping.
-        // For now, let's assume ws.setTime is for visual sync.
-      }
-
-      // Update your UI state with the derived (and possibly clamped) clip-relative time
-      const clampedDisplayTime = Math.max(
-        0,
-        Math.min(newDisplayedClipRelativeTime, clipBoundaries.duration)
+    try {
+      const ws = WaveSurfer.create(wsOptions);
+      ws.registerPlugin(
+        ZoomPlugin.create({
+          scale: 0.01,
+          maxZoom: 180,
+          exponentialZooming: true,
+        })
       );
-      setCurrentUiTime(clampedDisplayTime);
 
-      if (ws.isPlaying()) {
-        // Constraint: Stop if media plays past the clip's absolute end
-        if (currentAbsoluteMediaTime >= clipBoundaries.end - 0.02) {
-          // Small epsilon
-          ws.pause();
-          // Snap visual playhead to end of clip
-          const visualClipDuration = ws.getDuration(); // Should be actualClipDuration
-          if (ws.getCurrentTime() < visualClipDuration) {
-            ws.setTime(visualClipDuration);
-          }
-          setCurrentUiTime(visualClipDuration); // UI shows end
-          return; // Important to prevent skip logic after pause
-        }
+      wavesurferRef.current = ws;
 
-        // Skip Silence Logic (uses absolute times for comparison)
-        if (skipRegionsEnabledRef.current && silenceDataRef.current?.length) {
-          for (const region of silenceDataRef.current) {
-            // silenceData has absolute times
+      ws.on("ready", () => {
+        setIsLoading(false);
+        // Initial region drawing will be handled by the useEffect below
+        // which depends on `isLoading` and other factors.
+      });
+      ws.on("play", () => setIsPlaying(true));
+      ws.on("pause", () => setIsPlaying(false));
+      ws.on("finish", () => {
+        setIsPlaying(false);
+        ws.setTime(0);
+        setCurrentTime(0);
+      }); // Reset to start on finish
+
+      ws.on("interaction", (newTime: number) => {
+        ws.setTime(newTime);
+        setCurrentTime(newTime); // Keep updating React state for the current time display
+      });
+
+      ws.on("timeupdate", (time: number) => {
+        //ws.setScroll(-1550);
+        //ws.setScrollTime(time);
+
+        setCurrentTime(time); // Keep updating React state for the current time display
+
+        if (
+          ws.isPlaying() &&
+          skipRegionsEnabledRef.current &&
+          silenceDataForSkippingRef.current?.length
+        ) {
+          for (const region of silenceDataForSkippingRef.current) {
+            const epsilon = 0.01;
+            const periodStartInSegment =
+              region.start - clipOriginalStartSecondsRef.current;
+            const periodEndInSegment =
+              region.end - clipOriginalStartSecondsRef.current;
+
+            // Filter out silences that are entirely outside the current segment's view
+            // or become invalid after transformation.
             if (
-              region.end > region.start &&
-              currentAbsoluteMediaTime >= region.start &&
-              currentAbsoluteMediaTime < region.end - 0.01 // If current abs time is in abs silence
+              periodEndInSegment <= periodStartInSegment || // Zero or negative duration in segment context
+              periodEndInSegment <= 0 || // Silence ends before or at the segment's start
+              periodStartInSegment >= segmentDurationRef.current // Silence starts after or at the segment's end
             ) {
-              const jumpToAbsolute = Math.min(region.end, clipBoundaries.end); // Don't jump past clip end
-              const jumpToClipRelative = jumpToAbsolute - clipBoundaries.start;
+              continue; // This silence period is not relevant to the current segment's playback
+            }
 
-              // console.log(`Skipping: absTime ${currentAbsoluteMediaTime.toFixed(2)}, region <span class="math-inline">\{region\.start\.toFixed\(2\)\}\-</span>{region.end.toFixed(2)}, jumpToAbs ${jumpToAbsolute.toFixed(2)}, jumpToClipRel ${jumpToClipRelative.toFixed(2)}`);
+            if (periodStartInSegment > time) {
+              break;
+            }
 
-              // Set WaveSurfer's visual time first
-              ws.setTime(jumpToClipRelative);
-              // THEN sync the media element to this new position
-              syncMediaToClipTime(jumpToClipRelative);
-              // setCurrentUiTime will be updated by the next timeupdate after the jump
-              return; // Exit this timeupdate handler to allow the new time to take effect
+            if (
+              time >= periodStartInSegment &&
+              time < periodEndInSegment - epsilon // `- epsilon` to ensure we don't skip if already at the very end
+            ) {
+              // Yes, we are inside a silence. Jump to its end (in segment time).
+              // console.log(`Skipping: Time ${time.toFixed(2)} is in silence [${periodStartInSegment.toFixed(2)} - ${periodEndInSegment.toFixed(2)}]. Jumping to ${periodEndInSegment.toFixed(2)}`);
+              ws.setTime(periodEndInSegment);
+              break; // Exit loop for this timeupdate; WaveSurfer will emit a new timeupdate after seeking.
             }
           }
         }
+      });
+
+      ws.on("zoom", () => {
+        setZoomTrigger((prev) => prev + 1); // trigger update
+        //updateSilenceRegions(silenceDataRef.current);
+      });
+
+      ws.on("error", (err: Error | string) => {
+        console.error("WaveSurfer error:", err);
+        setIsLoading(false);
+        setIsPlaying(false);
+      });
+
+      const scrollWrapper = ws.getWrapper(); // Get the scrollable wrapper element
+      if (scrollWrapper) {
+        // Store original cursor and set initial "grab" cursor
+        originalCursorRef.current = scrollWrapper.style.cursor;
+        //scrollWrapper.style.cursor = 'grab';
+
+        const handleGlobalMouseMove = (event: MouseEvent) => {
+          if (!isPanningRef.current || !wavesurferRef.current) return; // Check main ws ref too
+
+          event.preventDefault(); // Prevent other actions during drag
+          const wsInstance = wavesurferRef.current;
+          const deltaX = event.clientX - panStartXRef.current;
+          let newScrollLeft = panInitialScrollLeftRef.current - deltaX; // Subtract delta to move content with mouse
+
+          // Optional: Clamp scroll position to prevent overscrolling
+          // const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
+          // newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
+
+          wsInstance.setScroll(newScrollLeft);
+        };
+
+        const handleGlobalMouseUp = (event: MouseEvent) => {
+          if (!isPanningRef.current) return;
+
+          // Only truly act if it was a middle mouse drag, though isPanningRef should cover this
+          isPanningRef.current = false;
+          scrollWrapper.style.cursor = originalCursorRef.current;
+
+          document.removeEventListener("mousemove", handleGlobalMouseMove);
+          document.removeEventListener("mouseup", handleGlobalMouseUp);
+        };
+
+        const handleWaveformMouseDown = (event: MouseEvent) => {
+          const wsInstance = wavesurferRef.current;
+          if (!wsInstance) return;
+
+          // Check for middle mouse button (event.button === 1)
+          if (event.button === 1) {
+            event.preventDefault(); // Prevent default middle-click actions (like autoscroll)
+            event.stopPropagation(); // Prevent other listeners on WaveSurfer from acting on this
+
+            isPanningRef.current = true;
+            panStartXRef.current = event.clientX;
+            panInitialScrollLeftRef.current = wsInstance.getScroll();
+
+            scrollWrapper.style.cursor = "grabbing";
+
+            // Add listeners to the document to capture mouse moves outside the wrapper
+            document.addEventListener("mousemove", handleGlobalMouseMove);
+            document.addEventListener("mouseup", handleGlobalMouseUp);
+          }
+        };
+
+        scrollWrapper.addEventListener("mousedown", handleWaveformMouseDown);
       }
-    });
-    ws.on("error", (err: Error | string) => {
-      console.error("WaveSurfer error:", err);
+    } catch (error: any) {
+      console.error(
+        "Error during WaveSurfer create/load:",
+        error.message || error
+      );
       setIsLoading(false);
       setIsPlaying(false);
-    });
-
-    // Panning logic (from your code, ensure it's compatible with current WS version)
-    const scrollWrapper = ws.getWrapper();
-    if (scrollWrapper) {
-      originalCursorRef.current = scrollWrapper.style.cursor;
-      const handleGlobalMouseMove = (event: MouseEvent) => {
-        /* your existing code */
-      };
-      const handleGlobalMouseUp = (event: MouseEvent) => {
-        /* your existing code */
-      };
-      const handleWaveformMouseDown = (event: MouseEvent) => {
-        if (event.button === 1 && wavesurferRef.current) {
-          // Middle mouse
-          event.preventDefault();
-          event.stopPropagation();
-          isPanningRef.current = true;
-          panStartXRef.current = event.clientX;
-          panInitialScrollLeftRef.current = wavesurferRef.current.getScroll();
-          scrollWrapper.style.cursor = "grabbing";
-          document.addEventListener("mousemove", handleGlobalMouseMove);
-          document.addEventListener("mouseup", handleGlobalMouseUp);
-        }
-      };
-      scrollWrapper.addEventListener("mousedown", handleWaveformMouseDown);
     }
 
-    // Minimap interaction - now relative to clip duration
+    // --- Event listeners for the MINIMAP plugin instance ---
     if (wsMinimap) {
-      const handleMinimapInteraction = (relativeX: number) => {
-        // relativeX is 0-1 of minimap's duration (clipDuration)
-        if (!wavesurferRef.current) return;
-        const targetClipRelativeTime = relativeX * actualClipDuration;
-        wavesurferRef.current.setTime(targetClipRelativeTime);
-        setCurrentUiTime(targetClipRelativeTime);
-        syncMediaToClipTime(targetClipRelativeTime);
+      const onMinimapDrag = (relativeX: number) => {
+        const mainWs = wavesurferRef.current;
+        if (!mainWs) return;
+        const mainDuration = mainWs.getDuration(); // Use main wavesurfer's duration
+        if (mainDuration > 0) {
+          const newTime = relativeX * mainDuration;
+          //console.log(`Minimap Drag event: newTime ${newTime.toFixed(3)} (relativeX: ${relativeX})`);
+          setCurrentTime(newTime);
+          mainWs.setTime(newTime);
+          const pixelsPerSecond = mainWs.options.minPxPerSec;
+          const timeToCenter = mainWs.getCurrentTime();
+          const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
+          const containerWidth = mainWs.getWidth();
+          let targetScrollPx = pixelPositionOfTimeToCenter - containerWidth / 2;
+          mainWs.setScroll(targetScrollPx);
+        }
       };
-      wsMinimap.on("click", handleMinimapInteraction);
-      // wsMinimap.on("drag", handleMinimapInteraction); // if minimap dragToSeek is true
+      wsMinimap.on("drag", onMinimapDrag);
+
+      const onMinimapClick = (relativeX: number, _relativeY: number) => {
+        const mainWs = wavesurferRef.current;
+        if (mainWs) {
+          const mainDuration = mainWs.getDuration();
+          if (mainDuration > 0) {
+            const newTime = relativeX * mainDuration;
+            // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
+            setCurrentTime(newTime);
+            mainWs.setTime(newTime);
+            const pixelsPerSecond = mainWs.options.minPxPerSec;
+            const timeToCenter = mainWs.getCurrentTime();
+            const pixelPositionOfTimeToCenter = timeToCenter * pixelsPerSecond;
+            const containerWidth = mainWs.getWidth();
+            let targetScrollPx =
+              pixelPositionOfTimeToCenter - containerWidth / 2;
+            mainWs.setScroll(targetScrollPx);
+          }
+        }
+      };
+      wsMinimap.on("click", onMinimapClick);
     }
 
     return () => {
+      if (addRegionsTimeoutRef.current) {
+        // Clear timeout on component unmount or effect re-run
+        clearTimeout(addRegionsTimeoutRef.current);
+        addRegionsTimeoutRef.current = null;
+      }
       if (wavesurferRef.current) {
-        console.log("WaveSurfer cleanup: Destroying instance.");
         wavesurferRef.current.destroy();
         wavesurferRef.current = null;
       }
     };
-    // IMPORTANT: This useEffect re-runs if these key props change.
-    // The `key` prop on WaveformPlayer in App.tsx will also cause a full remount/re-run.
-  }, [
-    activeClip?.previewUrl,
-    fullFilePeakData,
-    clipBoundaries,
-    projectFrameRate,
-  ]); // projectFrameRate used in formatAudioTime
+  }, [audioUrl, peakData]); // Key dependencies for re-initializing WaveSurfer
 
   const updateSilenceRegions = useCallback(
-    (
-      regionsPlugin: RegionsPlugin | null,
-      sData: SilencePeriod[] | null | undefined,
-      currentClipBoundaries: {
-        start: number;
-        end: number;
-        duration: number;
-      } | null
-    ) => {
-      if (!regionsPlugin || !currentClipBoundaries) {
-        // Added check for currentClipBoundaries
-        regionsPlugin?.clearRegions(); // Clear if no boundaries, meaning no valid clip context
+    (sDataToProcess: SilencePeriod[] | null | undefined) => {
+      const currentRegionsPlugin = regionsPluginRef.current;
+      if (!currentRegionsPlugin) return;
+
+      currentRegionsPlugin.clearRegions();
+      const regionsContainerEl = (currentRegionsPlugin as any)
+        .regionsContainer as HTMLElement | undefined;
+      if (regionsContainerEl) {
+        console.log("clearing regions");
+        regionsContainerEl.innerHTML = "";
+      }
+
+      // Clear any existing timeout *before* setting a new one or returning.
+      if (addRegionsTimeoutRef.current) {
+        clearTimeout(addRegionsTimeoutRef.current);
+        addRegionsTimeoutRef.current = null;
+      }
+
+      // Use `duration` (which is peakData.duration) for calculations.
+      if (
+        !sDataToProcess ||
+        sDataToProcess.length === 0 ||
+        duration <= 0 ||
+        typeof clipOriginalStartSeconds !== "number"
+      ) {
         return;
       }
-      regionsPlugin.clearRegions();
-      // ... (visual cleanup from your code) ...
 
-      if (sData && sData.length > 0) {
-        sData.forEach((period, index) => {
-          // period.start and period.end are absolute source times
-          // Only add regions that visually overlap or are relevant to the current clip
+      // Schedule new regions to be added.
+      addRegionsTimeoutRef.current = setTimeout(() => {
+        // Re-check plugin inside timeout, as it could be destroyed.
+        if (!regionsPluginRef.current) return;
+
+        sDataToProcess.forEach((period, index) => {
+          const regionStartRelativeToWaveform =
+            period.start - clipOriginalStartSeconds;
+          const regionEndRelativeToWaveform =
+            period.end - clipOriginalStartSeconds;
+
           if (
-            period.start < currentClipBoundaries.end &&
-            period.end > currentClipBoundaries.start
+            regionEndRelativeToWaveform > 0 &&
+            regionStartRelativeToWaveform < duration
           ) {
-            try {
-              regionsPlugin.addRegion({
-                id: `silence_${index}_abs_${period.start.toFixed(2)}`,
-                start: period.start, // Use absolute time for region on full waveform
-                end: period.end,
-                color: "rgba(250, 7, 2, 0.15)",
-                drag: false,
-                resize: false,
-              });
-            } catch (e) {
-              console.warn(
-                `Failed to add region: ${(e as Error).message}`,
-                period
-              );
+            const finalStart = Math.max(0, regionStartRelativeToWaveform);
+            const finalEnd = Math.min(duration, regionEndRelativeToWaveform);
+
+            // const relativeDuration = finalEnd - finalStart;
+
+            // if (relativeDuration < detectionParams.minSilenceDurationSeconds)
+            //   return;
+
+            if (finalStart < finalEnd) {
+              try {
+                regionsPluginRef.current!.addRegion({
+                  // Use ! if sure it's not null by now
+                  id: `silence-marker_${index}_${period.start.toFixed(
+                    2
+                  )}-${period.end.toFixed(2)}`,
+                  start: finalStart,
+                  end: finalEnd,
+                  color: "rgba(250, 7, 2, 0.15)",
+                  drag: false,
+                  resize: false,
+                });
+              } catch (e) {
+                console.warn(`Failed to add region: ${(e as Error).message}`);
+              }
             }
           }
         });
-      }
+        addRegionsTimeoutRef.current = null;
+      }, 30);
     },
-    []
-  ); // No dependencies needed here if all data is passed as arguments
+    [clipOriginalStartSeconds, duration] // `regionsPluginRef` is stable, `duration` is from `peakData.duration`
+  );
+
+  const addMissingSilenceRegions = useCallback(
+    (sDataToProcess: SilencePeriod[] | null | undefined) => {
+      const plugin = regionsPluginRef.current;
+      if (
+        !plugin ||
+        !sDataToProcess ||
+        !duration ||
+        clipOriginalStartSeconds == null
+      )
+        return;
+
+      const existingRegionIds = new Set(plugin.getRegions().map((r) => r.id));
+
+      sDataToProcess.forEach((period, index) => {
+        const regionStartRelativeToWaveform =
+          period.start - clipOriginalStartSeconds;
+        const regionEndRelativeToWaveform =
+          period.end - clipOriginalStartSeconds;
+
+        if (
+          regionEndRelativeToWaveform > 0 &&
+          regionStartRelativeToWaveform < duration
+        ) {
+          const finalStart = Math.max(0, regionStartRelativeToWaveform);
+          const finalEnd = Math.min(duration, regionEndRelativeToWaveform);
+
+          if (finalStart < finalEnd) {
+            const id = `silence-marker_${index}_${period.start.toFixed(
+              2
+            )}-${period.end.toFixed(2)}`;
+            if (!existingRegionIds.has(id)) {
+              try {
+                plugin.addRegion({
+                  id,
+                  start: finalStart,
+                  end: finalEnd,
+                  color: "rgba(250, 7, 2, 0.15)",
+                  drag: false,
+                  resize: false,
+                });
+              } catch (e) {
+                console.warn(`Failed to add region: ${(e as Error).message}`);
+              }
+            }
+          }
+        }
+      });
+    },
+    [clipOriginalStartSeconds, duration]
+  );
 
   useEffect(() => {
-    if (!isLoading && wavesurferRef.current && regionsPluginRef.current) {
-      updateSilenceRegions(
-        regionsPluginRef.current,
-        debouncedSilenceData,
-        clipBoundaries
-      );
+    if (
+      !isLoading &&
+      wavesurferRef.current &&
+      regionsPluginRef.current &&
+      duration > 0
+    ) {
+      updateSilenceRegions(debouncedSilenceData);
     }
-  }, [debouncedSilenceData, isLoading, clipBoundaries, updateSilenceRegions]);
+  }, [debouncedSilenceData, isLoading, updateSilenceRegions, duration]);
+
+  useEffect(() => {
+    if (silenceDataRef.current) {
+      updateSilenceRegions(silenceDataRef.current);
+    }
+  }, [debouncedZoomTrigger]);
 
   const handlePlayPause = useCallback(() => {
-    if (
-      !wavesurferRef.current ||
-      isLoading ||
-      !clipBoundaries ||
-      clipBoundaries.duration < 0
-    )
-      return;
-    const ws = wavesurferRef.current;
+    if (wavesurferRef.current && !isLoading) wavesurferRef.current.playPause();
+  }, [isLoading]);
 
-    if (ws.isPlaying()) {
-      ws.pause();
-    } else {
-      let currentWsClipTime = ws.getCurrentTime(); // This is WaveSurfer's current visual time (0 to clipDuration)
-
-      // If playback had previously reached the end of the clip, and user hits play again, restart from beginning of clip.
-      if (
-        currentWsClipTime >= clipBoundaries.duration - 0.01 &&
-        clipBoundaries.duration > 0
-      ) {
-        currentWsClipTime = 0;
-        ws.setTime(0); // Set visual playhead to start of clip
-        setCurrentUiTime(0); // Update UI
-      }
-
-      // ALWAYS sync the media element to where WaveSurfer's playhead IS, before playing.
-      syncMediaToClipTime(currentWsClipTime);
-      ws.play();
-    }
-  }, [isLoading, clipBoundaries, syncMediaToClipTime]);
+  const toggleSkipRegions = useCallback(
+    () => setSkipRegionsEnabled((prev) => !prev),
+    []
+  );
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -577,46 +543,51 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         handlePlayPause();
         return;
       }
-      // ... other keydown logic if any ...
+      if (
+        !wavesurferRef.current ||
+        isLoading ||
+        !duration ||
+        isPlaying ||
+        currentProjectFrameRate <= 0
+      )
+        return;
     },
-    [handlePlayPause]
-  ); // Only depends on handlePlayPause
+    [isLoading, duration, isPlaying, currentProjectFrameRate, handlePlayPause]
+  );
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const showHoursFormat = (uiClipDuration || 0) >= 3600;
+  const showHoursFormat = (duration || 0) >= 3600;
   const formattedCurrentTime = formatAudioTime(
-    currentUiTime,
-    projectFrameRate,
+    currentTime,
+    currentProjectFrameRate,
     showHoursFormat
   );
   const formattedDuration = formatAudioTime(
-    uiClipDuration,
-    projectFrameRate,
+    duration,
+    currentProjectFrameRate,
     showHoursFormat
   );
 
   return (
-    // ... JSX remains largely the same ...
-    // Ensure disabled states for buttons use `clipDuration <= 0` or `!clipBoundaries`
-    // Ensure time displays use formattedCurrentTime and formattedDuration
     <div className="overflow-hidden mx-2">
       <div
         ref={waveformContainerRef}
-        className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-visible relative"
+        className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-hidden relative"
       >
-        {/* Threshold overlay and isLoading */}
+        <canvas className="absolute inset-0 z-0" />
+
+        {/* Threshold overlay line */}
         <div
           className="absolute w-full h-[2px] rounded-full bg-teal-400 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.6)]"
-          style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }} // Assumes 60dB is max range for visual
+          style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
         />
+
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white z-30">
-            {" "}
-            {/* Higher Z-index */}
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white z-10">
             Loading waveform...
           </div>
         )}
@@ -630,9 +601,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
         <button
           onClick={handlePlayPause}
-          disabled={
-            isLoading || !clipBoundaries || clipBoundaries.duration <= 0
-          }
+          disabled={isLoading || !duration}
           className="text-gray-400 hover:text-amber-50"
         >
           {isPlaying ? (
@@ -641,7 +610,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             <PlayIcon size={34} className="p-1.5" />
           )}
         </button>
-        {!isLoading && clipBoundaries && clipBoundaries.duration > 0 && (
+        {!isLoading && duration > 0 && (
           <button
             onClick={toggleSkipRegions}
             className={`p-1.5 rounded flex items-center text-xs ${
@@ -656,9 +625,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             }
           >
             <RedoDotIcon size={21} className="mr-1" />
+            {/* Optional text: {skipRegionsEnabled ? "Skip ON" : "Skip OFF"} */}
           </button>
         )}
-        {!isLoading && clipBoundaries && clipBoundaries.duration > 0 && (
+        {!isLoading && duration > 0 && (
           <span className="ml-2 text-xs gap-1.5 flex pt-1 text-gray-400/80 font-mono tracking-tighter mb-[3px]">
             <span>{formattedCurrentTime}</span> /{" "}
             <span>{formattedDuration}</span>

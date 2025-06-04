@@ -242,6 +242,11 @@ export namespace main {
 	    status: string;
 	    message: string;
 	    data?: any;
+	    shouldShowAlert?: boolean;
+	    alertTitle?: string;
+	    alertMessage?: string;
+	    alertSeverity?: string;
+	    alertIssued?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PythonCommandResponse(source);
@@ -252,6 +257,11 @@ export namespace main {
 	        this.status = source["status"];
 	        this.message = source["message"];
 	        this.data = source["data"];
+	        this.shouldShowAlert = source["shouldShowAlert"];
+	        this.alertTitle = source["alertTitle"];
+	        this.alertMessage = source["alertMessage"];
+	        this.alertSeverity = source["alertSeverity"];
+	        this.alertIssued = source["alertIssued"];
 	    }
 	}
 	
