@@ -690,10 +690,11 @@ export default function App() {
                         step={0.001}
                         value={[minDuration]}
                         onValueChange={(vals) => setMinDuration(vals[0])}
-                        className="w-full"
+                        className="w-[128px] max-w-[128px] min-w-[128px]"
                       />
-                      <span className="text-sm text-zinc-100">
-                        {minDuration.toFixed(2)}s
+                      <span className="text-sm text-zinc-100 font-mono tracking-tighter">
+                        {minDuration.toFixed(2)}
+                        <span className="text-zinc-400 ml-1">s</span>
                       </span>
                       <ResetButton onClick={resetMinDuration} />
                     </div>
@@ -711,7 +712,7 @@ export default function App() {
                           <Slider
                             min={0}
                             max={1}
-                            step={0.05}
+                            step={0.01}
                             value={[paddingLeft]}
                             onValueChange={(vals) =>
                               handlePaddingChange("left", vals[0])
@@ -733,8 +734,9 @@ export default function App() {
                         </div>
                         <span className="text-sm text-zinc-400">
                           Left:{" "}
-                          <span className="text-zinc-100">
-                            {paddingLeft.toFixed(2)}s
+                          <span className="text-zinc-100 font-mono tracking-tighter">
+                            {paddingLeft.toFixed(2)}
+                            <span className="text-zinc-400 ml-1">s</span>
                           </span>
                         </span>
                       </div>
@@ -756,8 +758,9 @@ export default function App() {
                         </div>
                         <span className="text-sm text-zinc-400">
                           Right:{" "}
-                          <span className="text-zinc-100">
-                            {paddingRight.toFixed(2)}s
+                          <span className="text-zinc-100 font-mono tracking-tighter">
+                            {paddingRight.toFixed(2)}
+                            <span className="text-zinc-400 ml-1">s</span>
                           </span>
                         </span>
                       </div>
