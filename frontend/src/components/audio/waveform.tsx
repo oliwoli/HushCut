@@ -138,11 +138,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     regionsPluginRef.current = wsRegions;
 
     const wsMinimap = Minimap.create({
-      container: minimapContainerRef.current, // Target for the minimap
-      waveColor: "#666666", // Lighter color for minimap waveform
-      progressColor: "#666666", // Lighter progress color
-      height: 40, // Desired height of the minimap
-      dragToSeek: true, // Allows seeking by dragging on the minimap, true by default
+      container: minimapContainerRef.current,
+      waveColor: "#666666",
+      progressColor: "#666666",
+      height: 40,
+      dragToSeek: true,
       cursorWidth: 2,
       cursorColor: "#e64b3d",
       peaks: [peakData.peaks],
@@ -155,7 +155,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       container: waveformContainerRef.current,
       dragToSeek: true,
       waveColor: "#777777",
-      progressColor: "#777777", // This is the main waveform progress color, distinct from minimap
+      progressColor: "#777777",
       cursorColor: "#e64b3d",
       cursorWidth: 2,
       height: "auto",
@@ -167,13 +167,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       peaks: [peakData.peaks],
       duration: peakData.duration,
       normalize: false,
-      plugins: [wsRegions, wsMinimap], // 4. Add Minimap to plugins
+      plugins: [wsRegions, wsMinimap],
       backend: "MediaElement",
       mediaControls: false,
       autoCenter: false,
       autoScroll: true,
-      hideScrollbar: false, // Good to have when using minimap for navigation
-      minPxPerSec: 15, // Optional: Adjust initial zoom of main waveform
+      hideScrollbar: false,
+      minPxPerSec: 15,
     };
 
     try {
@@ -193,7 +193,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         // Initial region drawing will be handled by the useEffect below
         // which depends on `isLoading` and other factors.
       });
-      ws.on("play", () => setIsPlaying(true));
+      ws.on("play", () => {
+        setIsPlaying(true);
+        // make sure the volume is set to 1
+        if (ws.getVolume() != 1) {
+          console.log("Volume was not 1, setting it to 1 webkit is cursed.");
+          // let's make an alert while we're at it to warnt the user of cursed webkit
+          alert("Volume was not 1, setting it to 1 webkit is cursed.");
+          // TODO: remove when building for production
+          ws.setVolume(1);
+        }
+      });
       ws.on("pause", () => setIsPlaying(false));
       ws.on("finish", () => {
         setIsPlaying(false);
@@ -223,15 +233,12 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
               region.start - clipOriginalStartSecondsRef.current;
             const periodEndInSegment =
               region.end - clipOriginalStartSecondsRef.current;
-
-            // Filter out silences that are entirely outside the current segment's view
-            // or become invalid after transformation.
             if (
-              periodEndInSegment <= periodStartInSegment || // Zero or negative duration in segment context
-              periodEndInSegment <= 0 || // Silence ends before or at the segment's start
-              periodStartInSegment >= segmentDurationRef.current // Silence starts after or at the segment's end
+              periodEndInSegment <= periodStartInSegment ||
+              periodEndInSegment <= 0 ||
+              periodStartInSegment >= segmentDurationRef.current
             ) {
-              continue; // This silence period is not relevant to the current segment's playback
+              continue;
             }
 
             if (periodStartInSegment > time) {
@@ -240,20 +247,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
             if (
               time >= periodStartInSegment &&
-              time < periodEndInSegment - epsilon // `- epsilon` to ensure we don't skip if already at the very end
+              time < periodEndInSegment - epsilon
             ) {
-              // Yes, we are inside a silence. Jump to its end (in segment time).
-              // console.log(`Skipping: Time ${time.toFixed(2)} is in silence [${periodStartInSegment.toFixed(2)} - ${periodEndInSegment.toFixed(2)}]. Jumping to ${periodEndInSegment.toFixed(2)}`);
               ws.setTime(periodEndInSegment);
-              break; // Exit loop for this timeupdate; WaveSurfer will emit a new timeupdate after seeking.
+              break;
             }
           }
         }
       });
 
       ws.on("zoom", () => {
-        setZoomTrigger((prev) => prev + 1); // trigger update
-        //updateSilenceRegions(silenceDataRef.current);
+        setZoomTrigger((prev) => prev + 1);
       });
 
       ws.on("error", (err: Error | string) => {
@@ -262,31 +266,22 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         setIsPlaying(false);
       });
 
-      const scrollWrapper = ws.getWrapper(); // Get the scrollable wrapper element
+      const scrollWrapper = ws.getWrapper();
       if (scrollWrapper) {
-        // Store original cursor and set initial "grab" cursor
         originalCursorRef.current = scrollWrapper.style.cursor;
-        //scrollWrapper.style.cursor = 'grab';
-
         const handleGlobalMouseMove = (event: MouseEvent) => {
-          if (!isPanningRef.current || !wavesurferRef.current) return; // Check main ws ref too
+          if (!isPanningRef.current || !wavesurferRef.current) return;
 
-          event.preventDefault(); // Prevent other actions during drag
+          event.preventDefault();
           const wsInstance = wavesurferRef.current;
           const deltaX = event.clientX - panStartXRef.current;
-          let newScrollLeft = panInitialScrollLeftRef.current - deltaX; // Subtract delta to move content with mouse
-
-          // Optional: Clamp scroll position to prevent overscrolling
-          // const maxScroll = scrollWrapper.scrollWidth - scrollWrapper.clientWidth;
-          // newScrollLeft = Math.max(0, Math.min(newScrollLeft, maxScroll));
-
+          let newScrollLeft = panInitialScrollLeftRef.current - deltaX;
           wsInstance.setScroll(newScrollLeft);
         };
 
         const handleGlobalMouseUp = (event: MouseEvent) => {
           if (!isPanningRef.current) return;
 
-          // Only truly act if it was a middle mouse drag, though isPanningRef should cover this
           isPanningRef.current = false;
           scrollWrapper.style.cursor = originalCursorRef.current;
 
@@ -298,10 +293,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           const wsInstance = wavesurferRef.current;
           if (!wsInstance) return;
 
-          // Check for middle mouse button (event.button === 1)
+          // middle mouse button
           if (event.button === 1) {
-            event.preventDefault(); // Prevent default middle-click actions (like autoscroll)
-            event.stopPropagation(); // Prevent other listeners on WaveSurfer from acting on this
+            event.preventDefault();
+            event.stopPropagation();
 
             isPanningRef.current = true;
             panStartXRef.current = event.clientX;
@@ -309,7 +304,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
             scrollWrapper.style.cursor = "grabbing";
 
-            // Add listeners to the document to capture mouse moves outside the wrapper
             document.addEventListener("mousemove", handleGlobalMouseMove);
             document.addEventListener("mouseup", handleGlobalMouseUp);
           }
@@ -331,10 +325,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const onMinimapDrag = (relativeX: number) => {
         const mainWs = wavesurferRef.current;
         if (!mainWs) return;
-        const mainDuration = mainWs.getDuration(); // Use main wavesurfer's duration
+        const mainDuration = mainWs.getDuration();
         if (mainDuration > 0) {
           const newTime = relativeX * mainDuration;
-          //console.log(`Minimap Drag event: newTime ${newTime.toFixed(3)} (relativeX: ${relativeX})`);
           setCurrentTime(newTime);
           mainWs.setTime(newTime);
           const pixelsPerSecond = mainWs.options.minPxPerSec;
@@ -371,7 +364,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
     return () => {
       if (addRegionsTimeoutRef.current) {
-        // Clear timeout on component unmount or effect re-run
         clearTimeout(addRegionsTimeoutRef.current);
         addRegionsTimeoutRef.current = null;
       }
@@ -380,7 +372,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         wavesurferRef.current = null;
       }
     };
-  }, [audioUrl, peakData]); // Key dependencies for re-initializing WaveSurfer
+  }, [audioUrl, peakData]);
 
   const updateSilenceRegions = useCallback(
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
@@ -391,17 +383,14 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const regionsContainerEl = (currentRegionsPlugin as any)
         .regionsContainer as HTMLElement | undefined;
       if (regionsContainerEl) {
-        console.log("clearing regions");
         regionsContainerEl.innerHTML = "";
       }
 
-      // Clear any existing timeout *before* setting a new one or returning.
       if (addRegionsTimeoutRef.current) {
         clearTimeout(addRegionsTimeoutRef.current);
         addRegionsTimeoutRef.current = null;
       }
 
-      // Use `duration` (which is peakData.duration) for calculations.
       if (
         !sDataToProcess ||
         sDataToProcess.length === 0 ||
@@ -411,9 +400,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         return;
       }
 
-      // Schedule new regions to be added.
       addRegionsTimeoutRef.current = setTimeout(() => {
-        // Re-check plugin inside timeout, as it could be destroyed.
         if (!regionsPluginRef.current) return;
 
         sDataToProcess.forEach((period, index) => {
@@ -429,15 +416,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             const finalStart = Math.max(0, regionStartRelativeToWaveform);
             const finalEnd = Math.min(duration, regionEndRelativeToWaveform);
 
-            // const relativeDuration = finalEnd - finalStart;
-
-            // if (relativeDuration < detectionParams.minSilenceDurationSeconds)
-            //   return;
-
             if (finalStart < finalEnd) {
               try {
                 regionsPluginRef.current!.addRegion({
-                  // Use ! if sure it's not null by now
                   id: `silence-marker_${index}_${period.start.toFixed(
                     2
                   )}-${period.end.toFixed(2)}`,
@@ -455,57 +436,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         });
         addRegionsTimeoutRef.current = null;
       }, 30);
-    },
-    [clipOriginalStartSeconds, duration] // `regionsPluginRef` is stable, `duration` is from `peakData.duration`
-  );
-
-  const addMissingSilenceRegions = useCallback(
-    (sDataToProcess: SilencePeriod[] | null | undefined) => {
-      const plugin = regionsPluginRef.current;
-      if (
-        !plugin ||
-        !sDataToProcess ||
-        !duration ||
-        clipOriginalStartSeconds == null
-      )
-        return;
-
-      const existingRegionIds = new Set(plugin.getRegions().map((r) => r.id));
-
-      sDataToProcess.forEach((period, index) => {
-        const regionStartRelativeToWaveform =
-          period.start - clipOriginalStartSeconds;
-        const regionEndRelativeToWaveform =
-          period.end - clipOriginalStartSeconds;
-
-        if (
-          regionEndRelativeToWaveform > 0 &&
-          regionStartRelativeToWaveform < duration
-        ) {
-          const finalStart = Math.max(0, regionStartRelativeToWaveform);
-          const finalEnd = Math.min(duration, regionEndRelativeToWaveform);
-
-          if (finalStart < finalEnd) {
-            const id = `silence-marker_${index}_${period.start.toFixed(
-              2
-            )}-${period.end.toFixed(2)}`;
-            if (!existingRegionIds.has(id)) {
-              try {
-                plugin.addRegion({
-                  id,
-                  start: finalStart,
-                  end: finalEnd,
-                  color: "rgba(250, 7, 2, 0.15)",
-                  drag: false,
-                  resize: false,
-                });
-              } catch (e) {
-                console.warn(`Failed to add region: ${(e as Error).message}`);
-              }
-            }
-          }
-        }
-      });
     },
     [clipOriginalStartSeconds, duration]
   );

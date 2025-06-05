@@ -71,6 +71,7 @@ const getDefaultDetectionParams = (): DetectionParams => ({
   // paddingLocked: true,
 });
 
+
 export default function App() {
   const [httpPort, setHttpPort] = useState<Number | null>(null);
   const [currentActiveClip, setCurrentActiveClip] = useState<ActiveClip | null>(

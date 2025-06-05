@@ -345,7 +345,6 @@ func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Reques
 
 	writer.Header().Set("Content-Type", "audio/wav")
 	writer.Header().Set("Accept-Ranges", "bytes") // Good for media seeking
-
 	http.ServeFile(writer, request, fullPath)
 	log.Printf("Audio Server Served: %s (Client: %s)", fullPath, request.RemoteAddr)
 }
@@ -483,7 +482,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 	// Set headers that http.ServeContent might use or that are good practice
 	w.Header().Set("Content-Type", "audio/wav")
 	// Accept-Ranges will be set by ServeContent if the seeker supports it, which bytes.Reader does.
-	// w.Header().Set("Accept-Ranges", "bytes") // Not strictly needed here, ServeContent does it.
+	w.Header().Set("Accept-Ranges", "bytes") // Not strictly needed here, ServeContent does it.
 
 	serveName := fmt.Sprintf("rendered_clip_%s_%.2f_%.2f.wav", cleanFileName, startSeconds, endSeconds)
 
