@@ -639,21 +639,19 @@ export default function App() {
           <div className="flex flex-col space-y-8">
             {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
-              <div className="flex flex-col space-y-2 items-center">
-                {" "}
-                {/* Make this a flex column for its own content */}
+              <div className="flex flex-col space-y-1 items-center">
                 <LogSlider
                   defaultDb={threshold}
                   onGainChange={(gain) => setThreshold(gain)}
                   onDoubleClick={resetThreshold}
                 />
-                <div className="flex flex-col items-center text-center mt-1 text-base/tight">
+                <div className="flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300">
                   <p className="text-base/tight">
                     Silence
                     <br />
                     Threshold
                   </p>
-                  <span className="text-xs text-zinc-100 whitespace-nowrap font-mono tracking-tighter">
+                  <span className="text-xs text-zinc-100 whitespace-nowrap font-mono tracking-tighter mt-1">
                     {threshold.toFixed(2)}{" "}
                     <span className="opacity-80">dB</span>
                   </span>
