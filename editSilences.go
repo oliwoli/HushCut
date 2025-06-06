@@ -53,27 +53,26 @@ func defaultUncutEditInstruction(item *TimelineItem) []EditInstruction {
 	}
 }
 
+// Corrected CreateEditsWithOptionalSilence function
+// This version preserves float64 precision for all frame numbers.
 func CreateEditsWithOptionalSilence(
 	clipData ClipData,
 	silences []SilenceInterval, // Expects frame-based silences
 	keepSilenceSegments bool,
 ) []EditInstruction {
-	editedClips := []EditInstruction{}
-	originalSourceStart := clipData.SourceStartFrame
-	originalSourceEndInclusive := clipData.SourceEndFrame
-	originalTimelineStartFloat := clipData.StartFrame
 
-	relevantSilences := []SilenceInterval{}
+	// --- Preprocessing Silences ---
+	// (This section remains unchanged, as it correctly finds silences within the clip's source range)
+	var relevantSilences []SilenceInterval
 	for _, s := range silences {
-		if s.Start <= originalSourceEndInclusive+floatEpsilon && s.End > originalSourceStart-floatEpsilon {
+		if s.Start <= clipData.SourceEndFrame+floatEpsilon && s.End > clipData.SourceStartFrame-floatEpsilon {
 			relevantSilences = append(relevantSilences, s)
 		}
 	}
-
-	clippedSilences := []SilenceInterval{}
+	var clippedSilences []SilenceInterval
 	for _, s := range relevantSilences {
-		cutStart := math.Max(originalSourceStart, s.Start)
-		clipExclusiveEndBoundary := originalSourceEndInclusive + 1.0
+		cutStart := math.Max(clipData.SourceStartFrame, s.Start)
+		clipExclusiveEndBoundary := clipData.SourceEndFrame + 1.0
 		cutEnd := math.Min(clipExclusiveEndBoundary, s.End)
 		if cutEnd > cutStart+floatEpsilon {
 			clipped := SilenceInterval{Start: cutStart, End: cutEnd}
@@ -82,119 +81,134 @@ func CreateEditsWithOptionalSilence(
 	}
 	mergedSilences := MergeIntervals(clippedSilences)
 
-	currentSourcePosInclusive := originalSourceStart
-	currentOutputTimelineFloat := originalTimelineStartFloat
-	lastTimelineEndInt := -1.0
+	// --- THIS IS THE NEW CORE FIX ---
+	// If, after all preprocessing, there are no silences to cut, then the clip
+	// should be treated as a single, uncut segment that matches its original properties.
+	if len(mergedSilences) == 0 {
+		log.Printf("Debug: No effective silences found for clip. Creating a 1:1 pass-through edit instruction.")
+		return []EditInstruction{
+			{
+				SourceStartFrame: clipData.SourceStartFrame,
+				SourceEndFrame:   clipData.SourceEndFrame,
+				StartFrame:       clipData.StartFrame,
+				EndFrame:         clipData.EndFrame,
+				Enabled:          true,
+			},
+		}
+	}
+
+	editedClips := []EditInstruction{}
+	originalSourceStart := clipData.SourceStartFrame
+	originalSourceEndInclusive := clipData.SourceEndFrame
+	originalTimelineStart := clipData.StartFrame
+
+	currentSourcePos := originalSourceStart
+	nextAvailableTimelineStart := originalTimelineStart
 
 	for _, silence := range mergedSilences {
-		silenceStartInclusive := silence.Start
-		silenceEndExclusive := silence.End
+		silenceStart := silence.Start
+		silenceEnd := silence.End
 
-		if silenceStartInclusive > currentSourcePosInclusive+floatEpsilon {
-			segmentSourceStartInc := currentSourcePosInclusive
-			segmentSourceEndExc := silenceStartInclusive
-			segmentSourceEndInc := segmentSourceEndExc - floatEpsilon
-			segmentDurationFloat := segmentSourceEndExc - segmentSourceStartInc
-			var segmentTimelineStartFloat, segmentTimelineEndFloat float64
+		// 1. ENABLED segment *before* this silence
+		if silenceStart > currentSourcePos+floatEpsilon {
+			segmentSourceStart := currentSourcePos
+			segmentSourceEndExclusive := silenceStart
+			segmentSourceEndInclusive := segmentSourceEndExclusive - floatEpsilon
+			segmentDuration := segmentSourceEndExclusive - segmentSourceStart
+
+			var segmentTimelineStart, segmentTimelineEndExclusive float64
 			if keepSilenceSegments {
-				segmentTimelineStartFloat = MapSourceToTimeline(segmentSourceStartInc, clipData)
-				segmentTimelineEndFloat = MapSourceToTimeline(segmentSourceEndExc, clipData)
+				segmentTimelineStart = MapSourceToTimeline(segmentSourceStart, clipData)
+				segmentTimelineEndExclusive = MapSourceToTimeline(segmentSourceEndExclusive, clipData)
 			} else {
-				segmentTimelineStartFloat = currentOutputTimelineFloat
-				segmentTimelineEndFloat = currentOutputTimelineFloat + segmentDurationFloat
-				currentOutputTimelineFloat = segmentTimelineEndFloat
+				segmentTimelineStart = nextAvailableTimelineStart
+				segmentTimelineEndExclusive = nextAvailableTimelineStart + segmentDuration
+				nextAvailableTimelineStart = segmentTimelineEndExclusive
 			}
-			segmentTimelineStartInt := math.Ceil(segmentTimelineStartFloat)
-			segmentTimelineEndInt := math.Floor(segmentTimelineEndFloat - floatEpsilon)
-			if !keepSilenceSegments && lastTimelineEndInt != -1.0 {
-				if segmentTimelineStartInt <= lastTimelineEndInt {
-					segmentTimelineStartInt = lastTimelineEndInt + 1
-				}
-			}
-			if segmentTimelineEndInt >= segmentTimelineStartInt {
-				firstEdit := EditInstruction{
-					SourceStartFrame: segmentSourceStartInc,
-					SourceEndFrame:   segmentSourceEndInc,
-					StartFrame:       segmentTimelineStartInt,
-					EndFrame:         segmentTimelineEndInt,
+
+			segmentTimelineEndInclusive := segmentTimelineEndExclusive - floatEpsilon
+
+			if segmentTimelineEndInclusive >= segmentTimelineStart-floatEpsilon {
+				editedClips = append(editedClips, EditInstruction{
+					SourceStartFrame: segmentSourceStart,
+					SourceEndFrame:   segmentSourceEndInclusive,
+					StartFrame:       segmentTimelineStart,
+					EndFrame:         segmentTimelineEndInclusive,
 					Enabled:          true,
-				}
-				editedClips = append(editedClips, firstEdit)
-				if !keepSilenceSegments {
-					lastTimelineEndInt = segmentTimelineEndInt
-				}
+				})
 			}
 		}
 
+		// 2. DISABLED segment *for* the silence itself (if requested)
 		if keepSilenceSegments {
-			segmentSourceStartInc := silenceStartInclusive
-			segmentSourceEndExc := silenceEndExclusive
-			segmentSourceEndInc := segmentSourceEndExc - floatEpsilon
-			if segmentSourceEndExc > segmentSourceStartInc+floatEpsilon {
-				segmentTimelineStartFloat := MapSourceToTimeline(segmentSourceStartInc, clipData)
-				segmentTimelineEndFloat := MapSourceToTimeline(segmentSourceEndExc, clipData)
-				segmentTimelineStartInt := math.Ceil(segmentTimelineStartFloat)
-				segmentTimelineEndInt := math.Floor(segmentTimelineEndFloat - floatEpsilon)
-				if segmentTimelineEndInt >= segmentTimelineStartInt {
-					midEdit := EditInstruction{
-						SourceStartFrame: segmentSourceStartInc,
-						SourceEndFrame:   segmentSourceEndInc,
-						StartFrame:       segmentTimelineStartInt,
-						EndFrame:         segmentTimelineEndInt,
+			// (This logic remains the same as my previous response, preserving floats)
+			segmentSourceStart := silenceStart
+			segmentSourceEndExclusive := silenceEnd
+			segmentSourceEndInclusive := segmentSourceEndExclusive - floatEpsilon
+
+			if segmentSourceEndExclusive > segmentSourceStart+floatEpsilon {
+				segmentTimelineStart := MapSourceToTimeline(segmentSourceStart, clipData)
+				segmentTimelineEndExclusive := MapSourceToTimeline(segmentSourceEndExclusive, clipData)
+				segmentTimelineEndInclusive := segmentTimelineEndExclusive - floatEpsilon
+
+				if segmentTimelineEndInclusive >= segmentTimelineStart-floatEpsilon {
+					editedClips = append(editedClips, EditInstruction{
+						SourceStartFrame: segmentSourceStart,
+						SourceEndFrame:   segmentSourceEndInclusive,
+						StartFrame:       segmentTimelineStart,
+						EndFrame:         segmentTimelineEndInclusive,
 						Enabled:          false,
-					}
-					editedClips = append(editedClips, midEdit)
+					})
 				}
 			}
 		}
-		currentSourcePosInclusive = math.Max(currentSourcePosInclusive, silenceEndExclusive)
+		currentSourcePos = math.Max(currentSourcePos, silenceEnd)
 	}
 
-	if currentSourcePosInclusive < originalSourceEndInclusive+floatEpsilon {
-		segmentSourceStartInc := currentSourcePosInclusive
-		segmentSourceEndInc := originalSourceEndInclusive
-		segmentSourceEndExc := segmentSourceEndInc + floatEpsilon
-		var segmentTimelineStartFloat, segmentTimelineEndFloat float64
+	// --- Handle the final ENABLED segment *after* the last silence ---
+	if currentSourcePos < originalSourceEndInclusive+floatEpsilon {
+		// (This logic also remains the same as my previous response, preserving floats)
+		segmentSourceStart := currentSourcePos
+		segmentSourceEndInclusive := originalSourceEndInclusive
+		segmentSourceEndExclusive := segmentSourceEndInclusive + 1.0
+		segmentDuration := segmentSourceEndExclusive - segmentSourceStart
+
+		var segmentTimelineStart, segmentTimelineEndExclusive float64
 		if keepSilenceSegments {
-			segmentTimelineStartFloat = MapSourceToTimeline(segmentSourceStartInc, clipData)
-			segmentTimelineEndFloat = MapSourceToTimeline(segmentSourceEndExc, clipData)
+			segmentTimelineStart = MapSourceToTimeline(segmentSourceStart, clipData)
+			segmentTimelineEndExclusive = MapSourceToTimeline(segmentSourceEndExclusive, clipData)
 		} else {
-			segmentTimelineStartFloat = currentOutputTimelineFloat
-			segmentTimelineEndFloat = currentOutputTimelineFloat + (segmentSourceEndExc - segmentSourceStartInc)
+			segmentTimelineStart = nextAvailableTimelineStart
+			segmentTimelineEndExclusive = nextAvailableTimelineStart + segmentDuration
 		}
-		segmentTimelineStartInt := math.Ceil(segmentTimelineStartFloat)
-		segmentTimelineEndInt := math.Floor(segmentTimelineEndFloat - floatEpsilon)
-		if !keepSilenceSegments && lastTimelineEndInt != -1.0 {
-			if segmentTimelineStartInt <= lastTimelineEndInt {
-				segmentTimelineStartInt = lastTimelineEndInt + 1
-			}
-		}
-		if segmentTimelineEndInt >= segmentTimelineStartInt {
-			finalEdit := EditInstruction{
-				SourceStartFrame: segmentSourceStartInc,
-				SourceEndFrame:   segmentSourceEndInc,
-				StartFrame:       segmentTimelineStartInt,
-				EndFrame:         segmentTimelineEndInt,
+
+		segmentTimelineEndInclusive := segmentTimelineEndExclusive - floatEpsilon
+
+		if segmentTimelineEndInclusive >= segmentTimelineStart-floatEpsilon {
+			editedClips = append(editedClips, EditInstruction{
+				SourceStartFrame: segmentSourceStart,
+				SourceEndFrame:   segmentSourceEndInclusive,
+				StartFrame:       segmentTimelineStart,
+				EndFrame:         segmentTimelineEndInclusive,
 				Enabled:          true,
-			}
-			editedClips = append(editedClips, finalEdit)
+			})
 		}
 	}
 
+	// The diagnostic check needs to be float-aware now
 	if !keepSilenceSegments && len(editedClips) > 1 {
 		for i := 0; i < len(editedClips)-1; i++ {
-			clip1End := editedClips[i].EndFrame
+			clip1End := editedClips[i].EndFrame + floatEpsilon // The end of clip 1 is its inclusive end frame
 			clip2Start := editedClips[i+1].StartFrame
-			if math.Abs(clip2Start-(clip1End+1)) > floatEpsilon {
-				log.Printf("PROBLEM DETECTED between segment %d and %d: Seg %d ends: %f, Seg %d starts: %f", i, i+1, i, clip1End, i+1, clip2Start) // Using log.Printf
-				if clip2Start <= clip1End {
-					log.Printf("  ISSUE TYPE: Overlap or zero-duration gap (%.0f frame(s))\n", math.Ceil(clip1End-clip2Start+1))
-				} else {
-					log.Printf("  ISSUE TYPE: Gap (%.0f frame(s))\n", math.Floor(clip2Start-clip1End-1))
-				}
+			// The next clip should start exactly where the last one ended (exclusive)
+			if math.Abs(clip2Start-clip1End) > floatEpsilon*2 { // Use a slightly larger tolerance
+				log.Printf("DIAGNOSTIC (float): Potential issue between segment %d and %d:", i, i+1)
+				log.Printf("  Seg %d End (exclusive boundary): %f", i, clip1End)
+				log.Printf("  Seg %d Start: %f", i+1, clip2Start)
 			}
 		}
 	}
+
 	return editedClips
 }
 
@@ -238,9 +252,6 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		}
 
 		fileData, fileDataFound := projectData.Files[item.SourceFilePath]
-		// Since projectData.Files is map[string]FileData (not map[string]*FileData),
-		// fileData will be a FileData struct (or its zero value if not found and map is not nil).
-		// fileDataFound correctly indicates if the key was in the map.
 		if !fileDataFound { // No need to check if fileData is nil here
 			log.Printf("Warning: No FileData found for source path '%s' (audio item '%s'). Cannot determine source FPS. Applying default uncut edit instruction.\n", item.SourceFilePath, item.Name)
 			if len(item.EditInstructions) == 0 {

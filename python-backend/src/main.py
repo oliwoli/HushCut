@@ -360,9 +360,14 @@ def get_items_by_tracktype(
     for i in range(1, track_count + 1):
         track_items = timeline.GetItemListInTrack(track_type, i)
         for item in track_items:
-            start_frame = item.GetStart()
+            start_frame = item.GetStart(True)
             item_name = item.GetName()
             media_pool_item = item.GetMediaPoolItem()
+            left_offset = item.GetLeftOffset(True)
+            duration = item.GetDuration(True)
+            source_start_float = left_offset
+            source_end_float = left_offset + duration
+
             source_file_path: str = (
                 media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
             )
@@ -372,14 +377,14 @@ def get_items_by_tracktype(
                 "name": item_name,
                 "edit_instructions": [],
                 "start_frame": start_frame,
-                "end_frame": item.GetEnd(),
+                "end_frame": item.GetEnd(True),
                 "id": get_item_id(item, item_name, start_frame, track_type, i),
                 "track_type": track_type,
                 "track_index": i,
                 "source_file_path": source_file_path,
                 "processed_file_name": misc_utils.uuid_from_path(source_file_path).hex,
-                "source_start_frame": item.GetSourceStartFrame(),
-                "source_end_frame": item.GetSourceEndFrame(),
+                "source_start_frame": source_start_float,
+                "source_end_frame": source_end_float,
             }
             items.append(timeline_item)
     return items
@@ -1065,6 +1070,11 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                 self._send_json_response(200, response_payload)
                 #merge_project_data(project_data_from_go)
                 deep_merge_bmd_aware(PROJECT_DATA, project_data_from_go)
+
+                # save project data to json for debugging
+                debug_output_path = os.path.join(os.path.dirname(TEMP_DIR), "project_data_from_go.json")
+                misc_utils.export_to_json(PROJECT_DATA, debug_output_path)
+
                 main()
                 return
 
