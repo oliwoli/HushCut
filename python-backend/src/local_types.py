@@ -1,5 +1,6 @@
 from typing import Any, List, Dict, Literal, Optional, TypedDict
 
+
 class ClipData(TypedDict):
     source_start_frame: float
     source_end_frame: float  # Inclusive end point/time
@@ -38,6 +39,7 @@ class TimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
+    link_group_id: Optional[int]
 
 
 class TimelineProperties(TypedDict):
