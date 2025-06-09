@@ -54,9 +54,9 @@ def make_project_data_serializable(
                 and "bmd_media_pool_item" in file_data_dict["fileSource"]
             ):
                 # Replace with placeholder or path, or just remove
-                file_data_dict["fileSource"][
-                    "bmd_media_pool_item_placeholder"
-                ] = f"ResolveMediaPoolItem_SourcePath_{file_data_dict['fileSource'].get('file_path', 'N/A')}"
+                file_data_dict["fileSource"]["bmd_media_pool_item_placeholder"] = (
+                    f"ResolveMediaPoolItem_SourcePath_{file_data_dict['fileSource'].get('file_path', 'N/A')}"
+                )
                 del file_data_dict["fileSource"]["bmd_media_pool_item"]  # Or = None
 
             # Process TimelineItems within FileData
@@ -98,8 +98,7 @@ def is_valid_audio(filepath: str) -> bool:
         return False
 
 
-def export_to_json(project_data: Any, output_path: str) -> None:
-
+def export_to_json(data: Any, output_path: str) -> None:
     def fallback_serializer(obj):
         return "<BMDObject>"
 
@@ -107,11 +106,11 @@ def export_to_json(project_data: Any, output_path: str) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     with open(output_path, "w") as json_file:
-        json.dump(project_data, json_file, indent=4, default=fallback_serializer)
+        json.dump(data, json_file, indent=4, default=fallback_serializer)
 
 
 def send_message(message_type, payload=None):
     """Sends a structured message to stdout."""
     message = {"type": message_type, "payload": payload}
     print(json.dumps(message))
-    sys.stdout.flush() # Important to ensure the message is sent immediately
+    sys.stdout.flush()  # Important to ensure the message is sent immediately

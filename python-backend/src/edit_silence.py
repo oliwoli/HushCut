@@ -33,7 +33,7 @@ def map_source_to_timeline(source_frame_time: float, clip_data: ClipData) -> flo
     timeline_offset = float(clip_data["start_frame"]) - clip_data["source_start_frame"]
     return source_frame_time + timeline_offset
 
-@lru_cache
+
 def create_edits_with_optional_silence(
     clip_data: ClipData,
     silences: list[SilenceInterval],

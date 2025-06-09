@@ -178,7 +178,7 @@ def detect_silence_in_file(audio_file: AudioFromVideo, timeline_fps) -> AudioFro
         "-i",
         processed_audio,
         "-af",
-        "silencedetect=n=-30dB:d=1.0",
+        "silencedetect=n=-20dB:d=1.0",
         "-f",
         "null",
         "-",
@@ -327,6 +327,7 @@ def get_resolve() -> Any:
 
     return resolve
 
+
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
 
 
@@ -345,8 +346,9 @@ AUTH_TOKEN = None
 ENABLE_COMMAND_AUTH = False  # Master switch for auth on Python's command server
 GO_SERVER_PORT = 0
 
-STANDALONE_MODE = False # If True, the script runs independently without a Go server connection.
-
+STANDALONE_MODE = (
+    False  # If True, the script runs independently without a Go server connection.
+)
 
 
 def switch_to_page(page: ResolvePage) -> None:
@@ -425,11 +427,10 @@ def resync_with_resolve() -> bool:
 
 
 def get_project_data(project, timeline) -> ProjectData:
-    
     # switch_to_page("edit")
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
-    
+
     # export state of current timeline to otio, EXPENSIVE
     input_otio_path = os.path.join(TEMP_DIR, "pre-edit_timeline_export.otio")
     export_timeline_to_otio(timeline, file_path=input_otio_path)
@@ -483,13 +484,14 @@ def get_project_data(project, timeline) -> ProjectData:
         project_data_source_files.sort(key=lambda x: x.lower())
 
         if curr_audio_source_files == project_data_source_files:
-            print("Audio source files are the same as PROJECT_DATA, skipping processing.")
+            print(
+                "Audio source files are the same as PROJECT_DATA, skipping processing."
+            )
         else:
             processed_audio_paths = process_audio_files(audio_sources_set, TEMP_DIR)
     else:
         processed_audio_paths = process_audio_files(audio_sources_set, TEMP_DIR)
 
-    
     if STANDALONE_MODE:
         silence_intervals_by_file = detect_silence_parallel(
             processed_audio_paths, timeline_fps
@@ -505,7 +507,7 @@ def get_project_data(project, timeline) -> ProjectData:
             "timelineItems": [],
             "fileSource": file,
         }
-        
+
         if STANDALONE_MODE:
             if audio_path not in silence_intervals_by_file:
                 print(f"No silence detected in {audio_path}")
@@ -513,9 +515,9 @@ def get_project_data(project, timeline) -> ProjectData:
 
             silence_intervals: AudioFromVideo = silence_intervals_by_file[audio_path]
 
-            globalz.PROJECT_DATA["files"][audio_path]["silenceDetections"] = silence_intervals[
-                "silence_intervals"
-            ]
+            globalz.PROJECT_DATA["files"][audio_path]["silenceDetections"] = (
+                silence_intervals["silence_intervals"]
+            )
             print(f"Detected {len(silence_intervals)} silence segments in {audio_path}")
 
     start_calc_edits = time()
@@ -539,27 +541,27 @@ def get_project_data(project, timeline) -> ProjectData:
             "source_start_frame": clip_start_frame_source,
             "source_end_frame": clip_end_frame_source,
         }
-        timeline_items: list[TimelineItem] = globalz.PROJECT_DATA["files"][clip_file_path][
-            "timelineItems"
-        ]
-
-        silence_detections: Union[List[SilenceInterval], None] = globalz.PROJECT_DATA["files"][
+        timeline_items: list[TimelineItem] = globalz.PROJECT_DATA["files"][
             clip_file_path
-        ]["silenceDetections"]
-        
+        ]["timelineItems"]
+
+        silence_detections: Union[List[SilenceInterval], None] = globalz.PROJECT_DATA[
+            "files"
+        ][clip_file_path]["silenceDetections"]
+
         if silence_detections:
             edit_instructions: List[EditInstruction] = (
                 create_edits_with_optional_silence(main_clip_data, silence_detections)
             )
             item["edit_instructions"] = edit_instructions
             timeline_items.append(item)
-    
+
     print(f"It took {time() - start_calc_edits:.2f} seconds to calculate edits")
 
-    #json_ex_start = time()
-    #json_output_path = os.path.join(TEMP_DIR, "silence_detections.json")
-    #misc_utils.export_to_json(globalz.PROJECT_DATA, json_output_path)
-    #print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
+    # json_ex_start = time()
+    # json_output_path = os.path.join(TEMP_DIR, "silence_detections.json")
+    # misc_utils.export_to_json(globalz.PROJECT_DATA, json_output_path)
+    # print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
     return globalz.PROJECT_DATA
 
 
@@ -571,7 +573,7 @@ def merge_project_data(project_data_from_go: ProjectData) -> None:
         if value == "<BMDObject>":
             continue
         globalz.PROJECT_DATA[key] = value
-    
+
     return
 
 
@@ -582,29 +584,31 @@ def deep_merge_bmd_aware(target_dict: ProjectData, source_dict: dict) -> None:
                 target_dict[key] = source_value
             continue
 
-        if isinstance(source_value, dict) and \
-           key in target_dict and \
-           isinstance(target_dict.get(key), dict):
+        if (
+            isinstance(source_value, dict)
+            and key in target_dict
+            and isinstance(target_dict.get(key), dict)
+        ):
             deep_merge_bmd_aware(target_dict[key], source_value)
             continue
 
-        if isinstance(source_value, list) and \
-           key in target_dict and \
-           isinstance(target_dict.get(key), list):
-            
+        if (
+            isinstance(source_value, list)
+            and key in target_dict
+            and isinstance(target_dict.get(key), list)
+        ):
             target_list = target_dict[key]
             source_list = source_value
-            
-            can_smart_merge_lists = (
-                all(isinstance(item, dict) and 'id' in item for item in source_list) and
-                all(isinstance(item, dict) and 'id' in item for item in target_list)
-            )
+
+            can_smart_merge_lists = all(
+                isinstance(item, dict) and "id" in item for item in source_list
+            ) and all(isinstance(item, dict) and "id" in item for item in target_list)
 
             if can_smart_merge_lists:
-                target_items_by_id = {item['id']: item for item in target_list}
+                target_items_by_id = {item["id"]: item for item in target_list}
                 new_merged_list = []
                 for s_item in source_list:
-                    item_id = s_item['id'] 
+                    item_id = s_item["id"]
                     if item_id in target_items_by_id:
                         merged_item_copy = target_items_by_id[item_id].copy()
                         deep_merge_bmd_aware(merged_item_copy, s_item)
@@ -615,7 +619,7 @@ def deep_merge_bmd_aware(target_dict: ProjectData, source_dict: dict) -> None:
             else:
                 target_dict[key] = source_value
             continue
-            
+
         target_dict[key] = source_value
 
 
@@ -633,7 +637,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         send_message_to_go(
             "showAlert",
             {"title": "DaVinci Resolve Error", "message": message, "severity": "error"},
-            task_id=task_id
+            task_id=task_id,
         )
         send_message_to_go(
             "projectData",
@@ -642,7 +646,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         return False
 
     PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
-    
+
     if not PROJECT:
         globalz.PROJECT_DATA = ProjectData()
         MEDIA_POOL = None
@@ -650,7 +654,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         send_message_to_go(
             "projectData",
             {"title": "No open Project", "message": message, "severity": "error"},
-            task_id=task_id
+            task_id=task_id,
         )
         send_message_to_go(
             "projectData",
@@ -662,25 +666,20 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     if not TIMELINE:
         globalz.PROJECT_DATA = ProjectData()
         message = "Please open a timeline."
-        
+
         response_payload = {
             "status": "error",
-            "message": message, # Overall message for the sync operation
+            "message": message,  # Overall message for the sync operation
             "data": globalz.PROJECT_DATA,
             "shouldShowAlert": True,
             "alertTitle": "No Open Timeline",
-            "alertMessage": message, # Specific message for the alert
+            "alertMessage": message,  # Specific message for the alert
             "alertSeverity": "error",
         }
-        
 
-        send_message_to_go(
-            "taskResult",
-            response_payload,
-            task_id=task_id
-        )
+        send_message_to_go("taskResult", response_payload, task_id=task_id)
         return False
-    
+
     if sync or not globalz.PROJECT_DATA:
         new_project_data = get_project_data(PROJECT, TIMELINE)
         if new_project_data == globalz.PROJECT_DATA:
@@ -698,7 +697,9 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
             "data": globalz.PROJECT_DATA,
         }
 
-        send_message_to_go(message_type="taskResult", payload=response_payload, task_id=task_id)
+        send_message_to_go(
+            message_type="taskResult", payload=response_payload, task_id=task_id
+        )
         return
 
     input_otio_path = os.path.join(TEMP_DIR, "pre-edit_timeline_export.otio")
@@ -706,9 +707,11 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     # final_api_instructions: List[SubframeEditsData] = create_otio.edit_timeline_with_precalculated_instructions(
     #     input_otio_path, globalz.PROJECT_DATA, edited_otio_path, False, True
     # )
-    
-    create_otio_rewrite.create_otio_from_project_data(input_otio_path=input_otio_path,output_path=edited_otio_path)
-    return
+
+    create_otio_rewrite.create_otio_from_project_data(
+        input_otio_path=input_otio_path, output_path=edited_otio_path
+    )
+    # return
 
     original_item_folder_map: dict[str, MediaPoolItemFolderMapping] = (
         map_media_pool_items_to_folders(PROJECT, globalz.PROJECT_DATA)
@@ -716,7 +719,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
 
     if not MEDIA_POOL:
         MEDIA_POOL = PROJECT.GetMediaPool()
-    
+
     timeline_id = TIMELINE.GetMediaPoolItem().GetUniqueId()
     original_timeline_folder = find_item_folder_by_id(timeline_id)
     original_folder = MEDIA_POOL.GetCurrentFolder()
@@ -737,7 +740,9 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
 
     ## OTIO TIMELINE IMPORT
     start_import = time()
-    timeline_name = f"{globalz.PROJECT_DATA['timeline']['name']} - Silence Detection{time()}"
+    timeline_name = (
+        f"{globalz.PROJECT_DATA['timeline']['name']} - Silence Detection{time()}"
+    )
     TIMELINE = MEDIA_POOL.ImportTimelineFromFile(
         edited_otio_path,
         {
@@ -755,7 +760,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     end_import = time()
     print(f"Importing OTIO took {end_import - start_import:.2f} seconds")
 
-    #apply_subframe_edits(final_api_instructions)
+    # apply_subframe_edits(final_api_instructions)
     start_restore_clips = time()
 
     # move the edited timeline to the "current folder"
@@ -803,43 +808,49 @@ class ClipInfo(TypedDict):
     startFrame: float
     endFrame: float
     recordFrame: float
-    mediaType: Optional[int] # 1 for video only, 2 for audio only
+    mediaType: Optional[int]  # 1 for video only, 2 for audio only
     trackIndex: int
-    
+
 
 def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
     global RESOLVE
     global PROJECT
     global TIMELINE
     global MEDIA_POOL
-    if not RESOLVE or not PROJECT or not TIMELINE or not globalz.PROJECT_DATA or not MEDIA_POOL:
+    if (
+        not RESOLVE
+        or not PROJECT
+        or not TIMELINE
+        or not globalz.PROJECT_DATA
+        or not MEDIA_POOL
+    ):
         print("Resolve, Project or Timeline not available. Cannot apply edits.")
         return
 
     media_appends: List[ClipInfo] = []
 
-    
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", TIMELINE)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", TIMELINE)
-    
-    
+
     clips_to_link_master: List[List[Any]] = []
     for clip in edit_data:
         bmp_mpi = clip["bmd_media_pool_item"]
         track_type = clip["track_type"]
         track_index = clip["track_index"]
-          
+
         for edit in clip["edit_instructions"]:
             clip_info: ClipInfo = {
                 "mediaPoolItem": bmp_mpi,
                 "startFrame": edit["source_start_frame"],
                 "endFrame": edit["source_end_frame"],
                 "recordFrame": edit["start_frame"],
-                "mediaType": 1 if track_type == "video" else 2,  # 1 for video, 2 for audio
+                "mediaType": 1
+                if track_type == "video"
+                else 2,  # 1 for video, 2 for audio
                 "trackIndex": track_index,
             }
             media_appends.append(clip_info)
-            
+
             clips_to_link: List[Any] = []
             for linked_item in edit["linked_items"]:
                 if linked_item["track_type"] == "video":
@@ -856,32 +867,30 @@ def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
                         if audio_item["start_frame"] != linked_item["start_frame"]:
                             continue
                         clips_to_link.append(audio_item["bmd_item"])
-            clips_to_link_master.append(clips_to_link)      
-            
+            clips_to_link_master.append(clips_to_link)
+
     if not media_appends:
         print("No media appends to apply.")
         return
-    
+
     print(f"media appends: {media_appends}")
-    
+
     append: Union[List[Any], None] = MEDIA_POOL.AppendToTimeline(media_appends)
-    
+
     if not append:
         print("Failed to append media to timeline.")
         print(f"current timeline name: {TIMELINE.GetName()}")
         return
-    
-    #print(f"append result (API): {append}")
-    
-    
-    #print(f"clips to link master: {clips_to_link_master}")
+
+    # print(f"append result (API): {append}")
+
+    # print(f"clips to link master: {clips_to_link_master}")
     for idx, bmd_item in enumerate(append):
         if len(clips_to_link_master[idx]) == 0:
             continue
-        clips_to_link_master[idx].append(bmd_item)  
-        #print(f"linking: {clips_to_link_master[idx]}")
+        clips_to_link_master[idx].append(bmd_item)
+        # print(f"linking: {clips_to_link_master[idx]}")
         TIMELINE.SetClipsLinked(clips_to_link_master[idx], True)
-
 
     # clip_info = {
     #     "mediaPoolItem": current_media_pool_item,
@@ -901,8 +910,6 @@ def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
     # single appends
     # for item in media_appends:
     #     append = media_pool.AppendToTimeline([item])
-
-
 
 
 def _recursive_find_item_in_folder(
@@ -1109,11 +1116,13 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                     "message": "Final timeline generation started.",
                 }
                 self._send_json_response(200, response_payload)
-                #merge_project_data(project_data_from_go)
+                # merge_project_data(project_data_from_go)
                 deep_merge_bmd_aware(globalz.PROJECT_DATA, project_data_from_go)
 
                 # save project data to json for debugging
-                debug_output_path = os.path.join(os.path.dirname(TEMP_DIR), "project_data_from_go.json")
+                debug_output_path = os.path.join(
+                    os.path.dirname(TEMP_DIR), "project_data_from_go.json"
+                )
                 misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output_path)
 
                 main()
@@ -1219,13 +1228,12 @@ def init():
         f"Python Backend: Will listen for commands on port: {args.listen_on_port}",
         flush=True,
     )
-    
+
     if args.standalone:
         global STANDALONE_MODE
         STANDALONE_MODE = True
         main()
         return
-    
 
     # Start Python's own HTTP server (for Go commands) in a separate thread
     command_server_thread = threading.Thread(

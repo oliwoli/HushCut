@@ -1,10 +1,12 @@
 import os
+from tracemalloc import start
 import opentimelineio as otio
 from collections.abc import Mapping
 import time
 import json
 import copy
 import logging
+import math
 from collections import defaultdict
 from typing import (
     List,
@@ -15,16 +17,40 @@ from typing import (
     Tuple,
     TypedDict,
     Union,
+    Any,
 )
-from opentimelineio import schema as otio_schema
+from opentimelineio import opentime, schema as otio_schema
+import opentimelineio
 
 from local_types import ProjectData, EditInstruction, TimelineItem
-#from pprint import pprint
+import globalz
+
+from pprint import pprint
+
+# from pprint import pprint
 # --- Logging Setup ---
 logging.basicConfig(level=logging.ERROR, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 TrackItemType = Union[otio_schema.Clip, otio_schema.Gap, otio_schema.Transition]
+
+
+class LinkedItemProp(TypedDict):
+    track_index: int
+    track_type: str  # "video", "audio", "subtitle"
+    start_frame: float
+
+
+class ApiEditInstruction(EditInstruction):
+    linked_items: List[LinkedItemProp]
+
+
+class SubframeEditsData(TypedDict):
+    bmd_media_pool_item: Any  # we have this from ProjectData! in files -> <file_path> -> fileSource -> bmd_media_pool_item
+    edit_instructions: List[ApiEditInstruction]
+    track_type: str  # "video", "audio", "subtitle"
+    track_index: int
+    bmd_tl_item: Any
 
 
 class OriginalTimelineCatalog(TypedDict):
@@ -35,7 +61,7 @@ class OriginalTimelineCatalog(TypedDict):
 
 
 class OtioTimelineData(TypedDict):
-    timeline: otio_schema.Timeline
+    timeline: otio.schema.Timeline
     rate: float
     global_start_offset_frames: float
 
@@ -89,11 +115,11 @@ def _derive_json_id_from_otio_clip(
     otio_clip: otio_schema.Clip,
     otio_track_kind_str: str,
     resolve_style_track_index: int,
-    original_start_frame_int: int,
+    original_start_frame_float: float,
 ) -> str:
     """Constructs the candidate JSON ID to match main.py's format."""
     # Format: ClipName-TrackType-ResolveTrackIndex--TimelineStartFrame
-    return f"{otio_clip.name}-{otio_track_kind_str}-{resolve_style_track_index}--{original_start_frame_int}"
+    return f"{otio_clip.name}-{otio_track_kind_str}-{resolve_style_track_index}--{original_start_frame_float}"
 
 
 # --- Core Logic Functions ---
@@ -160,150 +186,134 @@ def _index_json_timeline_items(
 
 def _map_otio_to_json_edits(
     original_otio_timeline: otio_schema.Timeline,
-    json_items_by_id: Dict[str, TimelineItem],  # Map of json_item.id -> json_item
-    catalog: OriginalTimelineCatalog, # Contains pre-cataloged OTIO items
+    json_items_by_id: Dict[str, TimelineItem],
+    catalog: OriginalTimelineCatalog,
+    global_start_offset_frames: float,
 ) -> GroupSourceDataMap:
     group_source_data_map: GroupSourceDataMap = defaultdict(list)
-    
-    # Keep track of JSON items already mapped to a group to avoid double-counting
-    # if a JSON item could somehow match multiple OTIO contexts (shouldn't happen with good IDs).
-    # This set will store json_item_id that have been successfully mapped.
     used_json_item_ids_in_mapping: Set[str] = set()
 
-    logger.debug("Starting _map_otio_to_json_edits to build GroupSourceDataMap...")
-
-    # Iterate through the cataloged unique OTIO items/groups
-    # catalog["ordered_items"] gives: (item_key, item_type_hint, representative_otio_item, group_abs_start_rt)
     for item_key, item_type_hint, _, group_abs_start_rt in catalog["ordered_items"]:
-        if item_type_hint == "gap": # We only care about clips or clip groups
+        if item_type_hint == "gap":
             continue
 
-        # Get all OTIO clips belonging to this item_key (link group) from the catalog
-        # catalog["clips_by_group_and_track"] is Dict[item_key, DefaultDict[track_idx, otio.schema.Clip]]
         otio_clips_in_this_group = catalog["clips_by_group_and_track"].get(item_key)
         if not otio_clips_in_this_group:
-            logger.warning(f"No OTIO clips found in catalog for item_key '{item_key}'. Skipping.")
             continue
 
         source_data_for_this_group: List[Tuple[TimelineItem, EditInstructionsList]] = []
 
-        # For each OTIO clip within this group...
-        for otio_track_idx_0_based, otio_clip_in_group in otio_clips_in_this_group.items():
-            if not otio_clip_in_group or not isinstance(otio_clip_in_group, otio_schema.Clip):
+        for (
+            otio_track_idx_0_based,
+            otio_clip_in_group,
+        ) in otio_clips_in_this_group.items():
+            if not (
+                otio_clip_in_group and isinstance(otio_clip_in_group, otio_schema.Clip)
+            ):
                 continue
 
-            # Determine track kind and Resolve track index for this specific otio_clip_in_group
             otio_parent_track = original_otio_timeline.tracks[otio_track_idx_0_based]
-            current_otio_track_kind_str = "audio" # Default or derive more robustly
+            current_otio_track_kind_str = "audio"
             if otio_parent_track.kind == otio_schema.TrackKind.Video:
                 current_otio_track_kind_str = "video"
             elif otio_parent_track.kind == otio_schema.TrackKind.Audio:
                 current_otio_track_kind_str = "audio"
             else:
-                logger.debug(f"Skipping OTIO clip '{otio_clip_in_group.name}' in group '{item_key}' due to unknown track kind: {otio_parent_track.kind}")
                 continue
-            
+
             resolve_track_index_from_name = 0
             parts = otio_parent_track.name.split(" ")
             if len(parts) > 1 and parts[-1].isdigit():
-                try: resolve_track_index_from_name = int(parts[-1])
-                except ValueError: pass
-            
+                try:
+                    resolve_track_index_from_name = int(parts[-1])
+                except ValueError:
+                    pass
+
             if resolve_track_index_from_name == 0:
-                logger.warning(f"Could not determine Resolve track index for OTIO track '{otio_parent_track.name}' (clip '{otio_clip_in_group.name}'). Skipping this clip.")
                 continue
-            
-            # Use the group's absolute start time for deriving the JSON ID.
-            # This assumes all linked items start at the same logical point on the timeline.
-            original_start_frame_int = int(round(group_abs_start_rt.value))
+
+            # --- THIS IS THE CORRECTED ID LOGIC ---
+            # Calculate the start frame RELATIVE to the timeline's start (0-point)
+            relative_start_frame_float = (
+                group_abs_start_rt.value - global_start_offset_frames
+            )
 
             otio_derived_json_id_candidate = _derive_json_id_from_otio_clip(
                 otio_clip_in_group,
                 current_otio_track_kind_str,
                 resolve_track_index_from_name,
-                original_start_frame_int,
+                relative_start_frame_float,  # Use the RELATIVE frame number
             )
-            
-            # If this JSON item was already processed for another OTIO clip (should not happen if IDs are good)
-            # For link groups, a json_id should only be added once to a group's list.
-            # The check below ensures we only add a (JSONItem, EditInstructionsList) pair once per group.
-            # This derived ID is for matching.
-            
+            # --- END CORRECTION ---
+
             matched_json_item = json_items_by_id.get(otio_derived_json_id_candidate)
 
             if matched_json_item:
-                # Ensure we haven't already added this specific JSON item's data to this group
-                # This check relies on json_item['id'] being unique across all timeline items
                 json_item_actual_id = matched_json_item.get("id")
                 already_added_to_this_group = any(
-                    entry[0].get("id") == json_item_actual_id for entry in source_data_for_this_group
+                    entry[0].get("id") == json_item_actual_id
+                    for entry in source_data_for_this_group
                 )
 
                 if not already_added_to_this_group and json_item_actual_id:
                     json_instructions = matched_json_item.get("edit_instructions")
                     if isinstance(json_instructions, list):
-                        source_data_for_this_group.append( (matched_json_item, json_instructions) )
-                        used_json_item_ids_in_mapping.add(json_item_actual_id) # Track that this json_id has been used
-                        logger.debug(f"  Added JSON item '{json_item_actual_id}' (OTIO: '{otio_clip_in_group.name}') to group '{item_key}' with {len(json_instructions)} instructions.")
-                    else: # Instructions are None or not a list - treat as full pass-through for this item
-                        source_data_for_this_group.append( (matched_json_item, []) ) # Add with empty instructions
+                        source_data_for_this_group.append(
+                            (matched_json_item, json_instructions)
+                        )
                         used_json_item_ids_in_mapping.add(json_item_actual_id)
-                        logger.debug(f"  Added JSON item '{json_item_actual_id}' (OTIO: '{otio_clip_in_group.name}') to group '{item_key}' with NO instructions (empty list).")
-                # else:
-                    # logger.debug(f"  JSON item '{json_item_actual_id}' already processed for group '{item_key}'.")
-
-            # else:
-                # logger.debug(f"  No JSON item found for derived ID '{otio_derived_json_id_candidate}' (OTIO clip: {otio_clip_in_group.name}).")
+                    else:
+                        source_data_for_this_group.append((matched_json_item, []))
+                        used_json_item_ids_in_mapping.add(json_item_actual_id)
 
         if source_data_for_this_group:
             group_source_data_map[item_key] = source_data_for_this_group
-            logger.debug(f"Finalized group '{item_key}' with {len(source_data_for_this_group)} associated JSON items.")
-        # else:
-            # logger.warning(f"No JSON data could be associated with OTIO group '{item_key}'.")
-            
-    logger.info(f"Mapped {len(group_source_data_map)} OTIO groups to their source JSON data.")
+
     return group_source_data_map
 
 
-def build_group_source_data_map( # Renamed function
+def build_group_source_data_map(
     project_data: ProjectData,
     original_otio_timeline: otio_schema.Timeline,
     catalog: OriginalTimelineCatalog,
+    global_start_offset_frames: float,
 ) -> GroupSourceDataMap:
-    json_items_by_id = _index_json_timeline_items(project_data) # This is fine
-    group_source_data = _map_otio_to_json_edits( # Call renamed function
-        original_otio_timeline, json_items_by_id, catalog
+    json_items_by_id = _index_json_timeline_items(project_data)
+    group_source_data = _map_otio_to_json_edits(
+        original_otio_timeline, json_items_by_id, catalog, global_start_offset_frames
     )
     return group_source_data
 
 
-
-
 def _get_original_timeline_sound_ranges(
-    json_item: TimelineItem,
-    item_edits: EditInstructionsList,
-    timeline_rate: float
+    json_item: TimelineItem, item_edits: EditInstructionsList, timeline_rate: float
 ) -> List[otio.opentime.TimeRange]:
     """
     Converts an item's EditInstructionList into a list of sound TimeRanges
     on the original timeline scale.
     """
     sound_ranges: List[otio.opentime.TimeRange] = []
-    
+
     item_original_tl_start_frame = json_item["start_frame"]
     # item_original_duration_frames = json_item["duration"] # Or end_frame - start_frame + 1
 
-    if not item_edits: # No edits means the entire original item is considered sound
+    if not item_edits:  # No edits means the entire original item is considered sound
         # Default to the item's original duration on the timeline if no edits are provided
         # This assumes an item with no edit_instructions is fully "enabled" for its original duration.
         original_duration_frames = json_item.get("duration")
         if original_duration_frames is None or original_duration_frames <= 1e-9:
             # Fallback if duration is not present or zero
-            original_duration_frames = json_item["end_frame"] - json_item["start_frame"] + 1.0
+            original_duration_frames = (
+                json_item["end_frame"] - json_item["start_frame"] + 1.0
+            )
 
         if original_duration_frames > 1e-9:
-            start_time = otio.opentime.RationalTime(item_original_tl_start_frame, timeline_rate)
-            duration = otio.opentime.RationalTime(original_duration_frames, timeline_rate)
+            start_time = otio.opentime.RationalTime(
+                item_original_tl_start_frame, timeline_rate
+            )
+            duration = otio.opentime.RationalTime(
+                original_duration_frames, timeline_rate
+            )
             sound_ranges.append(otio.opentime.TimeRange(start_time, duration))
         return sound_ranges
 
@@ -316,29 +326,41 @@ def _get_original_timeline_sound_ranges(
     # Each instruction `instr` has `instr["source_start_frame"]` and `instr["source_end_frame"]`.
     # This is a segment of sound from *that item's source media*.
     # We need to map this source media segment to its position on the *original timeline*.
-    
-    item_source_offset_on_timeline = item_original_tl_start_frame - json_item["source_start_frame"]
+
+    item_source_offset_on_timeline = (
+        item_original_tl_start_frame - json_item["source_start_frame"]
+    )
 
     for instr in item_edits:
-        if not instr.get("enabled", True): # Skip if instruction is for a disabled segment (e.g. kept silence)
+        if not instr.get(
+            "enabled", True
+        ):  # Skip if instruction is for a disabled segment (e.g. kept silence)
             continue
-            
+
         # These are from the item's own source media
         source_seg_start_frame = instr["source_start_frame"]
         source_seg_end_frame_inclusive = instr["source_end_frame"]
-        
+
         # Map to original timeline frames
         # This places the source segment onto the original timeline where this item was
-        original_tl_seg_start_frame = source_seg_start_frame + item_source_offset_on_timeline
-        original_tl_seg_end_frame_inclusive = source_seg_end_frame_inclusive + item_source_offset_on_timeline
-        
-        seg_duration_frames = original_tl_seg_end_frame_inclusive - original_tl_seg_start_frame + 1.0
-        
+        original_tl_seg_start_frame = (
+            source_seg_start_frame + item_source_offset_on_timeline
+        )
+        original_tl_seg_end_frame_inclusive = (
+            source_seg_end_frame_inclusive + item_source_offset_on_timeline
+        )
+
+        seg_duration_frames = (
+            original_tl_seg_end_frame_inclusive - original_tl_seg_start_frame + 1.0
+        )
+
         if seg_duration_frames > 1e-9:
-            start_time = otio.opentime.RationalTime(original_tl_seg_start_frame, timeline_rate)
+            start_time = otio.opentime.RationalTime(
+                original_tl_seg_start_frame, timeline_rate
+            )
             duration = otio.opentime.RationalTime(seg_duration_frames, timeline_rate)
             sound_ranges.append(otio.opentime.TimeRange(start_time, duration))
-            
+
     # It's possible these ranges might overlap if EditInstructions were not minimal; merge them.
     # OTIO TimeRanges can be tricky to merge directly. A common utility for merging TimeRange list might be needed.
     # For simplicity, let's assume Go's EditInstructions are non-overlapping for a single item.
@@ -349,7 +371,7 @@ def _get_original_timeline_sound_ranges(
 
 def _intersect_sound_ranges(
     list_of_sound_range_lists: List[List[otio.opentime.TimeRange]],
-    timeline_rate: float # Needed for creating new TimeRanges
+    timeline_rate: float,  # Needed for creating new TimeRanges
 ) -> List[otio.opentime.TimeRange]:
     if not list_of_sound_range_lists:
         return []
@@ -362,37 +384,45 @@ def _intersect_sound_ranges(
     for i in range(1, len(list_of_sound_range_lists)):
         next_item_sound_ranges = list_of_sound_range_lists[i]
         new_intersection: List[otio.opentime.TimeRange] = []
-        
+
         # Intersect current_intersection with next_item_sound_ranges
         # This is a simplified interval intersection. More robust libraries might exist.
         idx_current = 0
         idx_next = 0
-        while idx_current < len(current_intersection) and idx_next < len(next_item_sound_ranges):
+        while idx_current < len(current_intersection) and idx_next < len(
+            next_item_sound_ranges
+        ):
             range1 = current_intersection[idx_current]
             range2 = next_item_sound_ranges[idx_next]
 
             # Calculate overlap
             overlap_start_rt = max(range1.start_time, range2.start_time)
-            overlap_end_rt = min(range1.end_time_exclusive(), range2.end_time_exclusive())
-            
-            if overlap_start_rt < overlap_end_rt: # If there is an overlap
+            overlap_end_rt = min(
+                range1.end_time_exclusive(), range2.end_time_exclusive()
+            )
+
+            if overlap_start_rt < overlap_end_rt:  # If there is an overlap
                 overlap_duration_rt = overlap_end_rt - overlap_start_rt
-                if overlap_duration_rt.value > 1e-9: # Ensure positive duration
-                    new_intersection.append(otio.opentime.TimeRange(overlap_start_rt, overlap_duration_rt))
-            
+                if overlap_duration_rt.value > 1e-9:  # Ensure positive duration
+                    new_intersection.append(
+                        otio.opentime.TimeRange(overlap_start_rt, overlap_duration_rt)
+                    )
+
             # Advance pointers
             if range1.end_time_exclusive() < range2.end_time_exclusive():
                 idx_current += 1
             elif range2.end_time_exclusive() < range1.end_time_exclusive():
                 idx_next += 1
-            else: # Both end at the same time
+            else:  # Both end at the same time
                 idx_current += 1
                 idx_next += 1
-        
+
         current_intersection = new_intersection
-        if not current_intersection: # If any intersection results in empty, then final is empty
-            break 
-            
+        if (
+            not current_intersection
+        ):  # If any intersection results in empty, then final is empty
+            break
+
     # Merge potentially fragmented adjacent/overlapping ranges from the intersection process
     # This requires a robust TimeRange merge utility, similar to frame-based MergeIntervals
     # For now, assuming the intersection process above might produce fragmented but non-overlapping ranges
@@ -401,46 +431,110 @@ def _intersect_sound_ranges(
 
 
 def _generate_merged_edit_instructions_for_group(
+    item_key: str,  # OTIO group identifier
     instruction_tuples: List[Tuple[TimelineItem, EditInstructionsList]],
-    timeline_rate: float
-) -> List[otio.opentime.TimeRange]: # Returns list of merged sound TimeRanges on original timeline
+    catalog: OriginalTimelineCatalog,  # Contains original OTIO data
+    timeline_rate: float,
+) -> List[otio.opentime.TimeRange]:
     """
     Merges edit instructions from multiple linked items to find common sound segments
-    on the original timeline.
+    on the original timeline. If an item has no edits, its original placement is used.
     """
     if not instruction_tuples:
-        logger.warning("No instruction tuples provided for merging.")
         return []
 
     all_items_sound_ranges_on_orig_timeline: List[List[otio.opentime.TimeRange]] = []
 
-    for json_item, item_edits in instruction_tuples:
-        # Ensure 'start_frame', 'end_frame', 'source_start_frame', 'duration' exist and are numbers.
-        # Add validation here if necessary.
-        if not all (k in json_item and isinstance(json_item[k], (int,float)) for k in ['start_frame', 'end_frame', 'source_start_frame', 'duration']):
-            logger.error(f"JSON item {json_item.get('id')} is missing required frame/duration fields for merging. Skipping.")
-            # If one item is invalid, how to treat the whole group?
-            # Option 1: Treat this item as fully silent (empty sound_ranges).
-            # Option 2: Exclude it from the intersection (effectively ignoring its silence contribution).
-            # Option 3: Fail the group merge.
-            # Let's go with Option 1: if an item has bad data, it contributes no sound.
-            all_items_sound_ranges_on_orig_timeline.append([])
-            continue
-
-        sound_ranges = _get_original_timeline_sound_ranges(json_item, item_edits, timeline_rate)
-        all_items_sound_ranges_on_orig_timeline.append(sound_ranges)
-        logger.debug(f"  Item {json_item.get('id')}: Original timeline sound ranges: {[ (r.start_time.value, r.duration.value) for r in sound_ranges]}")
-
-    if not all_items_sound_ranges_on_orig_timeline: # e.g. all items had bad data
+    # Get the original OTIO clips for this group from the catalog
+    original_otio_clips_for_this_group = catalog["clips_by_group_and_track"].get(
+        item_key
+    )
+    if not original_otio_clips_for_this_group:
+        logger.error(
+            f"Cannot generate merged edits for '{item_key}': No original OTIO clips found in catalog."
+        )
         return []
 
-    merged_sound_ranges_on_orig_timeline = _intersect_sound_ranges(all_items_sound_ranges_on_orig_timeline, timeline_rate)
-    
-    logger.info(f"For group, merged into {len(merged_sound_ranges_on_orig_timeline)} common sound segments on original timeline.")
-    for r in merged_sound_ranges_on_orig_timeline:
-        logger.debug(f"    Merged common sound: Start={r.start_time.value}, Duration={r.duration.value}")
-        
-    return merged_sound_ranges_on_orig_timeline
+    for json_item, item_edits in instruction_tuples:
+        item_sound_ranges: List[otio.opentime.TimeRange] = []
+
+        if not item_edits:
+            # === THIS IS THE FIX BASED ON YOUR SUGGESTION ===
+            # No edits exist. The "sound range" is the clip's entire original placement.
+            # We get this directly from the original OTIO clip object via the catalog.
+
+            found_otio_clip: Optional[otio.schema.Clip] = None
+            json_track_idx = json_item.get("track_index")
+
+            # The keys of original_otio_clips_for_this_group are the original track indices
+            if (
+                json_track_idx is not None
+                and json_track_idx in original_otio_clips_for_this_group
+            ):
+                found_otio_clip = original_otio_clips_for_this_group[json_track_idx]
+
+            if found_otio_clip:
+                # The "range_in_parent" is the TimeRange of the clip on its track.
+                # The cataloging process ensures all times are relative to a common timeline start.
+                original_clip_range = found_otio_clip.range_in_parent()
+                logger.debug(
+                    f"  Item '{json_item.get('id')}' has no edits. Using its ground-truth OTIO range: start={original_clip_range.start_time.value}, dur={original_clip_range.duration.value}"
+                )
+                item_sound_ranges.append(original_clip_range)
+            else:
+                logger.warning(
+                    f"  Could not find matching OTIO clip for JSON item '{json_item.get('id')}' which had no edits. It will be treated as fully silent for the purpose of merging."
+                )
+                # By not adding any ranges to item_sound_ranges, this item will contribute no "sound" to the intersection.
+
+        else:  # Item has edits, we must still use the mapping logic.
+            item_original_tl_start_frame = json_item["start_frame"]
+            item_original_source_start_frame = json_item["source_start_frame"]
+            item_source_offset_on_timeline = (
+                item_original_tl_start_frame - item_original_source_start_frame
+            )
+
+            for instr in item_edits:
+                if not instr.get("enabled", True):
+                    continue
+
+                source_seg_start_frame = instr["source_start_frame"]
+                source_seg_end_frame_inclusive = instr["source_end_frame"]
+
+                original_tl_seg_start_frame_float = (
+                    source_seg_start_frame + item_source_offset_on_timeline
+                )
+
+                # We keep the rounding as it's good practice for the mapping calculation's stability
+                rounded_tl_seg_start_frame = round(original_tl_seg_start_frame_float, 9)
+
+                # Using the corrected duration calculation from before
+                seg_duration_frames = (
+                    source_seg_end_frame_inclusive - source_seg_start_frame
+                )
+
+                if seg_duration_frames > 1e-9:
+                    start_time = otio.opentime.RationalTime(
+                        rounded_tl_seg_start_frame, timeline_rate
+                    )
+                    duration = otio.opentime.RationalTime(
+                        seg_duration_frames, timeline_rate
+                    )
+                    item_sound_ranges.append(
+                        otio.opentime.TimeRange(start_time, duration)
+                    )
+
+        all_items_sound_ranges_on_orig_timeline.append(item_sound_ranges)
+
+    # The intersection logic remains the same
+    merged_sound_ranges = _intersect_sound_ranges(
+        all_items_sound_ranges_on_orig_timeline, timeline_rate
+    )
+
+    logger.debug(
+        f"For group '{item_key}', merged into {len(merged_sound_ranges)} common sound segments."
+    )
+    return merged_sound_ranges
 
 
 def _catalog_original_timeline_items(
@@ -483,9 +577,9 @@ def _catalog_original_timeline_items(
             if item_type_hint == "clip_group" and isinstance(
                 item_on_orig_track, otio_schema.Clip
             ):
-                clips_by_group_and_track[item_key][
-                    track_idx_0_based
-                ] = item_on_orig_track
+                clips_by_group_and_track[item_key][track_idx_0_based] = (
+                    item_on_orig_track
+                )
             if item_key not in temp_processed_item_keys:
                 ordered_items.append(
                     (
@@ -508,246 +602,212 @@ def _catalog_original_timeline_items(
     return catalog_result
 
 
-def apply_merged_segments_to_new_timeline(
-    item_key: str,  # OTIO group key
+def _apply_merged_segments_to_new_timeline(
+    item_key: str,
     merged_sound_segments_on_original_timeline: List[otio.opentime.TimeRange],
-    json_items_in_group: List[TimelineItem],  # The JSON TimelineItem dicts that formed this group
-    original_otio_clips_for_group: DefaultDict[int, Optional[otio_schema.Clip]],  # track_idx -> otio.Clip
-    new_timeline: otio_schema.Timeline,
+    json_items_in_group: List[TimelineItem],
+    original_otio_clips_for_group: DefaultDict[int, Optional[otio.schema.Clip]],
+    original_timeline: otio.schema.Timeline,
+    new_timeline: otio.schema.Timeline,
     new_track_cursors_relative_rt: List[otio.opentime.RationalTime],
     timeline_rate: float,
-    original_group_start_rt_on_new_timeline: otio.opentime.RationalTime, # Intended start for this group
+    group_placement_anchor_rt: otio.opentime.RationalTime,  # ANCHOR POINT for the whole group
     next_link_group_id: int,
-    # Optional: Add remove_gaps: bool = False if you want to toggle behavior
-) -> int:
-    logger.debug(
-        f"Applying MERGED segments for OTIO group '{item_key}'. "
-        f"Received {len(merged_sound_segments_on_original_timeline)} merged sound segments. "
-        f"Original intended start on new timeline: {original_group_start_rt_on_new_timeline.value}. "
-        f"Initial next_link_group_id: {next_link_group_id}."
-    )
+    use_api_for_subframe: bool,
+) -> Tuple[int, List[SubframeEditsData]]:
+    """
+    Applies edited segments using a correct inclusive frame model, ensuring
+    perfectly contiguous edits for the DaVinci Resolve API without gaps.
+    """
+    if not globalz.PROJECT_DATA:
+        raise ValueError("Failed to initialize project data.")
 
-    current_id_for_this_groups_segments = next_link_group_id
+    api_jobs_for_this_group: Dict[str, SubframeEditsData] = {}
+    involved_track_indices = {
+        idx
+        for idx, clip_obj in original_otio_clips_for_group.items()
+        if clip_obj
+        and isinstance(clip_obj, otio.schema.Clip)
+        and idx < len(new_track_cursors_relative_rt)
+    }
 
     if not merged_sound_segments_on_original_timeline:
-        logger.debug(f"  No merged sound segments to apply for '{item_key}'. Group will be empty. Link Group ID remains {current_id_for_this_groups_segments}.")
-        # If the group is entirely silent, no clips are added.
-        # We need to ensure cursors on involved tracks are advanced to at least original_group_start_rt_on_new_timeline
-        # IF other tracks might have content there.
-        # The _pad_tracks_to_common_duration at the end will handle overall timeline length.
-        # However, we should ensure that if this group was supposed to occupy space, that space is respected
-        # by advancing cursors on its tracks to where its content *would have ended* if it had its original duration.
-        # This is complex if it's fully silent.
-        # For now, if no segments, this function does nothing, and cursors aren't advanced for this group's tracks
-        # beyond where they were before this call (or where the initial sync put them).
-        # A simpler approach for fully silent groups: ensure tracks are at least at original_group_start_rt_on_new_timeline
-        involved_track_indices_for_empty_group = [
-            idx for idx, clip_obj in original_otio_clips_for_group.items()
-            if clip_obj and isinstance(clip_obj, otio_schema.Clip) and idx < len(new_track_cursors_relative_rt)
-        ]
-        for idx in involved_track_indices_for_empty_group:
-            if new_track_cursors_relative_rt[idx] < original_group_start_rt_on_new_timeline:
-                 gap_to_original_start = original_group_start_rt_on_new_timeline - new_track_cursors_relative_rt[idx]
-                 if gap_to_original_start.value > 1e-9:
-                     new_timeline.tracks[idx].append(otio_schema.Gap(duration=gap_to_original_start))
-                     new_track_cursors_relative_rt[idx] = original_group_start_rt_on_new_timeline
-        return current_id_for_this_groups_segments
+        return next_link_group_id, []
 
+    # print("json items in group:")
+    # pprint(json_items_in_group)
 
-    involved_track_indices = [
-        idx for idx, clip_obj in original_otio_clips_for_group.items()
-        if clip_obj and isinstance(clip_obj, otio_schema.Clip) and idx < len(new_track_cursors_relative_rt)
-    ]
-    if not involved_track_indices:
-        logger.error(f"Cannot apply merged edits for {item_key}: No valid original OTIO clips/track indices found in group.")
-        return current_id_for_this_groups_segments
-        
-    # --- Determine Effective Start Time for this Group on the New Timeline ---
-    # The group should start at its original_group_start_rt_on_new_timeline,
-    # OR later if previous content on any of its tracks extends beyond that point.
-    max_cursor_before_this_group = otio.opentime.RationalTime(0, timeline_rate)
+    # Align all track cursors to the start of this group's block
     for idx in involved_track_indices:
-        max_cursor_before_this_group = max(max_cursor_before_this_group, new_track_cursors_relative_rt[idx])
-    
-    effective_group_placement_start_rt = max(
-        max_cursor_before_this_group,
-        original_group_start_rt_on_new_timeline # This ensures original gaps are respected
-    )
-    # (If 'remove_gaps' feature is True, effective_group_placement_start_rt would just be max_cursor_before_this_group)
+        pre_gap_needed = group_placement_anchor_rt - new_track_cursors_relative_rt[idx]
+        if pre_gap_needed.value > 1e-9:
+            new_timeline.tracks[idx].append(otio.schema.Gap(duration=pre_gap_needed))
 
-    logger.debug(f"  Group '{item_key}': Effective placement start on new timeline: {effective_group_placement_start_rt.value}")
+    # This integer cursor tracks the precise STARTING frame for the next segment.
+    compacted_timeline_cursor_frame = round(group_placement_anchor_rt.value)
 
-    # --- Sync Cursors of Involved Tracks to this Effective Start Time ---
-    for idx in involved_track_indices:
-        gap_to_effective_start = effective_group_placement_start_rt - new_track_cursors_relative_rt[idx]
-        if gap_to_effective_start.value > 1e-9: 
-            target_track_instance = new_timeline.tracks[idx]
-            logger.debug(f"    Track {idx}: Inserting pre-group gap of {gap_to_effective_start.value} to reach effective start {effective_group_placement_start_rt.value}")
-            target_track_instance.append(otio_schema.Gap(duration=gap_to_effective_start))
-            new_track_cursors_relative_rt[idx] = effective_group_placement_start_rt
-    # --- Cursors for involved tracks are now synced to effective_group_placement_start_rt ---
-
-    # This will track the end of the last placed segment *within this group* to ensure contiguity.
-    # It starts where the group itself starts.
-    current_placement_cursor_for_group_segments = effective_group_placement_start_rt
-
-    for merged_segment_idx, merged_segment_tr in enumerate(merged_sound_segments_on_original_timeline):
-        # merged_segment_tr is a TimeRange on the ORIGINAL timeline scale.
-        # Its start_time and duration define a common sound segment.
-        
+    for merged_segment_idx, merged_segment_tr in enumerate(
+        merged_sound_segments_on_original_timeline
+    ):
         rt_segment_duration = merged_segment_tr.duration
-        if rt_segment_duration.value <= 1e-9: # Skip zero or negative duration segments
-            logger.debug(f"  Skipping zero/negative duration merged segment {merged_segment_idx} for group '{item_key}'.")
+        if rt_segment_duration.value <= 1:
             continue
 
-        # Segments *within* an edited group are placed contiguously.
-        # The current_placement_cursor_for_group_segments holds where the next segment should start.
-        rt_placement_for_this_segment_on_new_timeline = current_placement_cursor_for_group_segments
-        
-        current_segment_link_id_to_assign = current_id_for_this_groups_segments
-        processed_at_least_one_track_for_this_segment = False
-        
-        # This will store the actual end time of the segment placed on tracks.
-        # Used to check if all linked clips within this segment end at the same time.
-        actual_segment_end_rt_this_iteration = None 
+        # The duration in frames (e.g., 7.49 -> 8 frames)
+        compacted_clip_duration_frames = math.ceil(rt_segment_duration.value)
+        if compacted_clip_duration_frames == 0:
+            continue
 
-        # For each OTIO clip that was part of the original link group...
-        for original_track_idx, original_otio_clip in original_otio_clips_for_group.items():
-            if not (original_otio_clip and isinstance(original_otio_clip, otio_schema.Clip) and original_track_idx in involved_track_indices):
+        new_tl_start_frame = compacted_timeline_cursor_frame
+        # 2. The end frame is INCLUSIVE. For a duration of 8, it's start + 8 - 1.
+        new_tl_end_frame = new_tl_start_frame + compacted_clip_duration_frames - 1
+
+        current_segment_link_id = next_link_group_id + merged_segment_idx
+        compacted_duration_rt = otio.opentime.RationalTime(
+            compacted_clip_duration_frames, timeline_rate
+        )
+
+        for original_track_idx in involved_track_indices:
+            original_otio_clip = original_otio_clips_for_group[original_track_idx]
+            if not original_otio_clip:
+                print(
+                    f"Warning: No original OTIO clip found for track index {original_track_idx} in group '{item_key}'. Skipping."
+                )
+                continue
+            json_item = next(
+                (
+                    ji
+                    for ji in json_items_in_group
+                    if original_otio_clip.name in ji.get("id", "")
+                ),
+                None,
+            )
+            if not json_item:
+                print(
+                    f"Warning: No JSON item found for original OTIO clip '{original_otio_clip.name}' in group '{item_key}'. Skipping."
+                )
                 continue
 
             target_track_instance = new_timeline.tracks[original_track_idx]
-
-            # Find the corresponding JSON TimelineItem for this original_otio_clip
-            # to get its source_start_frame and original timeline start_frame.
-            found_json_item_for_otio_clip: Optional[TimelineItem] = None
-            # Matching logic (simplified):
-            otio_parent_track_for_kind_name = new_timeline.tracks[original_track_idx] # Get from original to match cataloging
-            parent_track_kind_str = "audio"
-            if otio_parent_track_for_kind_name.kind == otio_schema.TrackKind.Video:
-                parent_track_kind_str = "video"
-            
-            resolve_idx_from_name = 0
-            parts = otio_parent_track_for_kind_name.name.split(" ")
-            if len(parts) > 1 and parts[-1].isdigit():
-                try: resolve_idx_from_name = int(parts[-1])
-                except ValueError: pass
-            
-            for ji in json_items_in_group:
-                # Ensure keys exist before accessing, with defaults if necessary
-                ji_track_idx = ji.get("track_index")
-                ji_track_type = ji.get("track_type")
-                if ji_track_idx == resolve_idx_from_name and ji_track_type == parent_track_kind_str:
-                    found_json_item_for_otio_clip = ji
-                    break
-            
-            if not found_json_item_for_otio_clip:
-                logger.error(f"    Group '{item_key}', Segment {merged_segment_idx}: Could not find matching JSON item for OTIO clip '{original_otio_clip.name}' on original track index {original_track_idx}. Skipping this track for current segment.")
-                continue
-
-            json_item = found_json_item_for_otio_clip
-            
-            # Map the merged_segment_tr (which is on original timeline scale) back to this json_item's source frames
-            item_source_start_frames = json_item["source_start_frame"]
-            item_original_timeline_start_frames = json_item["start_frame"]
-
-            # merged_segment_tr.start_time.value is frame number on original timeline
-            # Calculate this segment's start relative to the item's original timeline start
-            segment_start_relative_to_item_tl_start = merged_segment_tr.start_time.value - item_original_timeline_start_frames
-            
-            # This is the start of the sound segment within the item's source media
-            instr_source_start_frame = item_source_start_frames + segment_start_relative_to_item_tl_start
-            # Duration is rt_segment_duration (which is merged_segment_tr.duration).
-            # instr_source_end_frame_inclusive = instr_source_start_frame + rt_segment_duration.value - 1.0 # Not directly needed for OTIO source_range
-
-            # Create new OTIO clip source range (absolute within the media file)
-            media_ref = original_otio_clip.media_reference
-            media_available_range_start_offset = 0.0 # Default if no available_range
-            if media_ref and isinstance(media_ref, otio_schema.ExternalReference) and \
-               media_ref.available_range and media_ref.available_range.start_time:
-                media_available_range_start_offset = float(media_ref.available_range.start_time.value)
-
-            true_abs_source_start_rt = otio.opentime.RationalTime(
-                media_available_range_start_offset + instr_source_start_frame, timeline_rate
+            clip_needs_api = use_api_for_subframe and (
+                _clip_has_subframe_placement(original_otio_clip)
+                or _clip_has_subframe_data(json_item)
             )
-            
-            new_segment_item = original_otio_clip.clone()
-            new_segment_item.source_range = otio.opentime.TimeRange(
-                start_time=true_abs_source_start_rt,
-                duration=rt_segment_duration # Use the common duration of the merged sound segment
+
+            segment_offset = (
+                merged_segment_tr.start_time.value - json_item["start_frame"]
             )
-            new_segment_item.enabled = True # Merged segments are always enabled sound
-            if "Resolve_OTIO" not in new_segment_item.metadata: new_segment_item.metadata["Resolve_OTIO"] = {}
-            new_segment_item.metadata["Resolve_OTIO"]["Link Group ID"] = current_segment_link_id_to_assign
-            
-            # --- Placement on new timeline track ---
-            # All involved tracks were synced to effective_group_placement_start_rt.
-            # Segments within the group are placed contiguously based on current_placement_cursor_for_group_segments.
-            current_track_cursor = new_track_cursors_relative_rt[original_track_idx]
-            
-            # Gap needed to reach the start of this specific segment on this track
-            gap_for_this_segment_placement = rt_placement_for_this_segment_on_new_timeline - current_track_cursor
-            
-            if gap_for_this_segment_placement.value > 1e-9:
-                logger.debug(f"      Track {original_track_idx}: Inserting intra-group gap of {gap_for_this_segment_placement.value} to place segment {merged_segment_idx} at {rt_placement_for_this_segment_on_new_timeline.value}")
-                target_track_instance.append(otio_schema.Gap(duration=gap_for_this_segment_placement))
-            elif gap_for_this_segment_placement.value < -1e-9: # Should not happen if logic is correct
-                logger.error(f"    Track {original_track_idx}: Cursor {current_track_cursor.value} is AHEAD of target placement {rt_placement_for_this_segment_on_new_timeline.value} for segment {merged_segment_idx} of group {item_key}. This indicates an overlap.")
-            
-            target_track_instance.append(new_segment_item)
-            
-            # The segment ends at its placement start + its duration
-            this_segment_actual_end_on_track = rt_placement_for_this_segment_on_new_timeline + rt_segment_duration
-            new_track_cursors_relative_rt[original_track_idx] = this_segment_actual_end_on_track
+            source_start_frame = json_item["source_start_frame"] + segment_offset
 
-            # --- Sync Check for this segment across tracks ---
-            if actual_segment_end_rt_this_iteration is None:
-                actual_segment_end_rt_this_iteration = this_segment_actual_end_on_track
-            elif abs((actual_segment_end_rt_this_iteration - this_segment_actual_end_on_track).value) > 1e-7:
-                 logger.error(
-                     f"    MERGED SEGMENT CURSOR DESYNC on track {original_track_idx} for segment {merged_segment_idx} of group {item_key}! "
-                     f"Expected end {actual_segment_end_rt_this_iteration.value}, got {this_segment_actual_end_on_track.value}"
-                 )
+            if clip_needs_api:
+                if json_item["id"] not in api_jobs_for_this_group:
+                    linked_items_props = []
+                    for item in json_items_in_group:
+                        if item["id"] == json_item["id"]:
+                            continue
+                        # Collect properties of linked items for API jobs
+                        linked_items_props.append(
+                            {
+                                "track_index": item["track_index"],
+                                "track_type": item["track_type"],
+                                "start_frame": item["start_frame"],
+                            }
+                        )
 
-            processed_at_least_one_track_for_this_segment = True
-            logger.debug(f"      Appended segment {merged_segment_idx} (dur: {rt_segment_duration.value}) to track {original_track_idx} for group '{item_key}'. New cursor: {this_segment_actual_end_on_track.value}")
+                    bmd_item = globalz.PROJECT_DATA["files"][
+                        json_item["source_file_path"]
+                    ]["fileSource"]["bmd_media_pool_item"]
+                    api_jobs_for_this_group[json_item["id"]] = {
+                        "bmd_media_pool_item": bmd_item,
+                        "edit_instructions": [],
+                        "track_type": json_item["track_type"],
+                        "track_index": json_item["track_index"],
+                        "bmd_tl_item": None,
+                    }
 
+                # Source frames are also inclusive, so the duration match is (duration - 1)
+                source_end_frame = (
+                    source_start_frame + compacted_clip_duration_frames - 1
+                )
 
-        # After processing all tracks for this merged_segment_tr:
-        if actual_segment_end_rt_this_iteration is not None:
-            # All tracks should have ended at the same point for this segment.
-            # Update the cursor for the *next* segment within the group.
-            current_placement_cursor_for_group_segments = actual_segment_end_rt_this_iteration
-        
-        if processed_at_least_one_track_for_this_segment:
-            current_id_for_this_groups_segments += 1 # Increment Link ID for the next distinct segment group
-        else:
-            logger.warning(f"  Merged segment {merged_segment_idx} for OTIO group '{item_key}' resulted in no clips being added to any track.")
-            # If no clips were added, current_placement_cursor_for_group_segments doesn't advance based on this segment.
-            # It will remain where it was, which means the next segment will try to place itself there.
-            
-    return current_id_for_this_groups_segments
+                print("linked items:")
+                pprint(linked_items_props)
+
+                api_instr: ApiEditInstruction = {
+                    "source_start_frame": 1,
+                    "source_end_frame": source_end_frame,
+                    "start_frame": float(new_tl_start_frame),
+                    "end_frame": float(new_tl_end_frame),
+                    "enabled": True,
+                    "linked_items": linked_items_props,
+                }
+
+                api_jobs_for_this_group[json_item["id"]]["edit_instructions"].append(
+                    api_instr
+                )
+                target_track_instance.append(
+                    otio.schema.Gap(duration=compacted_duration_rt)
+                )
+
+            else:  # OTIO Path
+                media_offset = (
+                    original_otio_clip.media_reference.available_range.start_time.value
+                    if original_otio_clip.media_reference.available_range
+                    else 0.0
+                )
+                source_range_start_rt = otio.opentime.RationalTime(
+                    media_offset + source_start_frame, timeline_rate
+                )
+
+                new_clip = original_otio_clip.clone()
+                # The source range uses the original sub-frame duration, but will be placed
+                # into an integer-frame slot on the timeline.
+                new_clip.source_range = otio.opentime.TimeRange(
+                    start_time=source_range_start_rt, duration=rt_segment_duration
+                )
+                if "Resolve_OTIO" not in new_clip.metadata:
+                    new_clip.metadata["Resolve_OTIO"] = {}
+                new_clip.metadata["Resolve_OTIO"]["Link Group ID"] = (
+                    current_segment_link_id
+                )
+                target_track_instance.append(new_clip)
+
+        # 3. The cursor for the *next* segment is the start frame + the duration.
+        compacted_timeline_cursor_frame += compacted_clip_duration_frames
+
+    # After all segments in the group are processed, update the main OTIO track cursors
+    # to the final position of the compacted block.
+    final_cursor_rt = otio.opentime.RationalTime(
+        compacted_timeline_cursor_frame, timeline_rate
+    )
+    for idx in involved_track_indices:
+        new_track_cursors_relative_rt[idx] = final_cursor_rt
+
+    final_api_jobs = list(api_jobs_for_this_group.values())
+    return next_link_group_id + len(
+        merged_sound_segments_on_original_timeline
+    ), final_api_jobs
+
 
 def _apply_unedited_clips_to_new_timeline(
-    # (Implementation is correct)
     item_key: str,
-    original_item_abs_start_rt: otio.opentime.RationalTime,
-    original_clips_for_group: DefaultDict[int, otio_schema.Clip],
-    new_timeline: otio_schema.Timeline,
+    target_placement_start_relative_rt: otio.opentime.RationalTime,
+    original_clips_for_group: DefaultDict[int, otio.schema.Clip],
+    new_timeline: otio.schema.Timeline,
     new_track_cursors_relative_rt: List[otio.opentime.RationalTime],
-    timeline_rate: float,
-    global_start_offset_frames: float,
 ) -> None:
-    target_placement_start_relative_rt = (
-        original_item_abs_start_rt
-        - otio.opentime.RationalTime(global_start_offset_frames, timeline_rate)
-    )
     logger.debug(
-        f"Applying unedited item/group '{item_key}' at relative time {target_placement_start_relative_rt.value}"
+        f"Applying UNEDITED item/group '{item_key}' at target relative time {target_placement_start_relative_rt.value}"
     )
     for track_idx_orig, original_clip_to_copy in original_clips_for_group.items():
+        if not (
+            original_clip_to_copy
+            and isinstance(original_clip_to_copy, otio_schema.Clip)
+        ):
+            continue
         if track_idx_orig >= len(new_timeline.tracks):
             continue
+
         target_track = new_timeline.tracks[track_idx_orig]
         gap_needed = (
             target_placement_start_relative_rt
@@ -755,6 +815,7 @@ def _apply_unedited_clips_to_new_timeline(
         )
         if gap_needed.value > 1e-9:
             target_track.append(otio_schema.Gap(duration=gap_needed))
+
         cloned_clip = original_clip_to_copy.clone()
         target_track.append(cloned_clip)
         new_track_cursors_relative_rt[track_idx_orig] = (
@@ -778,113 +839,188 @@ def _pad_tracks_to_common_duration(
             track_to_pad.append(otio_schema.Gap(duration=gap_needed_rt))
 
 
+def _clip_has_subframe_data(json_item: TimelineItem) -> bool:
+    """Checks if a single TimelineItem has subframe-precise geometry."""
+    frames_to_check = [
+        # json_item.get("start_frame"),
+        # json_item.get("end_frame"),
+        json_item.get("source_start_frame"),
+        json_item.get("source_end_frame"),
+    ]
+    for frame_value in frames_to_check:
+        if frame_value is not None and not float(frame_value).is_integer():
+            return True
+    return False
+
+
+def _group_has_subframe_data(
+    instruction_tuples: List[Tuple[TimelineItem, EditInstructionsList]],
+) -> bool:
+    """Checks if any item in a group has subframe-precise geometry."""
+    print(f"Checking group for subframe data: {instruction_tuples}")
+    for json_item, _ in instruction_tuples:
+        # Check all relevant frame values for this item
+        frames_to_check = [
+            json_item.get("start_frame"),
+            json_item.get("end_frame"),
+            json_item.get("source_start_frame"),
+            json_item.get("source_end_frame"),
+        ]
+        for frame_value in frames_to_check:
+            # float.is_integer() correctly handles both ints and floats like 2.0
+            if frame_value is not None and not float(frame_value).is_integer():
+                return True
+    return False
+
+
+def _clip_has_subframe_placement(otio_clip: otio.schema.Clip) -> bool:
+    """
+    Checks if an original OTIO clip object is placed on a subframe
+    or has a subframe duration.
+    """
+    if not otio_clip:
+        return False
+
+    # Get the clip's placement and duration on its original track
+    clip_range = otio_clip.range_in_parent()
+    if not clip_range:
+        return False
+
+    start_val = clip_range.start_time.value
+    duration_val = clip_range.duration.value
+
+    # Check if either the start time or duration are not whole numbers
+    if not float(start_val).is_integer() or not float(duration_val).is_integer():
+        return True
+
+    return False
+
+
 def edit_timeline_with_precalculated_instructions(
     otio_timeline_path: str,
     project_data: ProjectData,
     output_otio_path: str,
-) -> None:
+    remove_leading_gap: bool = True,
+    use_api_for_subframe: bool = True,
+) -> List[SubframeEditsData]:
+    """
+    Builds an edited timeline, preserving original inter-clip timing by default,
+    while compacting segments within each clip.
+    """
+    if not globalz.PROJECT_DATA:
+        raise ValueError("Failed to initialize project data.")
+
+    api_jobs: List[SubframeEditsData] = []
+
     otio_data = load_otio_timeline_data(otio_timeline_path)
     original_timeline = otio_data["timeline"]
     timeline_rate = otio_data["rate"]
     global_start_offset_frames = otio_data["global_start_offset_frames"]
 
-    logger.info("Starting timeline editing process (Main Orchestrator with Merging Logic).")
+    logger.info(
+        f"Starting timeline editing process. API for subframe: {use_api_for_subframe}."
+    )
 
-    catalog: OriginalTimelineCatalog = _catalog_original_timeline_items(
+    catalog = _catalog_original_timeline_items(
         original_timeline, timeline_rate, global_start_offset_frames
     )
-    group_source_data_map: GroupSourceDataMap = build_group_source_data_map(
-        project_data, original_timeline, catalog
+    group_source_data_map = build_group_source_data_map(
+        project_data, original_timeline, catalog, global_start_offset_frames
     )
 
+    time_shift_to_zero_start_rt = otio.opentime.RationalTime(0, timeline_rate)
+    if remove_leading_gap:
+        first_clip_start_rt = next(
+            (rt for _, hint, _, rt in catalog["ordered_items"] if "clip" in hint), None
+        )
+        if first_clip_start_rt:
+            global_start_rt = otio.opentime.RationalTime(
+                global_start_offset_frames, timeline_rate
+            )
+            leading_gap_duration_rt = first_clip_start_rt - global_start_rt
+            if leading_gap_duration_rt.value > 1e-9:
+                logger.info(
+                    f"Detected a leading gap of {leading_gap_duration_rt.value} frames. Shifting timeline."
+                )
+                time_shift_to_zero_start_rt = leading_gap_duration_rt
+
     new_timeline = otio_schema.Timeline(
-        name=f"{original_timeline.name or 'Timeline'} - Merged Edits Applied",
+        name=f"{original_timeline.name or 'Timeline'} - Pruner Edits",
         global_start_time=copy.deepcopy(original_timeline.global_start_time),
     )
     for orig_track in original_timeline.tracks:
         new_track = otio_schema.Track(name=orig_track.name, kind=orig_track.kind)
         new_timeline.tracks.append(new_track)
-    
-    current_timeline_rate_for_cursors = timeline_rate
-    if new_timeline.global_start_time and new_timeline.global_start_time.rate > 0:
-        current_timeline_rate_for_cursors = new_timeline.global_start_time.rate
 
-    new_track_cursors_relative_rt: List[otio.opentime.RationalTime] = [
-        otio.opentime.RationalTime(0, current_timeline_rate_for_cursors) for _ in new_timeline.tracks
+    new_track_cursors_relative_rt = [
+        otio.opentime.RationalTime(0, new_timeline.global_start_time.rate)
+        for _ in new_timeline.tracks
     ]
-    
     max_orig_id = _get_max_original_link_group_id(original_timeline)
     next_link_group_id_for_main_loop = max_orig_id + 1
-    logger.debug(f"Max original Link Group ID: {max_orig_id}. Initializing next_link_group_id: {next_link_group_id_for_main_loop}")
 
-
-    for item_key, item_type_hint, _, original_item_abs_start_rt in catalog["ordered_items"]:
-        logger.debug(f"Processing OTIO item_key: '{item_key}', Type: '{item_type_hint}'")
+    for item_key, item_type_hint, _, original_item_abs_start_rt in catalog[
+        "ordered_items"
+    ]:
         if item_type_hint == "gap":
-            # Handle gaps if necessary, or ensure cursor logic correctly skips over them based on original timeline.
-            # For now, if a gap is encountered in ordered_items, and it's not part of a group that gets edits,
-            # it might be skipped. The _apply_unedited_clips... handles non-edited groups.
-            # This section might need more robust gap handling based on `original_item_object`.
-            logger.debug(f"  Skipping cataloged gap object '{item_key}'. Gaps on new timeline are byproducts of edits.")
             continue
 
         instruction_tuples_for_group = group_source_data_map.get(item_key)
-        original_otio_clips_for_this_group = catalog["clips_by_group_and_track"].get(item_key, defaultdict(lambda: None))
-
-        group_target_start_on_new_timeline_rt = (
-            original_item_abs_start_rt - 
-            otio.opentime.RationalTime(global_start_offset_frames, timeline_rate)
+        original_otio_clips_for_this_group = catalog["clips_by_group_and_track"].get(
+            item_key, defaultdict(lambda: None)
         )
 
-        if not original_otio_clips_for_this_group or all(c is None for c in original_otio_clips_for_this_group.values()):
-            logger.warning(f"  No valid OTIO clips found for group '{item_key}'. Skipping processing for this group.")
+        if not original_otio_clips_for_this_group or all(
+            c is None for c in original_otio_clips_for_this_group.values()
+        ):
             continue
 
+        # This is the ANCHOR for the start of the edited block.
+        group_target_start_on_new_timeline_rt = (
+            original_item_abs_start_rt
+            - otio.opentime.RationalTime(global_start_offset_frames, timeline_rate)
+            - time_shift_to_zero_start_rt
+        )
 
-        if instruction_tuples_for_group: # JSON data found for this OTIO group
-            logger.debug(f"  Found {len(instruction_tuples_for_group)} JSON items with instruction data for group '{item_key}'.")
-            
-            merged_sound_segments_on_orig_tl = _generate_merged_edit_instructions_for_group(
-                instruction_tuples_for_group, timeline_rate
+        if instruction_tuples_for_group:
+            merged_sound_segments_on_orig_tl = (
+                _generate_merged_edit_instructions_for_group(
+                    item_key, instruction_tuples_for_group, catalog, timeline_rate
+                )
             )
-
-            if not merged_sound_segments_on_orig_tl:
-                 logger.info(f"  Group '{item_key}' resulted in zero common sound segments after merging. It will be entirely silent (gap).")
-
-            # Pass the list of original JSON items that were part of this group
             json_items_in_this_group = [t[0] for t in instruction_tuples_for_group]
-
-            next_link_group_id_for_main_loop = apply_merged_segments_to_new_timeline(
-                item_key=item_key,
-                merged_sound_segments_on_original_timeline=merged_sound_segments_on_orig_tl,
-                json_items_in_group=json_items_in_this_group,
-                original_otio_clips_for_group=original_otio_clips_for_this_group,
-                new_timeline=new_timeline,
-                new_track_cursors_relative_rt=new_track_cursors_relative_rt,
-                timeline_rate=timeline_rate,
-                original_group_start_rt_on_new_timeline=group_target_start_on_new_timeline_rt,
-                next_link_group_id=next_link_group_id_for_main_loop,
-            )
-            logger.debug(f"  Finished applying merged segments for '{item_key}'. Next Link ID: {next_link_group_id_for_main_loop}")
-        else: # No JSON data (and thus no instructions) for this OTIO group key
-            logger.debug(f"  No JSON instruction data for OTIO group '{item_key}'. Applying as unedited.")
-            _apply_unedited_clips_to_new_timeline(
+            next_id, new_api_jobs = _apply_merged_segments_to_new_timeline(
                 item_key,
-                original_item_abs_start_rt,
+                merged_sound_segments_on_orig_tl,
+                json_items_in_this_group,
                 original_otio_clips_for_this_group,
+                original_timeline,
                 new_timeline,
                 new_track_cursors_relative_rt,
                 timeline_rate,
-                global_start_offset_frames,
+                group_target_start_on_new_timeline_rt,  # Pass the ANCHOR time
+                next_link_group_id_for_main_loop,
+                use_api_for_subframe,
             )
-            logger.debug(f"  Finished applying unedited for '{item_key}'.")
-        
-        logger.debug(f"  Track cursors after item_key '{item_key}': {[c.value for c in new_track_cursors_relative_rt]}")
+            next_link_group_id_for_main_loop = next_id
+            if new_api_jobs:
+                api_jobs.extend(new_api_jobs)
+        else:
+            # Unedited clips are placed at their original start time.
+            _apply_unedited_clips_to_new_timeline(
+                item_key,
+                group_target_start_on_new_timeline_rt,
+                original_otio_clips_for_this_group,
+                new_timeline,
+                new_track_cursors_relative_rt,
+            )
 
     _pad_tracks_to_common_duration(new_timeline, new_track_cursors_relative_rt)
     otio.adapters.write_to_file(new_timeline, output_otio_path)
-    #pprint(new_timeline)
-    logger.info(f"Merged edits OTIO timeline saved to: {output_otio_path}")
+    logger.info(f"Generated OTIO timeline at: {output_otio_path}")
+    print(f"Final edits for API: {api_jobs}")
+    return api_jobs
+
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -910,3 +1046,5 @@ if __name__ == "__main__":
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"Elapsed time: {elapsed_time:.2f} seconds")
+
+# 22 loops, lol

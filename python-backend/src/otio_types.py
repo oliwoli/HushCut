@@ -1,4 +1,6 @@
+from __future__ import annotations
 from typing import TypedDict, Any, NotRequired, List, Union
+
 
 DefaultMedia = TypedDict(
     "DefaultMedia",
@@ -25,15 +27,16 @@ SourceRangeOrAvailableRange = TypedDict(
     "SourceRangeOrAvailableRange",
     {
         "OTIO_SCHEMA": str,
-        "duration": "GlobalStartTimeOrStartTimeOrDuration",
-        "start_time": "GlobalStartTimeOrStartTimeOrDuration",
+        "duration": "RationalTime",
+        "start_time": "RationalTime",
     },
 )
 
 UnnammedUnion438F20 = Union[Any, "Metadata"]
 
-Children = TypedDict(
-    "Children",
+
+ClipOrGap = TypedDict(
+    "ClipOrGap",
     {
         "OTIO_SCHEMA": str,
         "metadata": UnnammedUnion438F20,
@@ -47,7 +50,7 @@ Children = TypedDict(
     },
 )
 
-ProbablyTracks = Union["TracksOrChildren", Children]
+TrackChildren = Union["TracksOrChildren", ClipOrGap]
 
 TracksOrChildren = TypedDict(
     "TracksOrChildren",
@@ -59,13 +62,13 @@ TracksOrChildren = TypedDict(
         "effects": List[Any],
         "markers": List[Any],
         "enabled": bool,
-        "children": List[ProbablyTracks],
+        "children": List[TrackChildren],
         "kind": NotRequired[str],
     },
 )
 
-GlobalStartTimeOrStartTimeOrDuration = TypedDict(
-    "GlobalStartTimeOrStartTimeOrDuration",
+RationalTime = TypedDict(
+    "RationalTime",
     {"OTIO_SCHEMA": str, "rate": float, "value": float},
 )
 
@@ -125,7 +128,7 @@ ResolveOTIO = TypedDict(
     },
 )
 
-Metadata = TypedDict("Metadata", {"Resolve_OTIO": NotRequired[ResolveOTIO]})
+Metadata = TypedDict("Metadata", {"Resolve_OTIO": ResolveOTIO})
 
 Timeline = TypedDict(
     "Timeline",
@@ -133,10 +136,13 @@ Timeline = TypedDict(
         "OTIO_SCHEMA": str,
         "metadata": Metadata,
         "name": str,
-        "global_start_time": GlobalStartTimeOrStartTimeOrDuration,
+        "global_start_time": RationalTime,
         "tracks": TracksOrChildren,
     },
 )
+
+ClipMetadata = TypedDict("ClipMetadata", {"Resolve_OTIO": NotRequired[ResolveOTIO]})
+
 
 # 💡 Starting from Python 3.10 (PEP 604), `Union[A, B]` can be simplified as `A | B`
 
