@@ -48,6 +48,8 @@ def process_track_items(
     First pass: Iterates through an OTIO track's children to find the
     corresponding items in the project data and assign the `link_group_id`.
     """
+    FRAME_MATCH_TOLERANCE = 0.5
+
     playhead_rt = otio.opentime.RationalTime(
         value=start_time["value"], rate=start_time["rate"]
     )
@@ -67,18 +69,21 @@ def process_track_items(
             continue
 
         if "clip" in item_schema:
-            record_frame = round(playhead_rt.to_frames())
+            # record_frame = round(playhead_rt.to_frames())
+            record_frame_float = playhead_rt.to_frames()
 
             corresponding_item = None
             for tl_item in pd_timeline[pd_timeline_key]:
                 if (
                     tl_item["track_index"] == track_index
-                    and round(tl_item["start_frame"]) == record_frame
+                    and abs(tl_item["start_frame"] - record_frame_float)
+                    < FRAME_MATCH_TOLERANCE
                 ):
                     corresponding_item = tl_item
                     break
 
             if not corresponding_item:
+                print(f"could not find corresponding item for item {item}")
                 playhead_rt += item_duration_rt
                 continue
 
@@ -140,9 +145,11 @@ def unify_edit_instructions(items: List[TimelineItem]) -> List[Tuple[float, floa
 def create_otio_from_project_data(input_otio_path: str, output_path: str) -> None:
     """
     Reads an OTIO file and project data, preserves original clip start times,
-    but performs a ripple-delete within each clip based on edit instructions.
+    and ripples edits within each clip, creating or adjusting gaps as needed.
     """
-    # === PASS 0: Setup ===
+    # === PASS 0-3: Setup, Linking, Unifying, and ID Mapping (No Changes) ===
+    # (The first three passes of the function remain identical to the previous version)
+
     project_data: ProjectData | None = globalz.PROJECT_DATA
     if not project_data:
         raise ValueError("Could not initialize project data.")
@@ -151,7 +158,6 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
     with open(input_otio_path, "r") as f:
         timeline: Timeline = json.load(f)
 
-    # === PASS 1: Link OTIO clips to project data ===
     original_tracks: list[otio_types.TrackChildren] = timeline["tracks"]["children"]
     max_link_group_id = 0
     track_type_counters = {"video": 0, "audio": 0, "subtitle": 0}
@@ -174,7 +180,6 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
             ),
         )
 
-    # === PASS 2: Group items and unify their edit instructions ===
     items_by_link_group: List[List[TimelineItem]] = [
         [] for _ in range(max_link_group_id + 1)
     ]
@@ -188,7 +193,6 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
         if group:
             unified_edits_by_group[id] = unify_edit_instructions(group)
 
-    # === PASS 3: Create a mapping for new, sequential Link Group IDs ===
     class NewGroupInfo(TypedDict):
         group_id_range: Tuple[int, int]
 
@@ -206,7 +210,8 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
         )
         new_clip_id_counter += num_new_clips
 
-    # === PASS 4: Rebuild the timeline with "Anchor and Ripple" logic ===
+    # === PASS 4: Rebuild the timeline with the final "Anchor and Ripple" logic ===
+
     edited_timeline: Timeline = deepcopy(timeline)
     new_tracks_list = []
 
@@ -215,33 +220,38 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
         value=timeline["global_start_time"]["value"], rate=rt_rate
     )
 
-    track_type_indices = {"video": 0, "audio": 0}
+    FRAME_MATCH_TOLERANCE = 0.5
 
-    for original_track in original_tracks:
+    rebuild_track_counters = {"video": 0, "audio": 0}
+    for original_track in timeline["tracks"]["children"]:
         track_type = str(original_track.get("kind", "")).lower()
-        if track_type not in track_type_indices:
+        if track_type not in rebuild_track_counters:
             new_tracks_list.append(deepcopy(original_track))
             continue
 
-        track_type_indices[track_type] += 1
-        current_track_index = track_type_indices[track_type]
-
+        rebuild_track_counters[track_type] += 1
+        current_track_index = rebuild_track_counters[track_type]
         new_track_children: List[otio_types.ClipOrGap] = []
-        new_timeline_playhead_rt = global_start_time_rt
-        original_timeline_playhead_rt = global_start_time_rt
 
-        for child_clip in original_track.get("children", []):
-            original_clip_start_rt = original_timeline_playhead_rt
-            original_duration_dict = child_clip.get("source_range", {}).get(
-                "duration", {}
-            )
+        initial_start_frame = round(global_start_time_rt.to_frames())
+        new_timeline_playhead_frames = initial_start_frame
+        original_timeline_playhead_frames = initial_start_frame
+
+        for child_item in original_track.get("children", []):
+            original_item_start_frames = original_timeline_playhead_frames
+            duration_dict = child_item["source_range"]["duration"]
             original_duration_rt = otio.opentime.RationalTime(
-                value=original_duration_dict.get("value", 0), rate=rt_rate
+                value=duration_dict["value"], rate=duration_dict["rate"]
             )
+            original_item_duration_frames = round(original_duration_rt.to_frames())
 
-            # Insert an explicit Gap to preserve the original clip's start time.
-            gap_duration_rt = original_clip_start_rt - new_timeline_playhead_rt
-            if gap_duration_rt.value > 0.001:
+            gap_duration_frames = (
+                original_item_start_frames - new_timeline_playhead_frames
+            )
+            if gap_duration_frames > 0:
+                gap_duration_rt = otio.opentime.from_frames(
+                    gap_duration_frames, rt_rate
+                )
                 gap_dict = {
                     "OTIO_SCHEMA": "Gap.1",
                     "metadata": {},
@@ -250,7 +260,7 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
                         "OTIO_SCHEMA": "TimeRange.1",
                         "duration": {
                             "OTIO_SCHEMA": "RationalTime.1",
-                            "rate": rt_rate,
+                            "rate": gap_duration_rt.rate,
                             "value": gap_duration_rt.value,
                         },
                         "start_time": {
@@ -261,22 +271,22 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
                     },
                 }
                 new_track_children.append(gap_dict)
-                new_timeline_playhead_rt += gap_duration_rt
+                new_timeline_playhead_frames += gap_duration_frames
 
-            # Process the clip or pass it through
-            if str(child_clip.get("OTIO_SCHEMA", "")).lower() == "clip.2":
-                record_frame = round(original_clip_start_rt.to_frames())
+            item_schema = str(child_item.get("OTIO_SCHEMA", "")).lower()
+
+            if "clip" in item_schema:
                 pd_key = f"{track_type}_track_items"
                 corresponding_item = next(
                     (
                         item
                         for item in pd_timeline.get(pd_key, [])
                         if item["track_index"] == current_track_index
-                        and round(item["start_frame"]) == record_frame
+                        and abs(item["start_frame"] - original_item_start_frames)
+                        < FRAME_MATCH_TOLERANCE
                     ),
                     None,
                 )
-
                 link_group_id = (
                     corresponding_item.get("link_group_id")
                     if corresponding_item
@@ -289,57 +299,72 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
                 )
 
                 if not unified_edits:
-                    new_track_children.append(deepcopy(child_clip))
-                    new_timeline_playhead_rt += original_duration_rt
+                    new_track_children.append(deepcopy(child_item))
+                    new_timeline_playhead_frames += original_item_duration_frames
                 else:
-                    original_clip_source_start_frames = corresponding_item[
+                    original_clip_source_start = corresponding_item[
                         "source_start_frame"
                     ]
                     id_map_info = new_group_id_mapping[link_group_id]
-                    original_media_ref = child_clip["media_references"]["DEFAULT_MEDIA"]
-                    base_timecode_value = original_media_ref["available_range"][
-                        "start_time"
-                    ]["value"]
 
                     for i, (rel_start, rel_end) in enumerate(unified_edits):
-                        new_item = deepcopy(child_clip)
-                        duration_frames = rel_end - rel_start
-                        abs_src_start_frames = (
-                            original_clip_source_start_frames + rel_start
+                        new_item = deepcopy(child_item)
+                        duration_frames = int(round(rel_end - rel_start + 1))
+
+                        # --- THE FIX: Correct Source Time Calculation ---
+
+                        # 1. Calculate the frame offset within the source media
+                        abs_src_offset_frames = original_clip_source_start + rel_start
+
+                        # 2. Get the base starting frame of the entire source media file
+                        original_media_ref = child_item["media_references"][
+                            "DEFAULT_MEDIA"
+                        ]
+                        base_timecode_frames = original_media_ref["available_range"][
+                            "start_time"
+                        ]["value"]
+
+                        # 3. Add them together for the true absolute start frame
+                        new_source_start_frames = (
+                            base_timecode_frames + abs_src_offset_frames
                         )
-                        new_start_timecode_value = (
-                            base_timecode_value + abs_src_start_frames
+
+                        # 4. Create time objects from the correct, absolute frame numbers
+                        start_time_rt = otio.opentime.from_frames(
+                            new_source_start_frames, rt_rate
+                        )
+                        duration_rt = otio.opentime.from_frames(
+                            duration_frames, rt_rate
                         )
 
-                        start_time_dict = {
-                            "OTIO_SCHEMA": "RationalTime.1",
-                            "rate": rt_rate,
-                            "value": new_start_timecode_value,
+                        new_item["source_range"] = {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": start_time_rt.rate,
+                                "value": start_time_rt.value,
+                            },
+                            "duration": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": duration_rt.rate,
+                                "value": duration_rt.value,
+                            },
                         }
-                        duration_dict = {
-                            "OTIO_SCHEMA": "RationalTime.1",
-                            "rate": rt_rate,
-                            "value": duration_frames,
-                        }
+                        # --- END FIX ---
 
-                        # 1. Update ONLY the clip's personal source_range
-                        new_item["source_range"]["start_time"] = start_time_dict
-                        new_item["source_range"]["duration"] = duration_dict
-
-                        # 2. DO NOT modify the media_reference's available_range. It must stay the same.
-
-                        # 3. Assign the new sequential Link Group ID
                         group_id_start = id_map_info["group_id_range"][0]
                         new_item["metadata"]["Resolve_OTIO"]["Link Group ID"] = (
                             group_id_start + i
                         )
 
                         new_track_children.append(new_item)
-                        new_timeline_playhead_rt += otio.opentime.from_frames(
-                            duration_frames, rt_rate
-                        )
+                        new_timeline_playhead_frames += duration_frames
 
-            original_timeline_playhead_rt += original_duration_rt
+            elif "gap" in item_schema:
+                new_track_children.append(deepcopy(child_item))
+                new_timeline_playhead_frames += original_item_duration_frames
+
+            original_timeline_playhead_frames += original_item_duration_frames
 
         new_track = deepcopy(original_track)
         new_track["children"] = new_track_children
