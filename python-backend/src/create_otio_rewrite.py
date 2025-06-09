@@ -147,9 +147,6 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
     Reads an OTIO file and project data, preserves original clip start times,
     and ripples edits within each clip, creating or adjusting gaps as needed.
     """
-    # === PASS 0-3: Setup, Linking, Unifying, and ID Mapping (No Changes) ===
-    # (The first three passes of the function remain identical to the previous version)
-
     project_data: ProjectData | None = globalz.PROJECT_DATA
     if not project_data:
         raise ValueError("Could not initialize project data.")
@@ -188,6 +185,28 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
         if link_group_id is not None:
             items_by_link_group[link_group_id].append(item)
 
+    next_new_group_id = max_link_group_id + 1
+    all_pd_items = pd_timeline["video_track_items"] + pd_timeline["audio_track_items"]
+    for item in all_pd_items:
+        # If a clip wasn't assigned an ID but has edits, it's a standalone clip.
+        if "link_group_id" not in item and item.get("edit_instructions"):
+            # Assign it a new, unique ID.
+            new_id = next_new_group_id
+            item["link_group_id"] = new_id
+
+            # Ensure the main list is large enough.
+            while len(items_by_link_group) <= new_id:
+                items_by_link_group.append([])
+
+            # Add it as a new group containing only this item.
+            items_by_link_group[new_id] = [item]
+            next_new_group_id += 1
+
+    # Update the max ID to reflect any new groups we added.
+    max_link_group_id = next_new_group_id - 1
+    # === END FIX ===
+
+    # === PASS 3: Unify Edit Instructions ===
     unified_edits_by_group: Dict[int, List[Tuple[float, float]]] = {}
     for id, group in enumerate(items_by_link_group):
         if group:
