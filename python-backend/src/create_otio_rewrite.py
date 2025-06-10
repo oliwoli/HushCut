@@ -6,6 +6,7 @@ from typing import (
     Any,
     List,
     Dict,
+    NotRequired,
     Tuple,
     TypedDict,
 )
@@ -34,6 +35,134 @@ def add_rt_to_rt(
 ) -> otio.opentime.RationalTime:
     """Adds two RationalTime objects, returning a new RationalTime."""
     return rt1 + rt2
+
+
+class LinkedItemProp(TypedDict):
+    track_index: int
+    track_type: str  # "video", "audio", "subtitle"
+    start_frame: float
+    source_start_frame: float
+
+
+class ApiEditInstruction(EditInstruction):
+    linked_items: List[LinkedItemProp]
+
+
+class SubframeEditsData(TypedDict):
+    bmd_media_pool_item: Any  # we can take this from project data!
+    edit_instructions: List[ApiEditInstruction]
+    track_type: str  # "video", "audio", "subtitle"
+    track_index: int
+    id: str
+    bmd_tl_item: NotRequired[Any]  # to be added later
+
+
+def _has_subframe_source(json_item: TimelineItem | dict) -> bool:
+    """Checks if a single TimelineItem has subframe-precise geometry."""
+    frames_to_check = [
+        # json_item.get("start_frame"),
+        # json_item.get("end_frame"),
+        json_item.get("source_start_frame"),
+        json_item.get("source_end_frame"),
+    ]
+    for frame_value in frames_to_check:
+        if frame_value is not None and not float(frame_value).is_integer():
+            return True
+    return False
+
+
+# Place this with your other helper functions
+def _build_api_data_for_item(
+    api_item: TimelineItem,
+    final_edits: List[Tuple[float, float]],
+    all_timeline_items: List[TimelineItem],
+    new_start_frame_on_timeline: int,  # Changed parameter name for clarity
+) -> SubframeEditsData:
+    """
+    Constructs the SubframeEditsData dictionary using the final, unified edits
+    and the clip's correct start position on the new, rippled timeline.
+    """
+    # 1. Find all linked partners (restored standalone logic for robustness)
+    linked_items_props: List[LinkedItemProp] = []
+    item_link_id = api_item.get("link_group_id")
+
+    if item_link_id is not None:
+        for partner_item in all_timeline_items:
+            if partner_item.get("link_group_id") != item_link_id:
+                continue
+
+            if partner_item["id"] != api_item["id"]:
+                # don't link to self
+                continue
+
+            linked_items_props.append(
+                {
+                    "track_index": partner_item["track_index"],
+                    "track_type": partner_item["track_type"],
+                    "start_frame": partner_item["start_frame"],
+                    "source_start_frame": partner_item["source_start_frame"],
+                }
+            )
+    # else:  # Standalone item
+    #     linked_items_props.append(
+    #         {
+    #             "track_index": api_item["track_index"],
+    #             "track_type": api_item["track_type"],
+    #             "start_frame": api_item["start_frame"],
+    #             "source_start_frame": api_item["source_start_frame"],
+    #         }
+    #     )
+
+    # 2. Build the detailed ApiEditInstruction list
+    api_instructions: List[ApiEditInstruction] = []
+    base_source_offset = api_item["source_start_frame"]
+
+    tl_offset_to_otio = api_item["start_frame"] - new_start_frame_on_timeline
+    print(f"TL OFFSET TO OTIO: {tl_offset_to_otio}")
+
+    # This playhead tracks the ripple *within this clip*
+    local_ripple_playhead = 0
+    for rel_start, rel_end in final_edits:
+        # FIX 2: Use IDENTICAL duration math as the OTIO builder
+        clip_duration_frames = int(round(rel_end - rel_start + 1))
+
+        # This is the precise start frame of this sub-clip on the final timeline
+        final_start_frame = new_start_frame_on_timeline + local_ripple_playhead
+
+        api_instructions.append(
+            {
+                "source_start_frame": base_source_offset + rel_start,
+                "source_end_frame": base_source_offset + rel_end,
+                "start_frame": final_start_frame,
+                "end_frame": final_start_frame
+                + clip_duration_frames
+                - 1,  # Correct inclusive end
+                "enabled": api_item["edit_instructions"][0]["enabled"],
+                "linked_items": linked_items_props,
+            }
+        )
+
+        # Advance the local ripple playhead
+        local_ripple_playhead += clip_duration_frames
+
+    # 3. Construct and return the final data structure
+    source_path = api_item["source_file_path"]
+    project_data = globalz.PROJECT_DATA
+    if not project_data:
+        raise ValueError
+    bmd_mpi: Any = project_data["files"][source_path]["fileSource"][
+        "bmd_media_pool_item"
+    ]
+
+    # We now add the bmd_tl_item from the original timeline item, as it's useful for the API
+    return {
+        "bmd_media_pool_item": bmd_mpi,
+        "bmd_tl_item": api_item["bmd_item"],
+        "edit_instructions": api_instructions,
+        "track_type": api_item["track_type"],
+        "track_index": api_item["track_index"],
+        "id": api_item["id"],
+    }
 
 
 def process_track_items(
@@ -142,7 +271,9 @@ def unify_edit_instructions(items: List[TimelineItem]) -> List[Tuple[float, floa
 # --- MAIN LOGIC ---
 
 
-def create_otio_from_project_data(input_otio_path: str, output_path: str) -> None:
+def create_otio_from_project_data(
+    input_otio_path: str, output_path: str, use_api_for_subframe: bool
+) -> List[SubframeEditsData]:
     """
     Reads an OTIO file and project data, preserves original clip start times,
     and ripples edits within each clip, creating or adjusting gaps as needed.
@@ -241,6 +372,9 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
 
     FRAME_MATCH_TOLERANCE = 0.5
 
+    subframe_api_edits: List[SubframeEditsData] = []
+    all_pd_items = pd_timeline["video_track_items"] + pd_timeline["audio_track_items"]
+
     rebuild_track_counters = {"video": 0, "audio": 0}
     for original_track in timeline["tracks"]["children"]:
         track_type = str(original_track.get("kind", "")).lower()
@@ -250,13 +384,16 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
 
         rebuild_track_counters[track_type] += 1
         current_track_index = rebuild_track_counters[track_type]
-        new_track_children: List[otio_types.ClipOrGap] = []
+        new_track_children: List[otio_types.ClipOrGap] | list[str | Any] = []
 
         initial_start_frame = round(global_start_time_rt.to_frames())
         new_timeline_playhead_frames = initial_start_frame
         original_timeline_playhead_frames = initial_start_frame
 
         for child_item in original_track.get("children", []):
+            if type(child_item) is not dict:
+                raise TypeError("internal type error.")
+
             original_item_start_frames = original_timeline_playhead_frames
             duration_dict = child_item["source_range"]["duration"]
             original_duration_rt = otio.opentime.RationalTime(
@@ -296,7 +433,7 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
 
             if "clip" in item_schema:
                 pd_key = f"{track_type}_track_items"
-                corresponding_item = next(
+                corresponding_item: dict | None = next(
                     (
                         item
                         for item in pd_timeline.get(pd_key, [])
@@ -306,6 +443,16 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
                     ),
                     None,
                 )
+
+                if not corresponding_item or type(corresponding_item) is not dict:
+                    new_track_children.append(deepcopy(child_item))
+                    new_timeline_playhead_frames += original_item_duration_frames
+                    continue
+
+                is_for_api = use_api_for_subframe and _has_subframe_source(
+                    corresponding_item
+                )
+
                 link_group_id = (
                     corresponding_item.get("link_group_id")
                     if corresponding_item
@@ -318,8 +465,41 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
                 )
 
                 if not unified_edits:
-                    new_track_children.append(deepcopy(child_item))
+                    raise ValueError("internal value error.")
+
+                if is_for_api:
+                    print(f"{child_item['name']} has subframe data.")
+                    api_data = _build_api_data_for_item(
+                        corresponding_item,
+                        unified_edits,
+                        all_pd_items,
+                        new_start_frame_on_timeline=new_timeline_playhead_frames,
+                    )
+                    subframe_api_edits.append(api_data)
+                    gap_duration_dict = {
+                        "OTIO_SCHEMA": "RationalTime.1",
+                        "rate": original_duration_rt.rate,
+                        "value": original_duration_rt.value,
+                    }
+
+                    gap_dict = {
+                        "OTIO_SCHEMA": "Gap.1",
+                        "metadata": {},
+                        # A descriptive name helps in debugging the OTIO file
+                        "name": f"Gap (for API: {child_item['name']})",
+                        "source_range": {
+                            "OTIO_SCHEMA": "TimeRange.1",
+                            "duration": gap_duration_dict,
+                            "start_time": {
+                                "OTIO_SCHEMA": "RationalTime.1",
+                                "rate": original_duration_rt.rate,
+                                "value": 0.0,
+                            },
+                        },
+                    }
+                    new_track_children.append(gap_dict)
                     new_timeline_playhead_frames += original_item_duration_frames
+
                 else:
                     original_clip_source_start = corresponding_item[
                         "source_start_frame"
@@ -391,3 +571,5 @@ def create_otio_from_project_data(input_otio_path: str, output_path: str) -> Non
 
     edited_timeline["tracks"]["children"] = new_tracks_list
     export_to_json(data=edited_timeline, output_path=output_path)
+    print(f"Subframe api edits: {subframe_api_edits}")
+    return subframe_api_edits

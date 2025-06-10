@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import json
-from create_otio import SubframeEditsData
+
 import threading
 from time import time, sleep
 import traceback
@@ -19,6 +19,7 @@ import os
 import sys
 import subprocess
 import argparse
+from pprint import pprint
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -40,8 +41,9 @@ from local_types import (
 
 import globalz
 
-import create_otio
 import create_otio_rewrite
+from create_otio_rewrite import SubframeEditsData
+from otio_as_bridge import unify_linked_items_in_project_data
 
 from project_orga import (
     map_media_pool_items_to_folders,
@@ -708,10 +710,16 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     #     input_otio_path, globalz.PROJECT_DATA, edited_otio_path, False, True
     # )
 
-    create_otio_rewrite.create_otio_from_project_data(
-        input_otio_path=input_otio_path, output_path=edited_otio_path
-    )
-    # return
+    # final_api_instructions: List[SubframeEditsData] = (
+    #     create_otio_rewrite.create_otio_from_project_data(
+    #         input_otio_path=input_otio_path,
+    #         output_path=edited_otio_path,
+    #         use_api_for_subframe=True,
+    #     )
+    # )
+
+    unify_edits = unify_linked_items_in_project_data(input_otio_path)
+    return
 
     original_item_folder_map: dict[str, MediaPoolItemFolderMapping] = (
         map_media_pool_items_to_folders(PROJECT, globalz.PROJECT_DATA)
@@ -760,7 +768,9 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     end_import = time()
     print(f"Importing OTIO took {end_import - start_import:.2f} seconds")
 
-    # apply_subframe_edits(final_api_instructions)
+    apply_subframe_edits(final_api_instructions)
+
+    return
     start_restore_clips = time()
 
     # move the edited timeline to the "current folder"
@@ -832,17 +842,23 @@ def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", TIMELINE)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", TIMELINE)
 
+    pprint(edit_data)
     clips_to_link_master: List[List[Any]] = []
     for clip in edit_data:
         bmp_mpi = clip["bmd_media_pool_item"]
         track_type = clip["track_type"]
         track_index = clip["track_index"]
 
+        maybe_offset = (
+            int(round(clip["edit_instructions"][0]["source_start_frame"]))
+            - clip["edit_instructions"][0]["source_start_frame"]
+        )
+        print(f"MAYBE OFFSET IS {maybe_offset}")
         for edit in clip["edit_instructions"]:
             clip_info: ClipInfo = {
                 "mediaPoolItem": bmp_mpi,
-                "startFrame": edit["source_start_frame"],
-                "endFrame": edit["source_end_frame"],
+                "startFrame": edit["source_start_frame"] + maybe_offset,
+                "endFrame": edit["source_end_frame"] + maybe_offset,
                 "recordFrame": edit["start_frame"],
                 "mediaType": 1
                 if track_type == "video"
@@ -866,6 +882,15 @@ def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
                             continue
                         if audio_item["start_frame"] != linked_item["start_frame"]:
                             continue
+                        if (
+                            audio_item["source_start_frame"]
+                            != linked_item["source_start_frame"]
+                        ):
+                            offset = (
+                                audio_item["source_start_frame"]
+                                - linked_item["source_start_frame"]
+                            )
+                            print(f"SYNC ERROR DETECTED. offset: {offset}")
                         clips_to_link.append(audio_item["bmd_item"])
             clips_to_link_master.append(clips_to_link)
 
@@ -883,7 +908,7 @@ def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
         return
 
     # print(f"append result (API): {append}")
-
+    print(f"clips to link: {len(clips_to_link_master)}")
     # print(f"clips to link master: {clips_to_link_master}")
     for idx, bmd_item in enumerate(append):
         if len(clips_to_link_master[idx]) == 0:

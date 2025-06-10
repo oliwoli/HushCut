@@ -81,9 +81,6 @@ func CreateEditsWithOptionalSilence(
 	}
 	mergedSilences := MergeIntervals(clippedSilences)
 
-	// --- THIS IS THE NEW CORE FIX ---
-	// If, after all preprocessing, there are no silences to cut, then the clip
-	// should be treated as a single, uncut segment that matches its original properties.
 	if len(mergedSilences) == 0 {
 		log.Printf("Debug: No effective silences found for clip. Creating a 1:1 pass-through edit instruction.")
 		return []EditInstruction{
@@ -100,112 +97,118 @@ func CreateEditsWithOptionalSilence(
 	editedClips := []EditInstruction{}
 	originalSourceStart := clipData.SourceStartFrame
 	originalSourceEndInclusive := clipData.SourceEndFrame
-	originalTimelineStart := clipData.StartFrame
+	originalTimelineStartFloat := clipData.StartFrame
 
-	currentSourcePos := originalSourceStart
-	nextAvailableTimelineStart := originalTimelineStart
+	currentSourcePosInclusive := originalSourceStart
+	currentOutputTimelineFloat := originalTimelineStartFloat
+	var lastTimelineEndFrame float64 = -1.0 // Use float64 for direct comparison
 
 	for _, silence := range mergedSilences {
-		silenceStart := silence.Start
-		silenceEnd := silence.End
+		silenceStartInclusive := silence.Start
+		silenceEndExclusive := silence.End
 
 		// 1. ENABLED segment *before* this silence
-		if silenceStart > currentSourcePos+floatEpsilon {
-			segmentSourceStart := currentSourcePos
-			segmentSourceEndExclusive := silenceStart
-			segmentSourceEndInclusive := segmentSourceEndExclusive - floatEpsilon
-			segmentDuration := segmentSourceEndExclusive - segmentSourceStart
+		if silenceStartInclusive > currentSourcePosInclusive+floatEpsilon {
+			segmentSourceStartInc := currentSourcePosInclusive
+			segmentSourceEndExc := silenceStartInclusive
+			segmentSourceEndInc := segmentSourceEndExc - floatEpsilon
+			segmentDurationFloat := segmentSourceEndExc - segmentSourceStartInc
 
-			var segmentTimelineStart, segmentTimelineEndExclusive float64
+			var segmentTimelineStartFloat, segmentTimelineEndFloat float64
 			if keepSilenceSegments {
-				segmentTimelineStart = MapSourceToTimeline(segmentSourceStart, clipData)
-				segmentTimelineEndExclusive = MapSourceToTimeline(segmentSourceEndExclusive, clipData)
+				segmentTimelineStartFloat = MapSourceToTimeline(segmentSourceStartInc, clipData)
+				segmentTimelineEndFloat = MapSourceToTimeline(segmentSourceEndExc, clipData)
 			} else {
-				segmentTimelineStart = nextAvailableTimelineStart
-				segmentTimelineEndExclusive = nextAvailableTimelineStart + segmentDuration
-				nextAvailableTimelineStart = segmentTimelineEndExclusive
+				segmentTimelineStartFloat = currentOutputTimelineFloat
+				segmentTimelineEndFloat = currentOutputTimelineFloat + segmentDurationFloat
+				currentOutputTimelineFloat = segmentTimelineEndFloat
 			}
 
-			segmentTimelineEndInclusive := segmentTimelineEndExclusive - floatEpsilon
+			// Revert to integer snapping for timeline frames
+			segmentTimelineStartFrame := math.Ceil(segmentTimelineStartFloat - floatEpsilon)
+			segmentTimelineEndFrame := math.Floor(segmentTimelineEndFloat - floatEpsilon)
 
-			if segmentTimelineEndInclusive >= segmentTimelineStart-floatEpsilon {
+			// Prevent a 1-frame overlap when removing silences
+			if !keepSilenceSegments && lastTimelineEndFrame != -1.0 {
+				if segmentTimelineStartFrame <= lastTimelineEndFrame {
+					segmentTimelineStartFrame = lastTimelineEndFrame + 1.0
+				}
+			}
+
+			if segmentTimelineEndFrame >= segmentTimelineStartFrame {
 				editedClips = append(editedClips, EditInstruction{
-					SourceStartFrame: segmentSourceStart,
-					SourceEndFrame:   segmentSourceEndInclusive,
-					StartFrame:       segmentTimelineStart,
-					EndFrame:         segmentTimelineEndInclusive,
+					SourceStartFrame: segmentSourceStartInc,
+					SourceEndFrame:   segmentSourceEndInc,
+					StartFrame:       segmentTimelineStartFrame,
+					EndFrame:         segmentTimelineEndFrame,
 					Enabled:          true,
 				})
+				if !keepSilenceSegments {
+					lastTimelineEndFrame = segmentTimelineEndFrame
+				}
 			}
 		}
 
 		// 2. DISABLED segment *for* the silence itself (if requested)
 		if keepSilenceSegments {
-			// (This logic remains the same as my previous response, preserving floats)
-			segmentSourceStart := silenceStart
-			segmentSourceEndExclusive := silenceEnd
-			segmentSourceEndInclusive := segmentSourceEndExclusive - floatEpsilon
+			segmentSourceStartInc := silenceStartInclusive
+			segmentSourceEndExc := silenceEndExclusive
+			segmentSourceEndInc := segmentSourceEndExc - floatEpsilon
 
-			if segmentSourceEndExclusive > segmentSourceStart+floatEpsilon {
-				segmentTimelineStart := MapSourceToTimeline(segmentSourceStart, clipData)
-				segmentTimelineEndExclusive := MapSourceToTimeline(segmentSourceEndExclusive, clipData)
-				segmentTimelineEndInclusive := segmentTimelineEndExclusive - floatEpsilon
+			if segmentSourceEndExc > segmentSourceStartInc+floatEpsilon {
+				// Snap timeline frames to integers
+				segmentTimelineStartFrame := math.Ceil(MapSourceToTimeline(segmentSourceStartInc, clipData) - floatEpsilon)
+				segmentTimelineEndFrame := math.Floor(MapSourceToTimeline(segmentSourceEndExc, clipData) - floatEpsilon)
 
-				if segmentTimelineEndInclusive >= segmentTimelineStart-floatEpsilon {
+				if segmentTimelineEndFrame >= segmentTimelineStartFrame {
 					editedClips = append(editedClips, EditInstruction{
-						SourceStartFrame: segmentSourceStart,
-						SourceEndFrame:   segmentSourceEndInclusive,
-						StartFrame:       segmentTimelineStart,
-						EndFrame:         segmentTimelineEndInclusive,
+						SourceStartFrame: segmentSourceStartInc,
+						SourceEndFrame:   segmentSourceEndInc,
+						StartFrame:       segmentTimelineStartFrame,
+						EndFrame:         segmentTimelineEndFrame,
 						Enabled:          false,
 					})
 				}
 			}
 		}
-		currentSourcePos = math.Max(currentSourcePos, silenceEnd)
+		currentSourcePosInclusive = math.Max(currentSourcePosInclusive, silenceEndExclusive)
 	}
 
 	// --- Handle the final ENABLED segment *after* the last silence ---
-	if currentSourcePos < originalSourceEndInclusive+floatEpsilon {
-		// (This logic also remains the same as my previous response, preserving floats)
-		segmentSourceStart := currentSourcePos
-		segmentSourceEndInclusive := originalSourceEndInclusive
-		segmentSourceEndExclusive := segmentSourceEndInclusive + 1.0
-		segmentDuration := segmentSourceEndExclusive - segmentSourceStart
+	if currentSourcePosInclusive < originalSourceEndInclusive+floatEpsilon {
+		segmentSourceStartInc := currentSourcePosInclusive
+		segmentSourceEndInc := originalSourceEndInclusive
+		segmentSourceEndExc := segmentSourceEndInc + 1.0
+		segmentDurationFloat := segmentSourceEndExc - segmentSourceStartInc
 
-		var segmentTimelineStart, segmentTimelineEndExclusive float64
+		var segmentTimelineStartFloat, segmentTimelineEndFloat float64
 		if keepSilenceSegments {
-			segmentTimelineStart = MapSourceToTimeline(segmentSourceStart, clipData)
-			segmentTimelineEndExclusive = MapSourceToTimeline(segmentSourceEndExclusive, clipData)
+			segmentTimelineStartFloat = MapSourceToTimeline(segmentSourceStartInc, clipData)
+			segmentTimelineEndFloat = MapSourceToTimeline(segmentSourceEndExc, clipData)
 		} else {
-			segmentTimelineStart = nextAvailableTimelineStart
-			segmentTimelineEndExclusive = nextAvailableTimelineStart + segmentDuration
+			segmentTimelineStartFloat = currentOutputTimelineFloat
+			segmentTimelineEndFloat = currentOutputTimelineFloat + segmentDurationFloat
 		}
 
-		segmentTimelineEndInclusive := segmentTimelineEndExclusive - floatEpsilon
+		// Revert to integer snapping for timeline frames
+		segmentTimelineStartFrame := math.Ceil(segmentTimelineStartFloat - floatEpsilon)
+		segmentTimelineEndFrame := math.Floor(segmentTimelineEndFloat - floatEpsilon)
 
-		if segmentTimelineEndInclusive >= segmentTimelineStart-floatEpsilon {
+		// Prevent a 1-frame overlap when removing silences
+		if !keepSilenceSegments && lastTimelineEndFrame != -1.0 {
+			if segmentTimelineStartFrame <= lastTimelineEndFrame {
+				segmentTimelineStartFrame = lastTimelineEndFrame + 1.0
+			}
+		}
+
+		if segmentTimelineEndFrame >= segmentTimelineStartFrame {
 			editedClips = append(editedClips, EditInstruction{
-				SourceStartFrame: segmentSourceStart,
-				SourceEndFrame:   segmentSourceEndInclusive,
-				StartFrame:       segmentTimelineStart,
-				EndFrame:         segmentTimelineEndInclusive,
+				SourceStartFrame: segmentSourceStartInc,
+				SourceEndFrame:   segmentSourceEndInc,
+				StartFrame:       segmentTimelineStartFrame,
+				EndFrame:         segmentTimelineEndFrame,
 				Enabled:          true,
 			})
-		}
-	}
-
-	// The diagnostic check needs to be float-aware now
-	if !keepSilenceSegments && len(editedClips) > 1 {
-		for i := 0; i < len(editedClips)-1; i++ {
-			clip1End := editedClips[i].EndFrame + floatEpsilon // The end of clip 1 is its inclusive end frame
-			clip2Start := editedClips[i+1].StartFrame
-			// The next clip should start exactly where the last one ended (exclusive)
-			if math.Abs(clip2Start-clip1End) > floatEpsilon*2 { // Use a slightly larger tolerance
-				log.Printf("DIAGNOSTIC (float): Potential issue between segment %d and %d:", i, i+1)
-				log.Printf("  Seg %d End (exclusive boundary): %f", i, clip1End)
-				log.Printf("  Seg %d Start: %f", i+1, clip2Start)
-			}
 		}
 	}
 

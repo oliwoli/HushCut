@@ -1,4 +1,4 @@
-from typing import Any, List, Dict, Literal, Optional, TypedDict
+from typing import Any, List, Dict, Literal, NotRequired, Optional, TypedDict
 
 
 class ClipData(TypedDict):
@@ -18,7 +18,7 @@ class EditInstruction(TypedDict):
     source_end_frame: float  # Precise source end point/time (inclusive)
     start_frame: float  # Calculated timeline start frame (inclusive)
     end_frame: float  # Calculated timeline end frame (inclusive)
-    enabled: bool
+    enabled: bool  # TODO: move this into TimelineItem instead, maybe rename to "enabled_in_edit"
 
 
 class FileProperties(TypedDict):
@@ -39,7 +39,25 @@ class TimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
-    link_group_id: Optional[int]
+    link_group_id: NotRequired[int]
+
+
+def make_empty_timeline_item() -> TimelineItem:
+    return {
+        "bmd_item": None,
+        "name": "",
+        "id": "",
+        "track_type": "video",  # or some default
+        "track_index": 0,
+        "source_file_path": "",
+        "processed_file_name": "",
+        "start_frame": 0.0,
+        "end_frame": 0.0,
+        "source_start_frame": 0.0,
+        "source_end_frame": 0.0,
+        "duration": 0.0,
+        "edit_instructions": [],
+    }
 
 
 class TimelineProperties(TypedDict):

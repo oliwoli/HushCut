@@ -11,6 +11,7 @@ from collections import defaultdict
 from typing import (
     List,
     Dict,
+    NotRequired,
     Optional,
     DefaultDict,
     Set,
@@ -46,11 +47,11 @@ class ApiEditInstruction(EditInstruction):
 
 
 class SubframeEditsData(TypedDict):
-    bmd_media_pool_item: Any  # we have this from ProjectData! in files -> <file_path> -> fileSource -> bmd_media_pool_item
+    bmd_media_pool_item: Any  # we can take this from project data!
     edit_instructions: List[ApiEditInstruction]
     track_type: str  # "video", "audio", "subtitle"
     track_index: int
-    bmd_tl_item: Any
+    bmd_tl_item: NotRequired[Any]  # to be added later
 
 
 class OriginalTimelineCatalog(TypedDict):
