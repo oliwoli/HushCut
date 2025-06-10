@@ -14,7 +14,6 @@ import globalz
 
 from pprint import pprint
 from misc_utils import export_to_json
-# --- HELPER FUNCTIONS (Unchanged from previous version) ---
 
 
 def process_track_items(
@@ -72,7 +71,9 @@ def process_track_items(
     return max_id
 
 
-def unify_edit_instructions(items: List[dict]) -> List[Tuple[float, Optional[float]]]:
+def unify_edit_instructions(
+    items: List[TimelineItem],
+) -> List[Tuple[float, Optional[float]]]:
     """
     Takes a list of linked items, finds all defined edit instructions,
     normalizes them to be source-relative, and merges them into a single list
@@ -91,19 +92,26 @@ def unify_edit_instructions(items: List[dict]) -> List[Tuple[float, Optional[flo
         if item.get("edit_instructions"):
             base = item.get("source_start_frame", 0.0)
             for edit in item["edit_instructions"]:
-                rel_start = edit.get("source_start_frame", 0.0) - base
-                rel_end = edit.get("source_end_frame", 0.0) - base
-                normalized.append((rel_start, rel_end))
+                # Ensure edits are valid before processing
+                if (
+                    edit.get("source_start_frame") is not None
+                    and edit.get("source_end_frame") is not None
+                ):
+                    rel_start = edit["source_start_frame"] - base
+                    rel_end = edit["source_end_frame"] - base
+                    normalized.append((rel_start, rel_end))
 
-    if not normalized:
+    if not normalized:  # Handle case where edits existed but were invalid
         return []
 
     normalized.sort()
     merged: List[Tuple[float, float]] = []
+
     current_start, current_end = normalized[0]
 
     for next_start, next_end in normalized[1:]:
-        if next_start <= current_end:
+        # Merge overlapping or contiguous intervals
+        if next_start <= current_end + 0.01:  # Add tolerance for float precision
             current_end = max(current_end, next_end)
         else:
             merged.append((current_start, current_end))
@@ -118,13 +126,11 @@ def unify_edit_instructions(items: List[dict]) -> List[Tuple[float, Optional[flo
     return final_edits
 
 
-# --- MAIN LOGIC (Corrected) ---
-
-
 def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     """
-    Reads an OTIO file to find linked clips, unifies their edit instructions,
-    and overwrites the corresponding items directly in the global project data.
+    Reads an OTIO file to find linked clips, unifies their edit instructions
+    based on a discrete frame grid, and overwrites the project data.
+    This ensures perfect sync and no gaps between edited clips.
     """
     project_data = getattr(globalz, "PROJECT_DATA", None)
     if not project_data or "timeline" not in project_data:
@@ -140,8 +146,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         logging.error(f"Failed to read or parse OTIO file at {input_otio_path}: {e}")
         return
 
-    # Pass 1 & 2 are unchanged
-    # === PASS 1: Find and Assign Link Group IDs ===
     max_link_group_id = 0
     track_type_counters = {"video": 0, "audio": 0, "subtitle": 0}
     timeline_rate = otio_data.get("global_start_time", {}).get("rate", 24)
@@ -164,7 +168,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             ),
         )
 
-    # === PASS 2: Group All Items by Link ID ===
     all_pd_items = pd_timeline.get("video_track_items", []) + pd_timeline.get(
         "audio_track_items", []
     )
@@ -173,6 +176,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         link_group_id = item.get("link_group_id")
         if link_group_id is not None:
             items_by_link_group.setdefault(link_group_id, []).append(item)
+
     next_new_group_id = max_link_group_id + 1
     for item in all_pd_items:
         if "link_group_id" not in item and item.get("edit_instructions"):
@@ -180,32 +184,38 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             items_by_link_group[next_new_group_id] = [item]
             next_new_group_id += 1
 
-    # === PASS 3: Unify Edits and Overwrite Items (Corrected) ===
     for link_id, group_items in items_by_link_group.items():
         if not group_items:
             continue
 
         unified_edits = unify_edit_instructions(group_items)
 
-        # **FIX 1**: Safely determine the 'enabled' flag from the first available
-        # instruction in the entire group, defaulting to True if none exist.
         original_enabled_flag = True
         for g_item in group_items:
-            if g_item.get("edit_instructions"):  # Check if list is not empty
+            if g_item.get("edit_instructions"):
                 original_enabled_flag = g_item["edit_instructions"][0].get(
                     "enabled", True
                 )
-                break  # Found it, stop looking
+                break
+
+        group_timeline_anchor = min(
+            (item.get("start_frame", float("inf")) for item in group_items),
+            default=float("inf"),
+        )
+        if group_timeline_anchor == float("inf"):
+            logging.warning(
+                f"Could not determine a start frame for link group {link_id}. Skipping."
+            )
+            continue
+
+        is_uncut = not unified_edits or (unified_edits and unified_edits[0][1] is None)
 
         for item in group_items:
             new_edit_instructions = []
             base_source_offset = item.get("source_start_frame", 0.0)
 
-            # Check for the special "uncut" signal
-            is_uncut = unified_edits and unified_edits[0][1] is None
-
             if is_uncut:
-                # This is an uncut group. Create one instruction for the item's full duration.
+                # Uncut groups use their original, unmodified timings.
                 source_end = item.get("source_end_frame", base_source_offset)
                 if source_end > base_source_offset:
                     new_edit_instructions.append(
@@ -214,35 +224,46 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                             "source_end_frame": source_end,
                             "start_frame": item.get("start_frame"),
                             "end_frame": item.get("end_frame"),
-                            "enabled": True,  # Uncut clips are always enabled
+                            "enabled": True,
                         }
                     )
             else:
-                # This is a cut group.
-                timeline_playhead = item.get("start_frame", 0.0)
+                # Initialize a cumulative playhead on a rounded frame grid.
+                timeline_playhead = round(group_timeline_anchor)
+
                 for rel_start, rel_end in unified_edits:
-                    # **FIX 2**: The 'is_uncut' check guarantees rel_end is a float here.
-                    # We use 'cast' to make this explicit for type checkers.
-                    duration = cast(float, rel_end) - rel_start
+                    source_duration = cast(float, rel_end) - rel_start
+                    timeline_duration = round(source_duration)
+
+                    if timeline_duration < 1:
+                        continue
+
+                    source_start = base_source_offset + rel_start
+                    # Adjust source_end to match the integer timeline duration.
+                    source_end = source_start + timeline_duration
+
+                    timeline_start = timeline_playhead
+                    timeline_end = timeline_playhead + timeline_duration
 
                     new_edit_instructions.append(
                         {
-                            "source_start_frame": base_source_offset + rel_start,
-                            "source_end_frame": base_source_offset + rel_end,
-                            "start_frame": timeline_playhead,
-                            "end_frame": timeline_playhead + duration,
+                            "source_start_frame": source_start,
+                            "source_end_frame": source_end,
+                            "start_frame": timeline_start,
+                            "end_frame": timeline_end,
                             "enabled": original_enabled_flag,
                         }
                     )
-                    timeline_playhead += duration
+
+                    # Advance the playhead by the exact integer duration.
+                    timeline_playhead = timeline_end
 
             item["edit_instructions"] = new_edit_instructions
             logging.info(
-                f"Updated item '{item['id']}' (type: {item['track_type']}) in group {link_id} with {len(new_edit_instructions)} unified edit(s)."
+                f"Updated item '{item['id']}' in group {link_id} with {len(new_edit_instructions)} unified edit(s)."
             )
 
-    print("✅ Project data successfully updated with unified edits.")
-    pprint(globalz.PROJECT_DATA)
+    print("✅ Project data successfully updated with unified, gapless edits.")
     current_dir = os.path.dirname(os.path.abspath(__file__))
     debug_json_path = os.path.join(current_dir, "debug_project_data.json")
     export_to_json(globalz.PROJECT_DATA, debug_json_path)

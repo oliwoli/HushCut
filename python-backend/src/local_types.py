@@ -13,6 +13,10 @@ class SilenceInterval(TypedDict):
     end: float  # Exclusive source frame/time
 
 
+class FileProperties(TypedDict):
+    FPS: float
+
+
 class EditInstruction(TypedDict):
     source_start_frame: float  # Precise source start point/time (inclusive)
     source_end_frame: float  # Precise source end point/time (inclusive)
@@ -21,12 +25,9 @@ class EditInstruction(TypedDict):
     enabled: bool  # TODO: move this into TimelineItem instead, maybe rename to "enabled_in_edit"
 
 
-class FileProperties(TypedDict):
-    FPS: float
-
-
 class TimelineItem(TypedDict):
     bmd_item: Any
+    bmd_mpi: Any
     name: str
     id: str
     track_type: Literal["video", "audio", "subtitle"]
@@ -45,6 +46,7 @@ class TimelineItem(TypedDict):
 def make_empty_timeline_item() -> TimelineItem:
     return {
         "bmd_item": None,
+        "bmd_mpi": None,
         "name": "",
         "id": "",
         "track_type": "video",  # or some default

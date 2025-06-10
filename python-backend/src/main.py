@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+from collections import Counter
 import json
 
 import threading
@@ -12,6 +13,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     TypedDict,
     Union,
 )
@@ -19,9 +21,9 @@ import os
 import sys
 import subprocess
 import argparse
-from pprint import pprint
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from uuid import uuid4
 
 from edit_silence import (
     create_edits_with_optional_silence,
@@ -41,16 +43,14 @@ from local_types import (
 
 import globalz
 
-import create_otio_rewrite
-from create_otio_rewrite import SubframeEditsData
 from otio_as_bridge import unify_linked_items_in_project_data
 
-from project_orga import (
-    map_media_pool_items_to_folders,
-    MediaPoolItemFolderMapping,
-    move_clips_to_temp_folder,
-    restore_clips_from_temp_folder,
-)
+# from project_orga import (
+#     map_media_pool_items_to_folders,
+#     MediaPoolItemFolderMapping,
+#     move_clips_to_temp_folder,
+#     restore_clips_from_temp_folder,
+# )
 
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -384,6 +384,7 @@ def get_items_by_tracktype(
             )
             timeline_item: TimelineItem = {
                 "bmd_item": item,
+                "bmd_mpi": None,
                 "duration": 0,  # unused, therefore 0 #item.GetDuration(),
                 "name": item_name,
                 "edit_instructions": [],
@@ -401,6 +402,81 @@ def get_items_by_tracktype(
     return items
 
 
+def simple_get_items_by_tracktype(
+    track_type: Literal["video", "audio"], timeline: Any
+) -> list[Dict]:  # Using Dict for simplicity as TimelineItem structure is complex
+    """Fetches all timeline items of a specific type from the timeline."""
+    items: list[Dict] = []
+    track_count = timeline.GetTrackCount(track_type)
+    for i in range(1, track_count + 1):
+        # Ensure we handle a None return from the API call
+        track_items = timeline.GetItemListInTrack(track_type, i) or []
+        for item in track_items:
+            # For verification, we only need a few key properties
+            timeline_item = {
+                "bmd_item": item,
+                "track_type": track_type,
+                "track_index": i,
+                "start_frame": round(item.GetStart()),  # Use rounded integer frames
+            }
+            items.append(timeline_item)
+    return items
+
+
+def _verify_timeline_state(timeline: Any, expected_clips: List[Dict]) -> bool:
+    """
+    Verifies that the clips on the timeline match the expected state.
+
+    Args:
+        timeline: The DaVinci Resolve timeline object.
+        expected_clips: A list of clip info dictionaries that were intended to be appended.
+
+    Returns:
+        True if the timeline state is correct, False otherwise.
+    """
+    print("Verifying timeline state...")
+    # 1. Build the "checklist" of expected cuts.
+    # We use a Counter to handle multiple clips starting at the same frame on the same track.
+    expected_cuts = Counter()
+    for clip in expected_clips:
+        key = (clip["mediaType"], clip["trackIndex"], clip["recordFrame"])
+        expected_cuts[key] += 1
+
+    # 2. Get the actual clips from the timeline.
+    actual_video_items = get_items_by_tracktype("video", timeline)
+    actual_audio_items = get_items_by_tracktype("audio", timeline)
+
+    # 3. "Check off" items from our checklist.
+    for item in actual_video_items + actual_audio_items:
+        media_type = 1 if item["track_type"] == "video" else 2
+        key = (media_type, item["track_index"], item["start_frame"])
+        if key in expected_cuts:
+            expected_cuts[key] -= 1  # Decrement the count for this cut
+        else:
+            print(
+                f"  - Found an unexpected clip: {item['track_type']} track {item['track_index']} at frame {item['start_frame']}"
+            )
+            # Finding an unexpected clip is not a failure for this logic,
+            # as it might be from a previous, unrelated operation.
+            # The failure is determined by NOT finding an expected clip.
+
+    # 4. Check if any expected cuts are "left over".
+    # We use `+expected_cuts` to filter out zero and negative counts.
+    missing_cuts = +expected_cuts
+
+    if not missing_cuts:
+        print("  - Verification successful. All expected clips were found.")
+        return True
+    else:
+        print("  - Verification FAILED. The following clips are missing:")
+        for (media_type, track_index, start_frame), count in missing_cuts.items():
+            track_type = "video" if media_type == 1 else "audio"
+            print(
+                f"    - Missing {count} clip(s) on {track_type} track {track_index} at frame {start_frame}"
+            )
+        return False
+
+
 def get_source_media_from_timeline_item(
     timeline_item: TimelineItem,
 ) -> Union[FileSource, None]:
@@ -409,7 +485,7 @@ def get_source_media_from_timeline_item(
         return None
     filepath = media_pool_item.GetClipProperty("File Path")
     if not filepath:
-        print(f"Audio mapping: {media_pool_item.GetAudioMapping()}")
+        # print(f"Audio mapping: {media_pool_item.GetAudioMapping()}")
         return None
     file_path_uuid: str = misc_utils.uuid_from_path(filepath).hex
     source_media_item: FileSource = {
@@ -428,15 +504,15 @@ def resync_with_resolve() -> bool:
     return True
 
 
+def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
+    for item in items:
+        item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
+
+
 def get_project_data(project, timeline) -> ProjectData:
     # switch_to_page("edit")
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
-
-    # export state of current timeline to otio, EXPENSIVE
-    input_otio_path = os.path.join(TEMP_DIR, "pre-edit_timeline_export.otio")
-    export_timeline_to_otio(timeline, file_path=input_otio_path)
-    print(f"Exported timeline to OTIO in {input_otio_path}")
 
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
@@ -462,6 +538,7 @@ def get_project_data(project, timeline) -> ProjectData:
         source_media_item = get_source_media_from_timeline_item(item)
         if not source_media_item:
             continue
+        item["bmd_mpi"] = source_media_item["bmd_media_pool_item"]  # <- THIS LINE
         audio_source_files.append(source_media_item)
         if source_media_item["uuid"] in seen_uuids:
             continue
@@ -473,6 +550,9 @@ def get_project_data(project, timeline) -> ProjectData:
         sys.exit(1)
 
     print(f"Source media files count: {len(audio_source_files)}")
+
+    assign_bmd_mpi_to_items(video_track_items)
+    # assign_bmd_mpi_to_items(audio_track_items)
 
     processed_audio_paths: list[AudioFromVideo] = []
     # if at this point, audio source files is the same as PROJECT_DATA, we don't need to reprocess/check if the files exist
@@ -564,6 +644,7 @@ def get_project_data(project, timeline) -> ProjectData:
     # json_output_path = os.path.join(TEMP_DIR, "silence_detections.json")
     # misc_utils.export_to_json(globalz.PROJECT_DATA, json_output_path)
     # print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
+
     return globalz.PROJECT_DATA
 
 
@@ -650,7 +731,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
     PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
 
     if not PROJECT:
-        globalz.PROJECT_DATA = ProjectData()
+        globalz.PROJECT_DATA = None
         MEDIA_POOL = None
         message = "Please open a project and open a timeline."
         send_message_to_go(
@@ -666,7 +747,7 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
 
     TIMELINE = PROJECT.GetCurrentTimeline()
     if not TIMELINE:
-        globalz.PROJECT_DATA = ProjectData()
+        globalz.PROJECT_DATA = None
         message = "Please open a timeline."
 
         response_payload = {
@@ -704,107 +785,16 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         )
         return
 
-    input_otio_path = os.path.join(TEMP_DIR, "pre-edit_timeline_export.otio")
-    edited_otio_path = os.path.join(TEMP_DIR, "edited_timeline_refactored.otio")
-    # final_api_instructions: List[SubframeEditsData] = create_otio.edit_timeline_with_precalculated_instructions(
-    #     input_otio_path, globalz.PROJECT_DATA, edited_otio_path, False, True
-    # )
-
-    # final_api_instructions: List[SubframeEditsData] = (
-    #     create_otio_rewrite.create_otio_from_project_data(
-    #         input_otio_path=input_otio_path,
-    #         output_path=edited_otio_path,
-    #         use_api_for_subframe=True,
-    #     )
-    # )
+    # export state of current timeline to otio, EXPENSIVE
+    input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
+    export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
+    print(f"Exported timeline to OTIO in {input_otio_path}")
 
     unify_edits = unify_linked_items_in_project_data(input_otio_path)
-    return
 
-    original_item_folder_map: dict[str, MediaPoolItemFolderMapping] = (
-        map_media_pool_items_to_folders(PROJECT, globalz.PROJECT_DATA)
-    )
+    append_and_link_timeline_items()
 
-    if not MEDIA_POOL:
-        MEDIA_POOL = PROJECT.GetMediaPool()
-
-    timeline_id = TIMELINE.GetMediaPoolItem().GetUniqueId()
-    original_timeline_folder = find_item_folder_by_id(timeline_id)
-    original_folder = MEDIA_POOL.GetCurrentFolder()
-
-    start_move_clips = time()
-    # sleep(5.1)
-    temp_folder = move_clips_to_temp_folder(
-        project=PROJECT,
-        item_folder_map=original_item_folder_map,
-        temp_folder_name=str(time()),
-    )
-    end_move_clips = time()
-    print(
-        f"Moving clips to temp folder took {end_move_clips - start_move_clips:.2f} seconds"
-    )
-    # make sure the current folder is the temp folder
-    # MEDIA_POOL.SetCurrentFolder(temp_folder)
-
-    ## OTIO TIMELINE IMPORT
-    start_import = time()
-    timeline_name = (
-        f"{globalz.PROJECT_DATA['timeline']['name']} - Silence Detection{time()}"
-    )
-    TIMELINE = MEDIA_POOL.ImportTimelineFromFile(
-        edited_otio_path,
-        {
-            "timelineName": timeline_name,
-            "importSourceClips": True,
-        },
-    )
-    if not TIMELINE:
-        print("Failed to import OTIO timeline.")
-        return
-    timeline_media_id = TIMELINE.GetMediaPoolItem().GetMediaId()
-
-    print(f"Imported OTIO timeline: {TIMELINE.GetName()}")
-    # sleep(2.0)
-    end_import = time()
-    print(f"Importing OTIO took {end_import - start_import:.2f} seconds")
-
-    apply_subframe_edits(final_api_instructions)
-
-    return
-    start_restore_clips = time()
-
-    # move the edited timeline to the "current folder"
-    if original_timeline_folder:
-        timeline_mapping_item: MediaPoolItemFolderMapping = {
-            "bmd_folder": original_timeline_folder,
-            "bmd_media_pool_item": TIMELINE.GetMediaPoolItem(),
-            "media_pool_name": TIMELINE.GetName(),
-            "file_path": "",
-        }
-        print(f"Timeline mapping item: {timeline_mapping_item}")
-        print(f"Timeline media ID: {timeline_media_id}")
-
-        original_item_folder_map[timeline_media_id] = timeline_mapping_item
-
-        # # this can be optimized by adding it to item_folder_map (one api call less)
-        # edited_moved = media_pool.MoveClips(
-        #     [timeline.GetMediaPoolItem()], original_timeline_folder
-        # )
-        # print(edited_moved)
-
-    restore_clips_from_temp_folder(PROJECT, original_item_folder_map, temp_folder)
-    MEDIA_POOL.SetCurrentFolder(original_timeline_folder)
-    end_restore_clips = time()
-    print(
-        f"Restoring clips from temp folder took {end_restore_clips - start_restore_clips:.2f} seconds"
-    )
-
-    # set the folder back to the original
-    if original_folder:
-        MEDIA_POOL.SetCurrentFolder(original_folder)
-        print(f"Switched back to folder: {original_folder.GetName()}")
-
-    return
+    # apply_edits()
 
 
 def get_item_id(
@@ -822,7 +812,204 @@ class ClipInfo(TypedDict):
     trackIndex: int
 
 
-def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
+def _append_and_link(
+    timeline: Any, media_pool: Any, timeline_items: List[TimelineItem]
+) -> Tuple[List[Tuple[Dict, Tuple[int, int]]], List[Any]]:
+    clips_to_process: List[Tuple[Dict, Tuple[int, int]]] = []
+    for item in timeline_items:
+        link_id = item.get("link_group_id")
+        if link_id is None:
+            continue
+        media_type = 1 if item["track_type"] == "video" else 2
+        for i, edit in enumerate(item.get("edit_instructions", [])):
+            if not edit.get("enabled", False):
+                continue
+            record_frame = round(edit.get("start_frame", 0))
+            end_frame = round(edit.get("end_frame", 0))
+            duration_frames = end_frame - record_frame
+            if duration_frames < 1:
+                continue
+            source_start = edit.get("source_start_frame", 0)
+            source_end = source_start + duration_frames
+            clip_info_for_api: Dict = {
+                "mediaPoolItem": item["bmd_mpi"],
+                "startFrame": source_start,
+                "endFrame": source_end,
+                "recordFrame": record_frame,
+                "trackIndex": item["track_index"],
+                "mediaType": media_type,
+            }
+            link_key = (link_id, i)
+            clips_to_process.append((clip_info_for_api, link_key))
+
+    if not clips_to_process:
+        return [], []
+
+    # Sort and extract the clean list for the API
+    clips_to_process.sort(key=lambda item_tuple: item_tuple[0].get("recordFrame", 0))
+    final_clip_infos_for_api = [item_tuple[0] for item_tuple in clips_to_process]
+
+    print(f"Appending {len(final_clip_infos_for_api)} clip segments...")
+    appended_bmd_items: List[Any] = (
+        media_pool.AppendToTimeline(final_clip_infos_for_api) or []
+    )
+
+    # Return the processed data and the API result for the wrapper to handle.
+    return clips_to_process, appended_bmd_items
+
+
+def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
+    global MEDIA_POOL
+    global TIMELINE
+    global PROJECT
+
+    project_data = globalz.PROJECT_DATA
+    if not project_data or not project_data.get("timeline"):
+        print("Error: Project data is missing or malformed.")
+        return
+
+    if not PROJECT:
+        # Assuming PROJECT is accessible via globalz or another mechanism
+        print("Error: Could not get current project.")
+        return
+
+    MEDIA_POOL = PROJECT.GetMediaPool()
+    media_pool = MEDIA_POOL
+    if not media_pool:
+        print("Error: MediaPool object not available.")
+        return
+
+    timeline_items = project_data["timeline"].get(
+        "video_track_items", []
+    ) + project_data["timeline"].get("audio_track_items", [])
+
+    # === STEP 1: PRE-SCAN TO DETERMINE HIGHEST TRACK INDICES ===
+    max_indices = {"video": 0, "audio": 0}
+    for item in timeline_items:
+        track_type = item.get("track_type")
+        track_index = item["track_index"]
+        if track_type in max_indices:
+            max_indices[track_type] = max(max_indices[track_type], track_index)
+
+    # === STEP 2: CREATE A NEW TIMELINE OR GET THE ACTIVE ONE ===
+    timeline = None
+    if create_new_timeline:
+        print("Creating a new timeline...")
+        timeline_name = f"linked_timeline_{uuid4().hex}"
+        timeline = media_pool.CreateEmptyTimeline(timeline_name)
+        if timeline:
+            timeline.SetStartTimecode("00:00:00:00")
+    else:
+        timeline = TIMELINE
+        if not timeline:
+            return
+        bmd_tl_items = [item["bmd_item"] for item in timeline_items]
+        timeline.DeleteClips(bmd_tl_items)
+
+    # Crucial check to ensure we have a valid timeline object to work with
+    if not timeline:
+        print("Error: Could not get a valid timeline. Aborting operation.")
+        return
+
+    for track_type, required_count in max_indices.items():
+        current_count = timeline.GetTrackCount(track_type)
+        tracks_to_add = required_count - current_count
+
+        if tracks_to_add > 0:
+            print(
+                f"Timeline has {current_count} {track_type} track(s), adding {tracks_to_add} more..."
+            )
+            for _ in range(tracks_to_add):
+                timeline.AddTrack(track_type)
+        else:
+            print(f"Timeline already has enough {track_type} tracks ({current_count}).")
+
+    print(f"Operating on timeline: '{timeline.GetName()}'")
+    TIMELINE = timeline
+
+    success = False
+    num_retries = 3
+    sleep_time_between = 2.5
+    for attempt in range(1, num_retries + 1):
+        print("-" * 20)
+        print(f"Attempt {attempt} of {num_retries}...")
+
+        # The internal function returns our "source of truth" and the API's response
+        processed_clips, bmd_items_from_api = _append_and_link(
+            timeline, media_pool, timeline_items
+        )
+
+        if not processed_clips:
+            success = True
+            break
+
+        # Use the list of clips we INTENDED to create for verification
+        expected_clip_infos = [item[0] for item in processed_clips]
+        if _verify_timeline_state(timeline, expected_clip_infos):
+            print("Verification successful. Proceeding to link.")
+
+            # === THE CORRECTED LINKING LOGIC ===
+
+            # 1. Build a lookup map from the verified "source of truth"
+            link_key_lookup: Dict[Tuple[int, int, int], Tuple[int, int]] = {}
+            for clip_info, link_key in processed_clips:
+                lookup_key = (
+                    clip_info["mediaType"],
+                    clip_info["trackIndex"],
+                    clip_info["recordFrame"],
+                )
+                link_key_lookup[lookup_key] = link_key
+
+            # 2. Get all clips that are actually on the timeline
+            actual_items = []
+            actual_items.extend(get_items_by_tracktype("video", timeline))
+            actual_items.extend(get_items_by_tracktype("audio", timeline))
+
+            # 3. Group the actual BMD objects using the lookup map
+            link_groups: Dict[Tuple[int, int], List[Any]] = {}
+            for item_dict in actual_items:
+                media_type = 1 if item_dict["track_type"] == "video" else 2
+                # Create the key for this actual clip
+                actual_key = (
+                    media_type,
+                    item_dict["track_index"],
+                    item_dict["start_frame"],
+                )
+                # Find its correct link_key from our map
+                link_key = link_key_lookup.get(actual_key)
+
+                if link_key:
+                    if link_key not in link_groups:
+                        link_groups[link_key] = []
+                    # Append the actual BMD object to the correct group
+                    link_groups[link_key].append(item_dict["bmd_item"])
+
+            # 4. Perform the linking
+            for group_key, clips_to_link in link_groups.items():
+                if len(clips_to_link) >= 2:
+                    print(
+                        f"Linking {len(clips_to_link)} clips for group {group_key}..."
+                    )
+                    timeline.SetClipsLinked(clips_to_link, True)
+
+            print("✅ Operation completed successfully.")
+            success = True
+            break
+        else:
+            print(f"Attempt {attempt} failed. Rolling back changes...")
+            if bmd_items_from_api:
+                timeline.DeleteClips(bmd_items_from_api, delete_gaps=False)
+
+            if attempt < num_retries:
+                print("Waiting a moment before retrying...")
+                sleep(sleep_time_between)
+                sleep_time_between += 1.5
+
+    if not success:
+        print("❌ Operation failed after all retries. Please check the logs.")
+
+
+def apply_edits(api_edits: List[SubframeEditsData]) -> None:
     global RESOLVE
     global PROJECT
     global TIMELINE
@@ -838,27 +1025,21 @@ def apply_subframe_edits(edit_data: List[SubframeEditsData]) -> None:
         return
 
     media_appends: List[ClipInfo] = []
-
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", TIMELINE)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", TIMELINE)
 
-    pprint(edit_data)
     clips_to_link_master: List[List[Any]] = []
-    for clip in edit_data:
+
+    for clip in api_edits:
         bmp_mpi = clip["bmd_media_pool_item"]
         track_type = clip["track_type"]
         track_index = clip["track_index"]
 
-        maybe_offset = (
-            int(round(clip["edit_instructions"][0]["source_start_frame"]))
-            - clip["edit_instructions"][0]["source_start_frame"]
-        )
-        print(f"MAYBE OFFSET IS {maybe_offset}")
         for edit in clip["edit_instructions"]:
             clip_info: ClipInfo = {
                 "mediaPoolItem": bmp_mpi,
-                "startFrame": edit["source_start_frame"] + maybe_offset,
-                "endFrame": edit["source_end_frame"] + maybe_offset,
+                "startFrame": edit["source_start_frame"],
+                "endFrame": edit["source_end_frame"],
                 "recordFrame": edit["start_frame"],
                 "mediaType": 1
                 if track_type == "video"
