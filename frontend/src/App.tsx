@@ -32,6 +32,8 @@ import { useSilenceData } from "./hooks/useSilenceData";
 import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
+import { useClipParameters } from "./hooks/useClipParameters";
+import ReactDOM from "react-dom";
 
 EventsOn("showToast", (data) => {
   console.log("Event: showToast", data);
@@ -72,55 +74,90 @@ const getDefaultDetectionParams = (): DetectionParams => ({
 });
 
 
+const createActiveFileFromTimelineItem = (
+  item: main.TimelineItem,
+  port: Number
+): ActiveClip | null => {
+  if (
+    !item.processed_file_name ||
+    typeof item.source_start_frame !== "number" ||
+    typeof item.source_end_frame !== "number"
+  ) {
+    console.warn(
+      "TimelineItem is missing critical data (ProcessedFileName, SourceStartFrame, or SourceEndFrame):",
+      item
+    );
+    return null;
+  }
+  const id = item.id || item.processed_file_name; // Prefer item.ID if available and unique
+  return {
+    id: id,
+    name: item.name || "Unnamed Track Item", // Fallback for name
+    sourceFilePath: item.source_file_path,
+    processedFileName: item.processed_file_name,
+    previewUrl: `http://localhost:${port}/${item.processed_file_name}.wav`,
+    sourceStartFrame: item.source_start_frame,
+    sourceEndFrame: item.source_end_frame,
+  };
+};
+
+
+
 export default function App() {
   const [httpPort, setHttpPort] = useState<Number | null>(null);
-  const [currentActiveClip, setCurrentActiveClip] = useState<ActiveClip | null>(
-    null
-  );
+  const [currentClipId, setCurrentClipId] = useState<string | null>(null);
   const [projectData, setProjectData] =
     useState<main.ProjectDataPayload | null>(null);
 
-  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
-  const [minDuration, setMinDurationRaw] = useState(DEFAULT_MIN_DURATION);
-
-  const setMinDuration = (value: number) => {
-    setMinDurationRaw(clamp(value, MIN_DURATION_LIMIT));
-  };
-
-  const [paddingLeft, setPaddingLeft] = useState(DEFAULT_PADDING);
-  const [paddingRight, setPaddingRight] = useState(DEFAULT_PADDING);
-  //const [makeNewTimeline, setMakeNewTimeline] = useState(false);
-  const [paddingLocked, setPaddingLinked] = useState(true);
-
-  const [allClipDetectionParams, setAllClipDetectionParams] = useState<
-    Record<string, DetectionParams>
-  >({});
-
-  const currentClipEffectiveParams = useMemo<DetectionParams | null>(() => {
-    if (currentActiveClip?.id) {
-      // If params for this clip exist, use them
-      if (allClipDetectionParams[currentActiveClip.id]) {
-        return allClipDetectionParams[currentActiveClip.id];
-      }
-      // If not, it means the clip was just selected and UI defaults are active
-      // We can return a temporary object based on current UI state,
-      // which will soon be saved by the effect below.
-      return {
-        loudnessThreshold: threshold,
-        minSilenceDurationSeconds: minDuration,
-        paddingLeftSeconds: paddingLeft,
-        paddingRightSeconds: paddingRight,
-      };
+  const currentActiveClip = useMemo(() => {
+    if (!projectData || !httpPort || !projectData.timeline?.audio_track_items) {
+      return null;
     }
-    return getDefaultDetectionParams(); // Or null if you prefer to handle no clip selected differently
-  }, [
-    currentActiveClip?.id,
-    allClipDetectionParams,
+
+    const audioItems = projectData.timeline.audio_track_items;
+    if (audioItems.length === 0) {
+      return null;
+    }
+
+    // Find the item corresponding to the current ID.
+    // If no ID is selected, default to the first item in the list.
+    const itemToDisplay = currentClipId
+      ? audioItems.find(item => (item.id || item.processed_file_name) === currentClipId)
+      : audioItems[0];
+
+    // If the selected ID is no longer in the project data, fall back to the first item.
+    if (!itemToDisplay) {
+      // This is an important fallback for when project data changes and the old clip disappears.
+      // We can also update the state to reflect this change.
+      if (audioItems.length > 0) {
+        const firstItem = audioItems[0];
+        setCurrentClipId(firstItem.id || firstItem.processed_file_name || null)
+        return createActiveFileFromTimelineItem(firstItem, httpPort);
+      }
+      return null
+    }
+
+    return createActiveFileFromTimelineItem(itemToDisplay, httpPort);
+
+  }, [projectData, httpPort, currentClipId]);
+
+
+  const {
     threshold,
     minDuration,
     paddingLeft,
     paddingRight,
-  ]);
+    paddingLocked,
+    allClipParams: allClipDetectionParams, // Rename to match original variable if needed
+    effectiveParams: currentClipEffectiveParams, // Rename to match original variable
+    setThreshold,
+    setMinDuration,
+    handlePaddingChange,
+    setPaddingLinked,
+    resetThreshold,
+    resetMinDuration,
+    resetPadding,
+  } = useClipParameters(currentActiveClip?.id || null);
 
   const { silenceData } = useSilenceData(
     currentActiveClip,
@@ -135,6 +172,9 @@ export default function App() {
   const [cutAudioSegmentUrl, setCutAudioSegmentUrl] = useState<string | null>(
     null
   );
+
+
+
   // Effect to prepare data for WaveformPlayer when currentActiveClip changes
   useEffect(() => {
     if (
@@ -326,7 +366,7 @@ export default function App() {
             port
           );
           setHttpPort(null);
-          setCurrentActiveClip(null);
+          setCurrentClipId(null);
           // Optionally, inform the user that the audio server isn't available
         }
 
@@ -334,7 +374,7 @@ export default function App() {
       } catch (err) {
         console.error("App.tsx: Error during initial server info fetch:", err);
         setHttpPort(null);
-        setCurrentActiveClip(null);
+        setCurrentClipId(null);
       }
     };
     getInitialServerInfo();
@@ -367,250 +407,60 @@ export default function App() {
     { fireOnMount: false, throttleMs: 500 }
   );
 
-  const createActiveFileFromTimelineItem = (
-    item: main.TimelineItem,
-    port: Number
-  ): ActiveClip | null => {
-    if (
-      !item.processed_file_name ||
-      typeof item.source_start_frame !== "number" ||
-      typeof item.source_end_frame !== "number"
-    ) {
-      console.warn(
-        "TimelineItem is missing critical data (ProcessedFileName, SourceStartFrame, or SourceEndFrame):",
-        item
-      );
-      return null;
-    }
-    const id = item.id || item.processed_file_name; // Prefer item.ID if available and unique
-    return {
-      id: id,
-      name: item.name || "Unnamed Track Item", // Fallback for name
-      sourceFilePath: item.source_file_path,
-      processedFileName: item.processed_file_name,
-      previewUrl: `http://localhost:${port}/${item.processed_file_name}.wav`,
-      sourceStartFrame: item.source_start_frame,
-      sourceEndFrame: item.source_end_frame,
-    };
-  };
-
-  // set active file
-  useEffect(() => {
-    const init = async () => {
-      if (!httpPort) {
-        const port = await GetGoServerPort();
-        setHttpPort(port);
-        if (currentActiveClip !== null) setCurrentActiveClip(null);
-        console.log("No httpPort, setting currentActiveFile to null.");
-      }
-    };
-    init();
-
-    if (!httpPort) return;
-
-    let newActiveFileTarget: ActiveClip | null = null;
-    const audioTrackItems = projectData?.timeline?.audio_track_items;
-
-    if (!audioTrackItems || audioTrackItems.length === 0) {
-      setCurrentActiveClip(null);
-      return;
-    }
-
-    const sortedAudioItems = [...audioTrackItems].sort((a, b) => {
-      if (a.track_index !== b.track_index) return a.track_index - b.track_index;
-      if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
-      return a.end_frame - b.end_frame;
-    });
-
-    let TId = currentActiveClip?.id;
-    if (currentActiveClip && TId !== "initial-preview") {
-      const currentItemInNewList = sortedAudioItems.find(
-        (item) => (item.id || item.processed_file_name) === TId
-      );
-      if (currentItemInNewList) {
-        newActiveFileTarget = createActiveFileFromTimelineItem(
-          currentItemInNewList,
-          httpPort
-        );
-      }
-    }
-
-    if (!newActiveFileTarget) {
-      // If no current valid selection, or if it was initial
-      for (const item of sortedAudioItems) {
-        // Try to pick the first valid item
-        newActiveFileTarget = createActiveFileFromTimelineItem(item, httpPort);
-        if (newActiveFileTarget) break; // Found a valid one
-      }
-    }
-
-    if (
-      currentActiveClip?.id !== newActiveFileTarget?.id ||
-      currentActiveClip?.previewUrl !== newActiveFileTarget?.previewUrl
-    ) {
-      setCurrentActiveClip(newActiveFileTarget);
-      console.log(
-        "useEffect: currentActiveFile updated to:",
-        newActiveFileTarget
-      );
-    }
-  }, [httpPort, projectData, currentActiveClip?.id]);
 
   const handleAudioClipSelection = (selectedItemId: string) => {
-    if (
-      !projectData?.timeline?.audio_track_items ||
-      !httpPort ||
-      !selectedItemId
-    ) {
-      console.warn(
-        "Cannot handle clip selection: Missing data, port, or selectedItemId"
-      );
-      return;
-    }
-
-    const selectedItem = projectData.timeline.audio_track_items.find(
-      (item) => (item.id || item.processed_file_name) === selectedItemId
+    setCurrentClipId(selectedItemId);
+    console.log(
+      "FileSelector onFileChange: currentClipId set to:",
+      selectedItemId
     );
-
-    if (selectedItem) {
-      const newActiveFile = createActiveFileFromTimelineItem(
-        selectedItem,
-        httpPort
-      );
-      if (newActiveFile) {
-        setCurrentActiveClip(newActiveFile);
-        console.log(
-          "FileSelector onFileChange: currentActiveFile set to:",
-          newActiveFile
-        );
-      } else {
-        console.warn(
-          "Failed to create ActiveFile from selected TimelineItem:",
-          selectedItem
-        );
-      }
-    } else {
-      console.warn("Selected TimelineItem not found for ID:", selectedItemId);
-    }
-  };
-
-  // EFFECT: Load parameters into UI when currentActiveClip changes
-  useEffect(() => {
-    if (currentActiveClip?.id) {
-      const paramsForCurrentClip = allClipDetectionParams[currentActiveClip.id];
-      if (paramsForCurrentClip) {
-        // Load stored params into UI
-        setThreshold(paramsForCurrentClip.loudnessThreshold);
-        setMinDurationRaw(paramsForCurrentClip.minSilenceDurationSeconds); // Use Raw to bypass clamp temporarily if needed, though direct set is fine
-        setPaddingLeft(paramsForCurrentClip.paddingLeftSeconds);
-        setPaddingRight(paramsForCurrentClip.paddingRightSeconds);
-        // If paddingLocked is stored per clip:
-        // setPaddingLinked(paramsForCurrentClip.paddingLocked !== undefined ? paramsForCurrentClip.paddingLocked : true);
-      } else {
-        // No params stored for this clip yet, reset UI to defaults
-        // The next effect will then save these defaults for this new clip.
-        setThreshold(DEFAULT_THRESHOLD);
-        setMinDurationRaw(DEFAULT_MIN_DURATION);
-        setPaddingLeft(DEFAULT_PADDING);
-        setPaddingRight(DEFAULT_PADDING);
-        setPaddingLinked(true); // Reset lock state too
-      }
-    } else {
-      // No active clip, reset UI to defaults (optional, based on desired UX)
-      setThreshold(DEFAULT_THRESHOLD);
-      setMinDurationRaw(DEFAULT_MIN_DURATION);
-      setPaddingLeft(DEFAULT_PADDING);
-      setPaddingRight(DEFAULT_PADDING);
-      setPaddingLinked(true);
-    }
-  }, [currentActiveClip?.id]);
-
-  // EFFECT: Save UI parameters to allClipDetectionParams when they change
-  useEffect(() => {
-    if (currentActiveClip?.id) {
-      const newParamsForCurrentClip: DetectionParams = {
-        loudnessThreshold: threshold,
-        minSilenceDurationSeconds: minDuration, // minDuration is already clamped
-        paddingLeftSeconds: paddingLeft,
-        paddingRightSeconds: paddingRight,
-        // If paddingLocked is stored per clip:
-        // paddingLocked: paddingLocked,
-      };
-
-      // Only update if they are actually different, using deepEqual
-      if (
-        !deepEqual(
-          allClipDetectionParams[currentActiveClip.id],
-          newParamsForCurrentClip
-        )
-      ) {
-        setAllClipDetectionParams((prevParams) => ({
-          ...prevParams,
-          [currentActiveClip.id as string]: newParamsForCurrentClip, // Ensure id is string if that's the key type
-        }));
-      }
-    }
-    // This effect runs when any UI parameter changes OR when the current clip changes
-    // (to ensure defaults are saved for a newly selected clip if not already present).
-  }, [
-    threshold,
-    minDuration,
-    paddingLeft,
-    paddingRight,
-    paddingLocked,
-    currentActiveClip?.id,
-    allClipDetectionParams,
-  ]);
-
-  const handlePaddingChange = (side: "left" | "right", value: number) => {
-    if (paddingLocked) {
-      setPaddingLeft(value);
-      setPaddingRight(value);
-    } else {
-      side === "left" ? setPaddingLeft(value) : setPaddingRight(value);
-    }
-  };
-
-  const resetThreshold = () => setThreshold(DEFAULT_THRESHOLD);
-  const resetMinDuration = () => setMinDuration(DEFAULT_MIN_DURATION);
-  const resetPadding = () => {
-    setPaddingLeft(DEFAULT_PADDING);
-    setPaddingRight(DEFAULT_PADDING);
-    setPaddingLinked(true);
   };
 
   const titleBarHeight = "2.35rem";
 
+  const titleBar = (
+    <ContextMenu>
+      <ContextMenuTrigger>
+        <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-[999999]">
+          <Button
+            size={"sm"}
+            className="px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 hover:text-white"
+            onClick={CloseApp}
+          >
+            <XIcon className="scale-90" strokeWidth={2.5} />
+          </Button>
+          <h1 className="text-sm font-normal text-neutral-200">Pruner</h1>
+          <div className="flex items-center space-x-2">
+            <Button
+              size="icon"
+              className="bg-transparent hover:text-white hover:bg-transparent"
+            >
+              <Ellipsis className="h-8 w-8 text-xl scale-150 text-zinc-400 opacity-80 hover:text-blue-500 hover:opacity-100" />
+            </Button>
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-64">
+        <ContextMenuItem inset onClick={CloseApp}>
+          Close
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   return (
     <>
       {/* TITLE BAR */}
-      <ContextMenu>
-        <ContextMenuTrigger>
-          <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-90">
-            <Button
-              size={"sm"}
-              className="px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 hover:text-white"
-              onClick={CloseApp}
-            >
-              <XIcon className="scale-90" strokeWidth={2.5} />
-            </Button>
-            <h1 className="text-sm font-normal text-neutral-200">Pruner</h1>
-            <div className="flex items-center space-x-2">
-              <Button
-                size="icon"
-                className="bg-transparent hover:text-white hover:bg-transparent"
-              >
-                <Ellipsis className="h-8 w-8 text-xl scale-150 text-zinc-400 opacity-80 hover:text-blue-500 hover:opacity-100" />
-              </Button>
-            </div>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-64">
-          <ContextMenuItem inset onClick={CloseApp}>
-            Close
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      {isMounted && ReactDOM.createPortal(
+        titleBar,
+        document.getElementById('title-bar-root')!
+      )}
+
       <div
         className="p-6 pt-3 bg-[#28282e] border-1 border-t-0 border-zinc-900"
         style={{
@@ -790,6 +640,7 @@ export default function App() {
             </div>
           </div>
         </main>
+        <div id="dialog-portal-container" />
       </div>
     </>
   );

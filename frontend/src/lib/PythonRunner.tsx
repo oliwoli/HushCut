@@ -1,4 +1,3 @@
-// src/components/PythonRunnerComponent.tsx
 import React, { useEffect, useState, useRef, useCallback } from "react"; // Added useCallback
 import { Button } from "@/components/ui/button";
 import deepEqual from "fast-deep-equal";
@@ -22,20 +21,6 @@ interface PythonRunnerProps {
   onScriptError?: (error: any) => void;
   buttonText?: string;
   keepSilenceSegments?: boolean;
-}
-
-function areDetectionParamsEqual(
-  params1: DetectionParams | null,
-  params2: DetectionParams | null
-): boolean {
-  if (!params1 && !params2) return true;
-  if (!params1 || !params2) return false;
-  return (
-    params1.loudnessThreshold === params2.loudnessThreshold &&
-    params1.minSilenceDurationSeconds === params2.minSilenceDurationSeconds &&
-    params1.paddingLeftSeconds === params2.paddingLeftSeconds &&
-    params1.paddingRightSeconds === params2.paddingRightSeconds
-  );
 }
 
 // Helper function
@@ -94,8 +79,7 @@ async function prepareProjectDataWithEdits(
 
       if (clipEndSeconds <= clipStartSeconds) {
         console.warn(
-          `Skipping silence detection for item ${
-            item.name
+          `Skipping silence detection for item ${item.name
           } (${clipId}) due to invalid segment: start ${clipStartSeconds.toFixed(
             3
           )}s, end ${clipEndSeconds.toFixed(3)}s.`
@@ -371,9 +355,8 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       onClick={handleClick}
       onMouseEnter={handleMouseEnter} // Re-added onMouseEnter
       disabled={buttonDisabled}
-      className={`bg-teal-800 border-1 text-white p-8 hover:bg-teal-700 font-[400] ${
-        buttonDisabled ? "opacity-50 cursor-not-allowed" : ""
-      }`}
+      className={`bg-teal-800 border-1 text-white p-8 hover:bg-teal-700 font-[400] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""
+        }`}
     >
       <span className="items-center align-middle flex text-xl gap-4">
         <SliceIcon size={32} className="scale-150 text-teal-500" />

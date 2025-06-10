@@ -509,7 +509,7 @@ def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
         item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
 
 
-def get_project_data(project, timeline) -> ProjectData:
+def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     # switch_to_page("edit")
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
@@ -538,7 +538,7 @@ def get_project_data(project, timeline) -> ProjectData:
         source_media_item = get_source_media_from_timeline_item(item)
         if not source_media_item:
             continue
-        item["bmd_mpi"] = source_media_item["bmd_media_pool_item"]  # <- THIS LINE
+        item["bmd_mpi"] = source_media_item["bmd_media_pool_item"]
         audio_source_files.append(source_media_item)
         if source_media_item["uuid"] in seen_uuids:
             continue
@@ -546,8 +546,7 @@ def get_project_data(project, timeline) -> ProjectData:
         audio_sources_set.append(source_media_item)
 
     if len(audio_source_files) == 0:
-        print("No file paths to process.")
-        sys.exit(1)
+        return False, "No files to process"
 
     print(f"Source media files count: {len(audio_source_files)}")
 
@@ -645,7 +644,7 @@ def get_project_data(project, timeline) -> ProjectData:
     # misc_utils.export_to_json(globalz.PROJECT_DATA, json_output_path)
     # print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
 
-    return globalz.PROJECT_DATA
+    return True, None
 
 
 def merge_project_data(project_data_from_go: ProjectData) -> None:
@@ -764,10 +763,20 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         return False
 
     if sync or not globalz.PROJECT_DATA:
-        new_project_data = get_project_data(PROJECT, TIMELINE)
-        if new_project_data == globalz.PROJECT_DATA:
-            project_unchanged = True
-        globalz.PROJECT_DATA = new_project_data
+        success, alert_title = get_project_data(PROJECT, TIMELINE)
+        if not alert_title:
+            alert_title = "Sync error"
+        if not success:
+            response_payload = {
+                "status": "error",
+                "message": alert_title,
+                "shouldShowAlert": True,
+                "alertTitle": alert_title,
+                "alertMessage": "",  # Specific message for the alert
+                "alertSeverity": "error",
+            }
+            send_message_to_go("taskResult", response_payload, task_id=task_id)
+            return
         print(f"Timeline Name: {globalz.PROJECT_DATA['timeline']['name']}")
 
     if sync:
@@ -783,6 +792,21 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
         send_message_to_go(
             message_type="taskResult", payload=response_payload, task_id=task_id
         )
+        return
+
+    # safety check: do we have bmd items?
+    all_timeline_items = (
+        globalz.PROJECT_DATA["timeline"]["video_track_items"]
+        + globalz.PROJECT_DATA["timeline"]["audio_track_items"]
+    )
+
+    if not all_timeline_items:
+        print("critical error, can't continue")
+        return
+
+    some_bmd_item = all_timeline_items[0]["bmd_item"]
+    if not some_bmd_item or isinstance(some_bmd_item, str):
+        print("critical error, can't continue")
         return
 
     # export state of current timeline to otio, EXPENSIVE
@@ -831,6 +855,13 @@ def _append_and_link(
                 continue
             source_start = edit.get("source_start_frame", 0)
             source_end = source_start + duration_frames
+
+            if not item["bmd_item"] or isinstance(item["bmd_item"], str):
+                raise TypeError("Could not get timeline item from DaVinci Script API")
+
+            if not item.get("bmd_mpi"):
+                item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
+
             clip_info_for_api: Dict = {
                 "mediaPoolItem": item["bmd_mpi"],
                 "startFrame": source_start,
@@ -1007,115 +1038,6 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
 
     if not success:
         print("❌ Operation failed after all retries. Please check the logs.")
-
-
-def apply_edits(api_edits: List[SubframeEditsData]) -> None:
-    global RESOLVE
-    global PROJECT
-    global TIMELINE
-    global MEDIA_POOL
-    if (
-        not RESOLVE
-        or not PROJECT
-        or not TIMELINE
-        or not globalz.PROJECT_DATA
-        or not MEDIA_POOL
-    ):
-        print("Resolve, Project or Timeline not available. Cannot apply edits.")
-        return
-
-    media_appends: List[ClipInfo] = []
-    video_track_items: list[TimelineItem] = get_items_by_tracktype("video", TIMELINE)
-    audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", TIMELINE)
-
-    clips_to_link_master: List[List[Any]] = []
-
-    for clip in api_edits:
-        bmp_mpi = clip["bmd_media_pool_item"]
-        track_type = clip["track_type"]
-        track_index = clip["track_index"]
-
-        for edit in clip["edit_instructions"]:
-            clip_info: ClipInfo = {
-                "mediaPoolItem": bmp_mpi,
-                "startFrame": edit["source_start_frame"],
-                "endFrame": edit["source_end_frame"],
-                "recordFrame": edit["start_frame"],
-                "mediaType": 1
-                if track_type == "video"
-                else 2,  # 1 for video, 2 for audio
-                "trackIndex": track_index,
-            }
-            media_appends.append(clip_info)
-
-            clips_to_link: List[Any] = []
-            for linked_item in edit["linked_items"]:
-                if linked_item["track_type"] == "video":
-                    for video_item in video_track_items:
-                        if video_item["track_index"] != linked_item["track_index"]:
-                            continue
-                        if video_item["start_frame"] != linked_item["start_frame"]:
-                            continue
-                        clips_to_link.append(video_item["bmd_item"])
-                elif linked_item["track_type"] == "audio":
-                    for audio_item in audio_track_items:
-                        if audio_item["track_index"] != linked_item["track_index"]:
-                            continue
-                        if audio_item["start_frame"] != linked_item["start_frame"]:
-                            continue
-                        if (
-                            audio_item["source_start_frame"]
-                            != linked_item["source_start_frame"]
-                        ):
-                            offset = (
-                                audio_item["source_start_frame"]
-                                - linked_item["source_start_frame"]
-                            )
-                            print(f"SYNC ERROR DETECTED. offset: {offset}")
-                        clips_to_link.append(audio_item["bmd_item"])
-            clips_to_link_master.append(clips_to_link)
-
-    if not media_appends:
-        print("No media appends to apply.")
-        return
-
-    print(f"media appends: {media_appends}")
-
-    append: Union[List[Any], None] = MEDIA_POOL.AppendToTimeline(media_appends)
-
-    if not append:
-        print("Failed to append media to timeline.")
-        print(f"current timeline name: {TIMELINE.GetName()}")
-        return
-
-    # print(f"append result (API): {append}")
-    print(f"clips to link: {len(clips_to_link_master)}")
-    # print(f"clips to link master: {clips_to_link_master}")
-    for idx, bmd_item in enumerate(append):
-        if len(clips_to_link_master[idx]) == 0:
-            continue
-        clips_to_link_master[idx].append(bmd_item)
-        # print(f"linking: {clips_to_link_master[idx]}")
-        TIMELINE.SetClipsLinked(clips_to_link_master[idx], True)
-
-    # clip_info = {
-    #     "mediaPoolItem": current_media_pool_item,
-    #     "startFrame": source_start_time,
-    #     "endFrame": source_end_exclusive,  # Using adjusted exclusive end
-    #     "recordFrame": timeline_start_frame,
-    #     # Ensure mediaType is set correctly based on 'edit["enabled"]' and API requirements
-    #     # "mediaType": None,
-    #     # Add trackIndex etc. if needed
-    # }
-    # media_appends.append(clip_info)
-
-    # list append
-    # append = media_pool.AppendToTimeline(media_appends)
-    # print(f"Total cuts made: {len(append)}")
-
-    # single appends
-    # for item in media_appends:
-    #     append = media_pool.AppendToTimeline([item])
 
 
 def _recursive_find_item_in_folder(
@@ -1384,7 +1306,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
             full_trace = traceback.format_exc()
             print(full_trace)
             self._send_json_response(
-                500, {"status": "error", "message": f"Internal server error: {str(e)}"}
+                500, {"status": "error", "message": f"Internal error: {str(e)}"}
             )
 
 

@@ -20,9 +20,16 @@ function AlertDialogTrigger({
 
 function AlertDialogPortal({
   ...props
-}: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
+}: AlertDialogPrimitive.AlertDialogPortalProps) {
+
+  // This hook ensures we only access `document` on the client-side.
+  const [container, setContainer] = React.useState<HTMLElement | null>(null);
+  React.useEffect(() => {
+    setContainer(document.getElementById('overlays'));
+  }, []);
+
   return (
-    <AlertDialogPrimitive.Portal data-slot="alert-dialog-portal" {...props} />
+    <AlertDialogPrimitive.Portal container={container} data-slot="alert-dialog-portal" {...props} />
   )
 }
 

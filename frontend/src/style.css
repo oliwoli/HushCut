@@ -51,6 +51,15 @@ body {
   user-select: none;
 }
 
+#root, #overlays, #title-bar-root {
+  position: relative;
+}
+
+#root { z-index: 1; }
+#overlays { z-index: 2; }
+#title-bar-root { z-index: 10; } /* The highest layer */
+
+
 /* silence region */
 ::part(region) {
   /* pointer-events: unset !important; */

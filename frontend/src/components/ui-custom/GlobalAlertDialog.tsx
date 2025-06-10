@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EventsOn } from "@wails/runtime";
+
+// 1. We switch back to AlertDialog because it has the desired persistence.
 import {
   AlertDialog,
   AlertDialogAction,
@@ -8,7 +10,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"; // Adjust the import path as necessary
+} from "@/components/ui/alert-dialog";
 
 interface AlertData {
   title: string;
@@ -37,16 +39,42 @@ const GlobalAlertDialog = () => {
       setAlertOpen(true);
     };
 
-    // Subscribe to the event and store the unsubscribe function
     unsubscribeRef.current = EventsOn("showAlert", handler);
 
-    // Cleanup function to unsubscribe when the component unmounts
     return () => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
       }
     };
   }, []);
+
+  // 2. This is the "hack" you proposed, implemented in a useEffect hook.
+  useEffect(() => {
+    const rootEl = document.getElementById('root');
+
+    if (alertOpen) {
+      // Radix applies its style changes in a microtask. To ensure our override
+      // runs *after* Radix, we use a setTimeout with a delay of 0.
+      const timerId = setTimeout(() => {
+        // Force the body to be interactive, overriding Radix's style.
+        document.body.style.pointerEvents = 'auto';
+        // Apply the 'none' style to our main app container instead.
+        if (rootEl) {
+          rootEl.style.pointerEvents = 'none';
+        }
+      }, 0);
+
+      return () => clearTimeout(timerId);
+
+    } else {
+      // When the dialog closes, clean up our custom styles.
+      document.body.style.pointerEvents = '';
+      if (rootEl) {
+        rootEl.style.pointerEvents = '';
+      }
+    }
+  }, [alertOpen]); // This effect runs whenever the dialog opens or closes.
+
 
   return (
     <AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>

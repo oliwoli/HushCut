@@ -432,6 +432,8 @@ func (a *App) GetOrDetectSilencesWithCache(
 		MinSilenceDurationSeconds: minSilenceDurationSeconds,
 		PaddingLeftSeconds:        paddingLeftSeconds,
 		PaddingRightSeconds:       paddingRightSeconds,
+		ClipStartSeconds:          clipStartSeconds,
+		ClipEndSeconds: 		   clipEndSeconds,
 	}
 
 	// 1. Try to read from cache (read lock)

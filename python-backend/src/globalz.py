@@ -1,4 +1,4 @@
-import local_types
+from local_types import ProjectData
 from typing import Optional
 
-PROJECT_DATA: Optional[local_types.ProjectData] = None
+PROJECT_DATA: Optional[ProjectData]
