@@ -10,7 +10,7 @@ export function useSilenceData(
   activeFile: ActiveClip | null,
   detectionParams: DetectionParams | null,
   timelineFps: number | null, // NEW: Pass timeline FPS
-  debounceMs: number = 150
+  debounceMs: number = 50
 ): SilenceDataHookResult {
   const [silenceData, setSilenceData] = useState<SilencePeriod[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -125,6 +125,5 @@ export function useSilenceData(
     debouncedFetch.cancel(); // Cancel any pending debounced call
     return fetchLogic();    // Call fetchLogic directly
   }, [fetchLogic, debouncedFetch]);
-
   return { silenceData, isLoading, error, refetch };
 }

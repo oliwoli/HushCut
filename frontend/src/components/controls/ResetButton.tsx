@@ -5,9 +5,10 @@ import { memo } from "react";
 
 interface ResetButtonProps {
   onClick: () => void;
+  disabled: boolean
 }
 
-function _ResetButton({ onClick }: ResetButtonProps) {
+function _ResetButton({ onClick, disabled = false }: ResetButtonProps) {
   return (
     <Button
       variant="ghost"

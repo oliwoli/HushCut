@@ -12,14 +12,33 @@ import {
 import { main } from "@wails/go/models";
 import type { DetectionParams, SilencePeriod } from "../types";
 
+import { useClipStore } from '@/stores/clipStore';
+import { ClipParameters, defaultParameters } from "@/stores/clipStore";
+
+
+export function deriveAllClipDetectionParams(
+  parameters: Record<string, ClipParameters>
+): Record<string, DetectionParams> {
+  const detectionParams: Record<string, DetectionParams> = {};
+  for (const clipId in parameters) {
+    const params = { ...defaultParameters, ...parameters[clipId] };
+    detectionParams[clipId] = {
+      loudnessThreshold: params.threshold,
+      minSilenceDurationSeconds: params.minDuration,
+      paddingLeftSeconds: params.paddingLeft,
+      paddingRightSeconds: params.paddingRight,
+    };
+  }
+  return detectionParams;
+}
+
+
 interface PythonRunnerProps {
   projectData: main.ProjectDataPayload;
-  allClipDetectionParams: Record<string, DetectionParams>; // Renamed for clarity in this component
   defaultDetectionParams: DetectionParams; // Renamed for clarity
   onScriptLog?: (line: string) => void;
   onScriptDone?: (message: string) => void;
   onScriptError?: (error: any) => void;
-  buttonText?: string;
   keepSilenceSegments?: boolean;
 }
 
@@ -88,11 +107,6 @@ async function prepareProjectDataWithEdits(
         return item;
       }
 
-      // console.log(
-      //   `prepareProjectDataWithEdits: - Queuing fetch for item ${item.name} (${clipId}), file: ${filePathForGo}, ` +
-      //   `segment: ${clipStartSeconds.toFixed(3)}s to ${clipEndSeconds.toFixed(3)}s. Params: `, itemSpecificParams
-      // );
-
       try {
         // GetOrDetectSilencesWithCache returns SilencePeriod[] matching Go's struct (for JSON marshalling)
         const silencePeriodsForGo: SilencePeriod[] =
@@ -136,12 +150,10 @@ async function prepareProjectDataWithEdits(
 const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const {
     projectData: initialProjectData,
-    allClipDetectionParams,
     defaultDetectionParams,
     onScriptLog,
     onScriptDone,
     onScriptError,
-    buttonText = "Prune Silences",
     keepSilenceSegments = false,
   } = props;
 
@@ -156,44 +168,23 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const [isProcessingHover, setIsProcessingHover] = useState(false);
 
   const initialProjectDataRef = useRef(initialProjectData);
-  const allClipParamsRef = useRef(allClipDetectionParams);
   const defaultParamsRef = useRef(defaultDetectionParams);
+
 
   useEffect(() => {
     initialProjectDataRef.current = initialProjectData;
-    allClipParamsRef.current = allClipDetectionParams;
     defaultParamsRef.current = defaultDetectionParams;
+  }, [initialProjectData, defaultDetectionParams]);
 
-    if (processedData) {
-      const isInputDataStale =
-        processedDataInputRef.current !== initialProjectData;
-      // Use deepEqual for comparing the entire map of parameters
-      const areParamsStale = !deepEqual(
-        allClipDetectionParams,
-        paramsMapForProcessedData
-      );
-
-      if (isInputDataStale || areParamsStale) {
-        if (isInputDataStale)
-          console.log(
-            "Invalidating processedData due to initialProjectData change."
-          );
-        if (areParamsStale)
-          console.log(
-            "Invalidating processedData due to allClipDetectionParams change."
-          );
-
-        setProcessedData(null);
-        processedDataInputRef.current = null;
-        setParamsMapForProcessedData(null); // Reset the stored params map
-      }
-    }
-  }, [
-    initialProjectData,
-    allClipDetectionParams,
-    processedData,
-    paramsMapForProcessedData,
-  ]);
+  // REFACTOR: This useEffect is now MUCH simpler. It only invalidates the cache
+  // if the main project data changes. Parameter changes will be handled
+  // on-demand by the click/hover handlers.
+  useEffect(() => {
+    console.log("Invalidating processedData due to initialProjectData change.");
+    setProcessedData(null);
+    processedDataInputRef.current = null;
+    setParamsMapForProcessedData(null);
+  }, [initialProjectData]);
 
   useEffect(() => {
     const logHandler = (line: string) => {
@@ -217,9 +208,12 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   }, [onScriptLog, onScriptDone]);
 
   const handleMouseEnter = useCallback(async () => {
+    const allParameters = useClipStore.getState().parameters;
+    const currentAllClipParams = deriveAllClipDetectionParams(allParameters);
+
+    // Use refs for props that might change, to avoid stale closures.
     const currentInitialData = initialProjectDataRef.current;
-    const currentAllClipParams = allClipParamsRef.current; // Use ref
-    const currentDefaultParams = defaultParamsRef.current; // Use ref
+    const currentDefaultParams = defaultParamsRef.current;
 
     if (isProcessingHover || !currentInitialData || isProcessingClick) {
       return;
@@ -250,23 +244,22 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
         currentDefaultParams
       );
 
-      // Check if props have changed *during* the async operation
+      const finalAllClipParams = deriveAllClipDetectionParams(useClipStore.getState().parameters);
+
       if (
         initialProjectDataRef.current === currentInitialData &&
-        deepEqual(allClipParamsRef.current, currentAllClipParams)
+        deepEqual(finalAllClipParams, currentAllClipParams)
       ) {
         setProcessedData(result);
         processedDataInputRef.current = currentInitialData;
-        setParamsMapForProcessedData(currentAllClipParams); // Store the map that was used
-        // console.log("Hover: Silent pre-processing complete.");
-      } else {
-        // console.log("Hover: Input data or params map changed during pre-processing; discarding result.");
+        setParamsMapForProcessedData(currentAllClipParams);
       }
     } catch (error) {
       console.error("Hover: Error during silent pre-processing:", error);
     } finally {
       setIsProcessingHover(false);
     }
+    // REFACTOR: The dependency array for useCallback is now simpler.
   }, [
     isProcessingHover,
     isProcessingClick,
@@ -280,9 +273,11 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       console.warn("Click: Processing already in progress.");
       return;
     }
+    const allParameters = useClipStore.getState().parameters;
+    const currentAllClipParams = deriveAllClipDetectionParams(allParameters);
+
     const currentInitialData = initialProjectDataRef.current;
-    const currentAllClipParams = allClipParamsRef.current; // Use ref
-    const currentDefaultParams = defaultParamsRef.current; // Use ref
+    const currentDefaultParams = defaultParamsRef.current;
 
     if (!currentInitialData) {
       console.error("Click: Initial project data is not available.");
@@ -347,8 +342,8 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     }
   };
 
-  const buttonDisabled = isProcessingClick; // Only click processing disables the button visibly
-  const currentButtonText = isProcessingClick ? "Processing..." : buttonText; // Only click processing changes text
+  const buttonDisabled = isProcessingClick;
+  const currentButtonText = isProcessingClick ? "Processing..." : "Prune Silences";
 
   return (
     <Button

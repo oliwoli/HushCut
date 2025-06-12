@@ -6,16 +6,10 @@ scan({
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import deepEqual from "fast-deep-equal";
-import { Slider } from "@/components/ui/slider";
-import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Toaster } from "./components/ui/sonner";
-import { Label } from "@/components/ui/label";
-import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
 
 import {
   GetGoServerPort,
-  GetWaveform,
   SyncWithDavinci,
 } from "@wails/go/main/App";
 
@@ -26,18 +20,17 @@ import { main } from "@wails/go/models";
 import WaveformPlayer from "./components/audio/waveform";
 import RemoveSilencesButton from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
-import { useSilenceData } from "./hooks/useSilenceData";
 import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
-import { useClipParameters } from "./hooks/useClipParameters";
 import { createPortal } from "react-dom";
-import { MinDurationControl } from "./components/controls/MinDurationControl";
-import ResetButton from "./components/controls/ResetButton";
 import { ThresholdControl } from "./components/controls/ThresholdControl";
 import { TitleBar } from "./components/ui-custom/titlebar";
 
-import { useBusy } from './context/useBusy';
+import { useSyncBusyState } from "./stores/appSync";
+
+import { useClipStore } from '@/stores/clipStore';
+import { SilenceControls } from "./components/controls/SilenceControls";
 
 
 EventsOn("showToast", (data) => {
@@ -95,68 +88,58 @@ const createActiveFileFromTimelineItem = (
 
 
 function AppContent() {
-  const isBusy = useBusy(s => s.isBusy);
-  const setIsBusy = useBusy(s => s.setIsBusy);
-  const [httpPort, setHttpPort] = useState<Number | null>(null);
-  const [currentClipId, setCurrentClipId] = useState<string | null>(null);
+  const isBusy = useSyncBusyState(s => s.isBusy);
+  const setBusy = useSyncBusyState(s => s.setBusy);
+  const currentClipId = useClipStore(s => s.currentClipId);
+  const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
+
+  const [httpPort, setHttpPort] = useState<number | null>(null);
   const [projectData, setProjectData] =
     useState<main.ProjectDataPayload | null>(null);
 
+  useEffect(() => {
+    const audioItems = projectData?.timeline?.audio_track_items || [];
+    if (audioItems.length === 0) {
+      if (currentClipId !== null) {
+        setCurrentClipId(null); // No clips available, so deselect
+      }
+      return;
+    }
+
+    const availableIds = new Set(audioItems.map(item => item.id || item.processed_file_name));
+
+    // If no clip is selected, or the selected clip no longer exists,
+    // default to the first one in the list.
+    if (!currentClipId || !availableIds.has(currentClipId)) {
+      const firstItemId = audioItems[0].id || audioItems[0].processed_file_name;
+      setCurrentClipId(firstItemId);
+    }
+  }, [projectData, currentClipId, setCurrentClipId]);
+
+
+  // 3. Use useMemo for PURE calculations. It now only derives the active clip.
   const currentActiveClip = useMemo(() => {
     if (!projectData || !httpPort || !projectData.timeline?.audio_track_items) {
       return null;
     }
 
     const audioItems = projectData.timeline.audio_track_items;
-    if (audioItems.length === 0) {
-      return null;
-    }
+    if (audioItems.length === 0) return null;
 
     // Find the item corresponding to the current ID.
-    // If no ID is selected, default to the first item in the list.
-    const itemToDisplay = currentClipId
+    let itemToDisplay = currentClipId
       ? audioItems.find(item => (item.id || item.processed_file_name) === currentClipId)
       : audioItems[0];
 
-    // If the selected ID is no longer in the project data, fall back to the first item.
+    // Fallback if the ID wasn't found (e.g., during a state transition)
     if (!itemToDisplay) {
-      // This is an important fallback for when project data changes and the old clip disappears.
-      // We can also update the state to reflect this change.
-      if (audioItems.length > 0) {
-        const firstItem = audioItems[0];
-        setCurrentClipId(firstItem.id || firstItem.processed_file_name || null)
-        return createActiveFileFromTimelineItem(firstItem, httpPort);
-      }
-      return null
+      itemToDisplay = audioItems[0];
     }
 
     return createActiveFileFromTimelineItem(itemToDisplay, httpPort);
 
   }, [projectData, httpPort, currentClipId]);
 
-
-  const {
-    threshold,
-    minDuration,
-    paddingLeft,
-    paddingRight,
-    paddingLocked,
-    allClipParams: allClipDetectionParams, // Rename to match original variable if needed
-    effectiveParams: currentClipEffectiveParams, // Rename to match original variable
-    setThreshold,
-    setMinDuration,
-    handlePaddingChange,
-    setPaddingLinked,
-    resetThreshold,
-    resetMinDuration,
-    resetPadding,
-  } = useClipParameters(currentActiveClip?.id || null);
-
-  const { silenceData } = useSilenceData(
-    currentActiveClip,
-    currentClipEffectiveParams,
-    projectData?.timeline?.fps || null
-  );
 
   const [activeClipSegmentPeakData, setActiveClipSegmentPeakData] =
     useState<main.PrecomputedWaveformData | null>(null);
@@ -166,109 +149,13 @@ function AppContent() {
     null
   );
 
-  // Effect to prepare data for WaveformPlayer when currentActiveClip changes
-  useEffect(() => {
-    if (
-      currentActiveClip &&
-      projectData?.timeline?.fps &&
-      httpPort &&
-      typeof currentActiveClip.sourceStartFrame === "number" &&
-      typeof currentActiveClip.sourceEndFrame === "number"
-    ) {
-      const fps = projectData.timeline.fps;
-      const clipStartSeconds = currentActiveClip.sourceStartFrame / fps;
-      const clipEndSeconds = currentActiveClip.sourceEndFrame / fps;
-
-      if (clipEndSeconds <= clipStartSeconds) {
-        console.warn(
-          "App.tsx: Clip end time is before or at start time. Not fetching segment data.",
-          currentActiveClip
-        );
-        setActiveClipSegmentPeakData(null);
-        setCutAudioSegmentUrl(null);
-        return;
-      }
-
-      // 1. Construct the URL for the cut audio segment
-      const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
-        currentActiveClip.processedFileName + ".wav"
-      )}&start=${clipStartSeconds.toFixed(3)}&end=${clipEndSeconds.toFixed(3)}`;
-      setCutAudioSegmentUrl(newCutAudioUrl);
-      console.log("App.tsx: Constructed cutAudioUrl:", newCutAudioUrl);
-
-      // 2. Fetch peak data for this specific segment
-      let isCancelled = false;
-      const fetchClipPeaks = async () => {
-        console.log(
-          "App.tsx: Fetching peak data for clip segment:",
-          currentActiveClip.processedFileName,
-          clipStartSeconds,
-          clipEndSeconds
-        );
-        // setIsLoading(true); // You might have a more general loading state
-        try {
-          const peakDataForSegment = await GetWaveform(
-            currentActiveClip.processedFileName + ".wav", // Pass the base filename
-            256, // samplesPerPixel - adjust as needed
-            "logarithmic",
-            -60.0, // dbRange - adjust as needed
-            clipStartSeconds,
-            clipEndSeconds
-          );
-
-          if (!isCancelled) {
-            if (
-              peakDataForSegment &&
-              peakDataForSegment.peaks &&
-              peakDataForSegment.peaks.length > 0 &&
-              peakDataForSegment.duration > 0
-            ) {
-              setActiveClipSegmentPeakData(peakDataForSegment);
-              console.log(
-                "App.tsx: Peak data for clip segment fetched, duration:",
-                peakDataForSegment.duration.toFixed(2)
-              );
-            } else {
-              console.warn(
-                "App.tsx: Received invalid peak data for segment",
-                currentActiveClip.processedFileName,
-                peakDataForSegment
-              );
-              setActiveClipSegmentPeakData(null);
-            }
-          }
-        } catch (e) {
-          if (!isCancelled) {
-            setActiveClipSegmentPeakData(null);
-          }
-          console.error(
-            "App.tsx: Error fetching peak data for segment",
-            currentActiveClip.processedFileName,
-            e
-          );
-        } finally {
-          // if (!isCancelled) setIsLoading(false);
-        }
-      };
-
-      fetchClipPeaks();
-      return () => {
-        isCancelled = true;
-      };
-    } else {
-      // Reset if no valid active clip or necessary data
-      setActiveClipSegmentPeakData(null);
-      setCutAudioSegmentUrl(null);
-    }
-  }, [currentActiveClip, projectData, httpPort]);
-
   const handleSync = async () => {
     if (isBusy) {
       console.log("Sync skipped: App is busy.");
       return;
     }
     console.log("syncing...")
-    setIsBusy(true);
+    setBusy(true);
     const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
 
     const conditionalSetProjectData = (
@@ -307,14 +194,14 @@ function AppContent() {
           description: response.message || "An error occurred during sync.",
           duration: 5000,
         });
-        setIsBusy(false);
+        setBusy(false);
       } else if (response && response.status === "success") {
         conditionalSetProjectData(response.data);
         toast.success("Synced with DaVinci Resolve", {
           id: loadingToastId,
           duration: 1500,
         });
-        setIsBusy(false);
+        setBusy(false);
       } else {
         console.error(
           "SyncWithDavinci: Unexpected response structure from Go",
@@ -325,7 +212,7 @@ function AppContent() {
           id: loadingToastId,
           duration: 5000,
         });
-        setIsBusy(false);
+        setBusy(false);
       }
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
@@ -343,7 +230,7 @@ function AppContent() {
           duration: 5000,
         });
       }
-      setIsBusy(false);
+      setBusy(false);
     }
   };
 
@@ -418,12 +305,7 @@ function AppContent() {
     );
   };
 
-  const titleBarHeight = "2.35rem";
-
-  const [isMounted, setIsMounted] = useState(false);
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
+  const titleBarHeight = "2.25rem";
 
   return (
     <>
@@ -436,7 +318,7 @@ function AppContent() {
         }}
       >
         <header className="flex items-center justify-between"></header>
-        <main className="flex-1 gap-8 mt-8 max-w-screen select-none">
+        <main className="flex-1 gap-8 max-w-screen select-none space-y-4">
           {projectData?.files && currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
@@ -448,124 +330,41 @@ function AppContent() {
                 !projectData?.timeline?.audio_track_items ||
                 projectData.timeline.audio_track_items.length === 0
               }
-              className="w-full" // Example responsive width
+              className="w-full mt-2"
             />
           )}
           <div className="flex flex-col space-y-8">
             {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
-              <ThresholdControl
-                threshold={threshold}
-                setThreshold={setThreshold}
-                resetThreshold={resetThreshold}
-              />
-              <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible">
-                {httpPort &&
-                  cutAudioSegmentUrl &&
-                  currentActiveClip &&
-                  projectData &&
-                  projectData.timeline &&
-                  currentClipEffectiveParams && (
-                    <WaveformPlayer
-                      audioUrl={cutAudioSegmentUrl}
-                      peakData={activeClipSegmentPeakData}
-                      clipOriginalStartSeconds={
-                        currentActiveClip.sourceStartFrame /
-                        projectData.timeline.fps
-                      }
-                      silenceData={silenceData}
-                      projectFrameRate={projectData.timeline.fps}
-                      detectionParams={currentClipEffectiveParams}
-                    />
-                  )}
-              </div>
+              {currentClipId && (
+                <>
+                  <ThresholdControl clipId={currentClipId} />
+                  <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible">
+                    {httpPort &&
+                      currentActiveClip &&
+                      projectData &&
+                      projectData.timeline &&
+                      (
+                        <WaveformPlayer
+                          activeClip={currentActiveClip}
+                          projectFrameRate={projectData.timeline.fps}
+                          httpPort={httpPort}
+                        />
+                      )}
+
+                  </div>
+                </>
+              )}
             </div>
             <div className="space-y-2 w-full p-5">
-              <MinDurationControl
-                minDuration={minDuration}
-                setMinDuration={setMinDuration}
-                resetMinDuration={resetMinDuration}
-              />
+              <SilenceControls />
             </div>
-
-
-            <div className="space-y-2 flex-1">
-              <div className="flex items-baseline space-x-5">
-                <Label className="font-medium w-32 text-right flex-row-reverse">
-                  Padding
-                </Label>
-                <div className="flex items-start space-x-0">
-                  {/* Left Padding */}
-                  <div className="flex flex-col space-y-1 w-full">
-                    <div className="flex items-center">
-                      <Slider
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={[paddingLeft]}
-                        onValueChange={(vals) =>
-                          handlePaddingChange("left", vals[0])
-                        }
-                        className="w-32"
-                      />
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setPaddingLinked((l) => !l)}
-                        className="text-zinc-500 hover:text-zinc-300 text-center"
-                      >
-                        {paddingLocked ? (
-                          <Link className="h-4 w-4" />
-                        ) : (
-                          <Unlink className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </div>
-                    <span className="text-sm text-zinc-400">
-                      Left:{" "}
-                      <span className="text-zinc-100 font-mono tracking-tighter">
-                        {paddingLeft.toFixed(2)}
-                        <span className="text-zinc-400 ml-1">s</span>
-                      </span>
-                    </span>
-                  </div>
-
-                  {/* Right Padding */}
-                  <div className="flex flex-col space-y-1 w-full">
-                    <div className="flex items-center space-x-2">
-                      <Slider
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={[paddingRight]}
-                        onValueChange={(vals) =>
-                          handlePaddingChange("right", vals[0])
-                        }
-                        className="w-32"
-                      />
-                      <ResetButton onClick={() => resetPadding()} />
-                    </div>
-                    <span className="text-sm text-zinc-400">
-                      Right:{" "}
-                      <span className="text-zinc-100 font-mono tracking-tighter">
-                        {paddingRight.toFixed(2)}
-                        <span className="text-zinc-400 ml-1">s</span>
-                      </span>
-                    </span>
-                  </div>
-                </div>
-
-              </div>
-
-            </div>
-
             <div className="flex space-y-8 w-full">
               <div className="items-center space-y-2 mt-4">
-                {projectData && currentClipEffectiveParams && (
+                {projectData && (
                   <RemoveSilencesButton
                     projectData={projectData}
                     keepSilenceSegments={false}
-                    allClipDetectionParams={allClipDetectionParams}
                     defaultDetectionParams={getDefaultDetectionParams()}
                   />
                 )}

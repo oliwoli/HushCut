@@ -9,7 +9,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { useBusy } from "@/context/useBusy";
+
+import { useSyncBusyState } from "@/stores/appSync";
 
 interface AlertData {
   title: string;
@@ -23,69 +24,59 @@ const GlobalAlertDialog = () => {
     message: "",
   });
 
-  const isBusy = useBusy(s => s.isBusy);
-  const setIsBusy = useBusy(s => s.setIsBusy);
+  const isBusy = useSyncBusyState(s => s.isBusy);
+  const setBusy = useSyncBusyState(s => s.setBusy);
+  const isBusyRef = useRef(isBusy);
+
 
   const alertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    isBusyRef.current = isBusy;
+  }, [isBusy]);
+
+  useEffect(() => {
     const handler = (data: any) => {
-      alertTimerRef.current = setTimeout(() => {
-        if (isBusy) {
+      const maxRetries = 5;
+      const retryDelay = 30;
+      let retries = 0;
+
+      const waitUntilBusy = () => {
+        if (isBusyRef.current) {
           setAlertData({
             title: data.title || "No title",
             message: data.message || "No message",
           });
           setAlertOpen(true);
+        } else if (retries < maxRetries) {
+          retries++;
+          alertTimerRef.current = setTimeout(waitUntilBusy, retryDelay);
         } else {
-          console.warn("showAlert event received, but app is not busy. Ignoring.");
+          console.warn("showAlert event received, but app is not busy. Ignoring after retries.");
         }
-      }, 50)
+      };
+      waitUntilBusy();
     };
 
     const unsubscribe = EventsOn("showAlert", handler);
     return () => {
       if (unsubscribe) unsubscribe();
+      if (alertTimerRef.current) clearTimeout(alertTimerRef.current);
     };
-  }, []);
+  }, [isBusy]);
 
-  // Pointer-events logic
-  useEffect(() => {
-    const rootEl = document.getElementById('root');
-    let timerId;
-
-    if (alertOpen) {
-      console.log("opening alert!")
-      timerId = setTimeout(() => {
-        document.body.style.pointerEvents = 'auto';
-        if (rootEl) rootEl.style.pointerEvents = 'none';
-      }, 0);
-
-    } else {
-      // Cleanup styles after the closing animation.
-      timerId = setTimeout(() => {
-        document.body.style.pointerEvents = '';
-        if (rootEl) rootEl.style.pointerEvents = '';
-      }, 200);
-    }
-
-    return () => clearTimeout(timerId);
-  }, [alertOpen]);
-
-  // NEW: Custom handler to release the lock when the dialog closes.
+  // Dialog open/close logic
   const handleOpenChange = (isOpen: boolean) => {
     setAlertOpen(isOpen);
     if (!isOpen) {
-      console.log("closing alert!")
-      setIsBusy(false);
-    }
-    else {
-      console.log("opening alert!")
+      setBusy(false);
+      console.log("closing alert!");
+    } else {
+      console.log("opening alert!");
     }
   };
 
   return (
-    // Use our new handler for onOpenChange
     <AlertDialog open={alertOpen} onOpenChange={handleOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -93,10 +84,7 @@ const GlobalAlertDialog = () => {
           <AlertDialogDescription>{alertData.message}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          {/* AlertDialogAction will trigger onOpenChange(false) automatically */}
-          <AlertDialogAction>
-            Continue
-          </AlertDialogAction>
+          <AlertDialogAction>Continue</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

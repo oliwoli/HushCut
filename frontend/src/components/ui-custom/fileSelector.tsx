@@ -37,7 +37,7 @@ const LinearWaveform = ({ peaks, className }: { peaks: number[], className?: str
     const y1 = centerY * (1 - peak); // Top of the line
     const y2 = centerY * (1 + peak); // Bottom of the line
 
-    pathData += `M ${x.toFixed(2)} ${y1.toFixed(2)} L ${x.toFixed(2)} ${y2.toFixed(2)} `;
+    pathData += `M ${x.toFixed(2)} ${y1.toFixed(1)} L ${x.toFixed(2)} ${y2.toFixed(2)} `;
   }
 
   return (
@@ -54,11 +54,11 @@ const ClipLinkIcon = ({ className }: { className?: string }) => (
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path>
   </svg>
 );
-const MIN_DB = -128; // Define a floor for silence
+const MIN_DB = -60; // Define a floor for silence
 const MAX_DB = 0
-const TARGET_PEAK_COUNT = 128;
+const TARGET_PEAK_COUNT = 64;
 const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related audio
-const MIN_SAMPLES_PER_PIXEL = 32; // Ensures very short clips still have some detail
+const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
 
 const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
@@ -206,7 +206,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 
   return (
     <ScrollArea className={cn("w-full whitespace-nowrap", className)}>
-      <div className="flex w-max space-x-4 p-4">
+      <div className="flex w-max space-x-4">
         {sortedItems.map((item) => {
           const itemUniqueIdentifier = item.id || item.processed_file_name;
           if (!itemUniqueIdentifier) {

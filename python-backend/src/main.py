@@ -56,6 +56,118 @@ import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
+# GLOBALS
+TEMP_DIR: str = os.path.join(os.path.dirname(__file__), "..", "wav_files")
+TEMP_DIR = os.path.abspath(TEMP_DIR)
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
+PROJECT = None
+TIMELINE = None
+MEDIA_POOL = None
+
+# This will be the token Go sends, which Python expects for Go-to-Python commands (future)
+AUTH_TOKEN = None
+ENABLE_COMMAND_AUTH = False  # Master switch for auth on Python's command server
+GO_SERVER_PORT = 0
+
+STANDALONE_MODE = False
+RESOLVE = None
+
+
+def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] = None):
+    global GO_SERVER_PORT
+    if GO_SERVER_PORT == 0:
+        print(
+            "Python Error: Go server port not configured. Cannot send message to Go.",
+            flush=True,
+        )
+        return False
+
+    url = f"http://localhost:{GO_SERVER_PORT}/msg"  # Your Go endpoint for general messages
+
+    message_data = {"type": message_type, "payload": payload}
+    try:
+        headers = {"Content-Type": "application/json"}
+
+        # This is an independent HTTP request from Python to Go
+        def fallback_serializer(obj):
+            return "<BMDObject>"
+
+        response = requests.post(
+            url,
+            data=json.dumps(message_data, default=fallback_serializer),
+            headers=headers,
+            params={"task_id": task_id},
+            timeout=5,
+        )  # 5s timeout
+        response.raise_for_status()
+        print(
+            f"Python (to Go): Message type '{message_type}' sent. Task id: {task_id}. Go responded: {response.status_code}",
+            flush=True,
+        )
+        return True
+    except requests.exceptions.RequestException as e:
+        print(
+            f"Python (to Go): Error sending message type '{message_type}': {e}",
+            flush=True,
+        )
+        print(f"Payload: {payload}")
+        return False
+
+
+def resolve_import_error_msg(e: Exception, task_id: str = "") -> None:
+    print(f"Failed to import GetResolve: {e}")
+    print("Check and ensure DaVinci Resolve installation is correct.")
+    send_message_to_go(
+        "showAlert",
+        {
+            "title": "DaVinci Resolve Error",
+            "message": "Failed to import DaVinci Resolve Python API.",
+            "severity": "error",
+        },
+        task_id=task_id,
+    )
+    return None
+
+
+def get_resolve(task_id: str = "") -> None:
+    global RESOLVE
+
+    script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
+    if script_api_dir:
+        resolve_modules_path = os.path.join(script_api_dir, "Modules")
+        if resolve_modules_path not in sys.path:
+            sys.path.insert(
+                0, resolve_modules_path
+            )  # Prepend to ensure it's checked first
+            print(f"Added to sys.path: {resolve_modules_path}")
+        else:
+            print(f"Already in sys.path: {resolve_modules_path}")
+
+    try:
+        from python_get_resolve import GetResolve
+
+        # import DaVinciResolveScript as bmd
+    except ImportError as e:
+        resolve_import_error_msg(e, task_id)
+        return None
+    except FileNotFoundError as e:
+        resolve_import_error_msg(e, task_id)
+        return None
+    except Exception as e:
+        resolve_import_error_msg(e, task_id)
+        return None
+    resolve_obj = GetResolve()
+
+    if not resolve_obj:
+        resolve_import_error_msg(
+            e=Exception("Failed to import DaVinci Resolve Python API.", task_id)
+        )
+        return None
+
+    RESOLVE = resolve_obj
+
+
 # export timeline to XML
 def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
     """
@@ -239,118 +351,7 @@ def detect_silence_parallel(
     return results
 
 
-def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] = None):
-    global GO_SERVER_PORT
-    if GO_SERVER_PORT == 0:
-        print(
-            "Python Error: Go server port not configured. Cannot send message to Go.",
-            flush=True,
-        )
-        return False
-
-    url = f"http://localhost:{GO_SERVER_PORT}/msg"  # Your Go endpoint for general messages
-
-    message_data = {"type": message_type, "payload": payload}
-    try:
-        headers = {"Content-Type": "application/json"}
-
-        # This is an independent HTTP request from Python to Go
-        def fallback_serializer(obj):
-            return "<BMDObject>"
-
-        response = requests.post(
-            url,
-            data=json.dumps(message_data, default=fallback_serializer),
-            headers=headers,
-            params={"task_id": task_id},
-            timeout=5,
-        )  # 5s timeout
-        response.raise_for_status()
-        print(
-            f"Python (to Go): Message type '{message_type}' sent. Task id: {task_id}. Go responded: {response.status_code}",
-            flush=True,
-        )
-        return True
-    except requests.exceptions.RequestException as e:
-        print(
-            f"Python (to Go): Error sending message type '{message_type}': {e}",
-            flush=True,
-        )
-        print(f"Payload: {payload}")
-        return False
-
-
-def resolve_import_error_msg(e: Exception) -> None:
-    print(f"Failed to import GetResolve: {e}")
-    print("Check and ensure DaVinci Resolve installation is correct.")
-    send_message_to_go(
-        "showAlert",
-        {
-            "title": "DaVinci Resolve Error",
-            "message": "Failed to import DaVinci Resolve Python API.",
-            "severity": "error",
-        },
-    )
-    return None
-
-
-def get_resolve() -> Any:
-    script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
-    if script_api_dir:
-        resolve_modules_path = os.path.join(script_api_dir, "Modules")
-        if resolve_modules_path not in sys.path:
-            sys.path.insert(
-                0, resolve_modules_path
-            )  # Prepend to ensure it's checked first
-            print(f"Added to sys.path: {resolve_modules_path}")
-        else:
-            print(f"Already in sys.path: {resolve_modules_path}")
-
-    try:
-        from python_get_resolve import GetResolve
-
-        # import DaVinciResolveScript as bmd
-    except ImportError as e:
-        resolve_import_error_msg(e)
-        return None
-    except FileNotFoundError as e:
-        resolve_import_error_msg(e)
-        return None
-    except Exception as e:
-        resolve_import_error_msg(e)
-        return None
-    resolve = GetResolve()  # noqa
-
-    if not resolve:
-        resolve_import_error_msg(
-            e=Exception("Failed to import DaVinci Resolve Python API.")
-        )
-        return None
-
-    return resolve
-
-
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
-
-
-# GLOBALS
-RESOLVE = get_resolve()
-TEMP_DIR: str = os.path.join(os.path.dirname(__file__), "..", "wav_files")
-TEMP_DIR = os.path.abspath(TEMP_DIR)
-if not os.path.exists(TEMP_DIR):
-    os.makedirs(TEMP_DIR)
-PROJECT = None
-TIMELINE = None
-MEDIA_POOL = None
-
-# This will be the token Go sends, which Python expects for Go-to-Python commands (future)
-AUTH_TOKEN = None
-ENABLE_COMMAND_AUTH = False  # Master switch for auth on Python's command server
-GO_SERVER_PORT = 0
-
-STANDALONE_MODE = (
-    False  # If True, the script runs independently without a Go server connection.
-)
 
 
 def switch_to_page(page: ResolvePage) -> None:
@@ -705,37 +706,77 @@ def deep_merge_bmd_aware(target_dict: ProjectData, source_dict: dict) -> None:
         target_dict[key] = source_value
 
 
-def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
+def send_result_with_alert(
+    alert_title: str,
+    alert_message: str,
+    task_id: str,
+    alert_severity: str = "error",
+):
+    response_payload = {
+        "status": "error",
+        "message": alert_message,
+        "shouldShowAlert": True,
+        "alertTitle": alert_title,
+        "alertMessage": alert_message,
+        "alertSeverity": alert_severity,
+    }
+
+    send_message_to_go(
+        "taskResult",
+        response_payload,
+        task_id=task_id,
+    )
+
+
+def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global RESOLVE
     global TEMP_DIR
     global PROJECT
     global TIMELINE
     global MEDIA_POOL
     script_start_time: float = time()
-    project_unchanged = False
-    if not RESOLVE and not resync_with_resolve():
+
+    if not RESOLVE:
+        task_id = task_id or ""
+        get_resolve(task_id)
+
+    if not RESOLVE:
         globalz.PROJECT_DATA = {}
+        alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
-        send_message_to_go(
-            "showAlert",
-            {"title": "DaVinci Resolve Error", "message": message, "severity": "error"},
-            task_id=task_id,
-        )
+        send_result_with_alert(alert_title, message, task_id)
+
         send_message_to_go(
             "projectData",
             globalz.PROJECT_DATA,
         )
         return False
 
+    if not RESOLVE.GetProjectManager():
+        PROJECT = None
+        alert_title = "DaVinci Resolve Error"
+        message = "Could not connect to DaVinci Resolve. Is it running?"
+        send_result_with_alert(alert_title, message, task_id)
+
     PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
 
     if not PROJECT:
         globalz.PROJECT_DATA = None
         MEDIA_POOL = None
+        alert_title = "No open project"
         message = "Please open a project and open a timeline."
+
+        response_payload = {
+            "status": "error",
+            "message": message,
+            "shouldShowAlert": True,
+            "alertTitle": alert_title,
+            "alertMessage": message,
+            "alertSeverity": "error",
+        }
         send_message_to_go(
-            "projectData",
-            {"title": "No open Project", "message": message, "severity": "error"},
+            "taskResult",
+            response_payload,
             task_id=task_id,
         )
         send_message_to_go(
@@ -1335,6 +1376,8 @@ def run_python_command_server(listen_port: int):
 
 def init():
     global GO_SERVER_PORT
+    global RESOLVE
+
     parser = argparse.ArgumentParser()
     parser.add_argument("-threshold", type=float)
     parser.add_argument(
@@ -1381,7 +1424,6 @@ def init():
     # Perform other Python initializations...
     print("Python Backend: Internal initialization complete.", flush=True)
 
-    # Signal to Go that Python (including its command server) is ready
     if not signal_go_ready(args.go_port):
         print(
             "Python Backend: CRITICAL - Could not signal main readiness to Go application.",

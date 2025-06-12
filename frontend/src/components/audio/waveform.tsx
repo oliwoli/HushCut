@@ -6,8 +6,15 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js"; // 1. Import Minimap
 import ZoomPlugin from "wavesurfer.js/dist/plugins/zoom.esm.js";
 
-import { main } from "@wails/go/models";
-import { DetectionParams } from "@/types";
+import { useClipParameter } from "@/stores/clipStore";
+
+import { GetOrDetectSilencesWithCache } from "@wails/go/main/App";
+import { useClipStore, defaultParameters, ClipStore } from "@/stores/clipStore";
+import { useStoreWithEqualityFn } from "zustand/traditional";
+import { shallow } from "zustand/shallow";
+import { ActiveClip, DetectionParams } from "@/types";
+import { useSilenceData } from "@/hooks/useSilenceData";
+import { useWaveformData } from "@/hooks/useWaveformData";
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -38,41 +45,94 @@ interface SilencePeriod {
 }
 
 interface WaveformPlayerProps {
-  audioUrl: string;
-  peakData: main.PrecomputedWaveformData | null;
-  clipOriginalStartSeconds: number;
-  silenceData?: SilencePeriod[] | null;
+  activeClip: ActiveClip | null;
   projectFrameRate?: number | 30.0;
-  detectionParams: DetectionParams;
+  httpPort: number
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
-  audioUrl,
-  peakData,
-  clipOriginalStartSeconds,
-  silenceData,
+  activeClip,
   projectFrameRate,
-  detectionParams,
+  httpPort
 }) => {
+
+  if (!activeClip || !projectFrameRate || !httpPort) {
+    // You can return a placeholder here if you want, e.g., <div>Select a clip</div>
+    return null;
+  }
+
+  const clipId = activeClip?.id ?? '';
+
+  const detectionParams: DetectionParams | null = useStoreWithEqualityFn(
+    useClipStore,
+    (s: ClipStore) => {
+      // If there's no active clip, there are no params.
+      if (!clipId) return null;
+
+      const params = s.parameters[clipId];
+      // Construct the DetectionParams object required by the hook.
+      return {
+        loudnessThreshold: params?.threshold ?? defaultParameters.threshold,
+        minSilenceDurationSeconds: params?.minDuration ?? defaultParameters.minDuration,
+        paddingLeftSeconds: params?.paddingLeft ?? defaultParameters.paddingLeft,
+        paddingRightSeconds: params?.paddingRight ?? defaultParameters.paddingRight,
+      };
+    },
+    shallow
+  );
+  // const effectiveParams = useStoreWithEqualityFn(
+  //   useClipStore,
+  //   (s: ClipStore) => {
+  //     const params = s.parameters[clipId];
+  //     return {
+  //       threshold: params?.threshold ?? defaultParameters.threshold,
+  //       minDuration: params?.minDuration ?? defaultParameters.minDuration,
+  //       paddingLeft: params?.paddingLeft ?? defaultParameters.paddingLeft,
+  //       paddingRight: params?.paddingRight ?? defaultParameters.paddingRight,
+  //     };
+  //   },
+  //   shallow
+  // );
+
+  const {
+    peakData,
+    cutAudioSegmentUrl
+  } = useWaveformData(activeClip, projectFrameRate, httpPort);
+
+
+  const {
+    silenceData
+  } = useSilenceData(activeClip, detectionParams, projectFrameRate || null);
+
+  const clipOriginalStartSeconds = activeClip.sourceStartFrame / projectFrameRate
+  const clipOriginalStartSecondsRef = useRef(clipOriginalStartSeconds);
+  useEffect(() => {
+
+    clipOriginalStartSecondsRef.current = clipOriginalStartSeconds;
+  }, [clipOriginalStartSeconds]);
+
+
+  const audioUrl = activeClip?.previewUrl
+  const [threshold] = useClipParameter(clipId, "threshold");
+
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
-  const timelineContainerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
   const addRegionsTimeoutRef = useRef<any | null>(null); // Ref to manage the timeout for adding regions
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+
+  //const isLoading = isWaveformLoading || isSilenceLoading;
   const duration = peakData?.duration || 0;
   // const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
 
-  const threshold = detectionParams.loudnessThreshold;
   const silenceDataRef = useRef(silenceData);
   useEffect(() => {
     silenceDataRef.current = silenceData;
   }, [silenceData]);
-  const [debouncedSilenceData] = useDebounce(silenceData, 90);
   const [zoomTrigger, setZoomTrigger] = useState(0);
   const [debouncedZoomTrigger] = useDebounce(zoomTrigger, 150); // adjust delay as needed
 
@@ -81,11 +141,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   useEffect(() => {
     skipRegionsEnabledRef.current = skipRegionsEnabled;
   }, [skipRegionsEnabled]);
-
-  const clipOriginalStartSecondsRef = useRef(clipOriginalStartSeconds);
-  useEffect(() => {
-    clipOriginalStartSecondsRef.current = clipOriginalStartSeconds;
-  }, [clipOriginalStartSeconds]);
 
   const segmentDurationRef = useRef(duration);
   useEffect(() => {
@@ -117,6 +172,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     if (!waveformContainerRef.current || !minimapContainerRef.current) {
       return;
     }
+
     if (
       !audioUrl ||
       !peakData ||
@@ -163,7 +219,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       fillParent: true,
       barAlign: "bottom",
       interact: true,
-      url: audioUrl,
+      url: cutAudioSegmentUrl || audioUrl,
       peaks: [peakData.peaks],
       duration: peakData.duration,
       normalize: false,
@@ -378,7 +434,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
       const currentRegionsPlugin = regionsPluginRef.current;
       if (!currentRegionsPlugin) return;
-
       currentRegionsPlugin.clearRegions();
       const regionsContainerEl = (currentRegionsPlugin as any)
         .regionsContainer as HTMLElement | undefined;
@@ -394,12 +449,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       if (
         !sDataToProcess ||
         sDataToProcess.length === 0 ||
-        duration <= 0 ||
-        typeof clipOriginalStartSeconds !== "number"
+        duration <= 0
       ) {
         return;
       }
-
       addRegionsTimeoutRef.current = setTimeout(() => {
         if (!regionsPluginRef.current) return;
 
@@ -419,9 +472,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             if (finalStart < finalEnd) {
               try {
                 regionsPluginRef.current!.addRegion({
-                  id: `silence-marker_${index}_${period.start.toFixed(
-                    2
-                  )}-${period.end.toFixed(2)}`,
+                  id: `silence-marker_${index}_${period.start}-${period.end}`,
                   start: finalStart,
                   end: finalEnd,
                   color: "rgba(250, 7, 2, 0.15)",
@@ -435,7 +486,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           }
         });
         addRegionsTimeoutRef.current = null;
-      }, 300);
+      }, 0);
     },
     [clipOriginalStartSeconds, duration]
   );
@@ -447,9 +498,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       regionsPluginRef.current &&
       duration > 0
     ) {
-      updateSilenceRegions(debouncedSilenceData);
+      updateSilenceRegions(silenceData);
     }
-  }, [debouncedSilenceData, isLoading, updateSilenceRegions, duration]);
+  }, [silenceData, isLoading, updateSilenceRegions, duration]);
 
   useEffect(() => {
     if (silenceDataRef.current) {
