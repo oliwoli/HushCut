@@ -12,7 +12,6 @@ const _MinDurationControl: React.FC<MinDurationControlProps> = () => {
     const currentClipId = useClipStore(s => s.currentClipId);
 
     const [minDuration, setMinDuration] = useClipParameter(
-        currentClipId ?? '', // Pass a dummy ID if null
         'minDuration'
     );
 

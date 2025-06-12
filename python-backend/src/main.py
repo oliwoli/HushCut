@@ -177,8 +177,12 @@ def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
         timeline (Any): The timeline object to export.
         file_path (str): The path where the XML file will be saved.
     """
+    global RESOLVE
     if not timeline:
         print("No timeline to export.")
+        return
+
+    if not RESOLVE:
         return
 
     # Assuming the Resolve API has a method to export timelines
@@ -198,6 +202,11 @@ def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
         timeline (Any): The timeline object to export.
         file_path (str): The path where the XML file will be saved.
     """
+    global RESOLVE
+
+    if not RESOLVE:
+        return
+
     if not timeline:
         print("No timeline to export.")
         return
@@ -356,6 +365,9 @@ ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
 
 def switch_to_page(page: ResolvePage) -> None:
     global RESOLVE
+    if not RESOLVE:
+        return
+
     current_page = RESOLVE.GetCurrentPage()
     if current_page != page:
         RESOLVE.OpenPage(page)
@@ -728,6 +740,20 @@ def send_result_with_alert(
     )
 
 
+def send_progress_update(
+    task_id: str,
+    progress: float,
+    message: str = "error",
+):
+    response_payload = {"message": message, "progress": progress}
+
+    send_message_to_go(
+        "taskUpdate",
+        response_payload,
+        task_id=task_id,
+    )
+
+
 def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global RESOLVE
     global TEMP_DIR
@@ -818,7 +844,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
             }
             send_message_to_go("taskResult", response_payload, task_id=task_id)
             return
-        print(f"Timeline Name: {globalz.PROJECT_DATA['timeline']['name']}")
+        # print(f"Timeline Name: {globalz.PROJECT_DATA['timeline']['name']}")
 
     if sync:
         print("just syncing, exiting")
@@ -835,6 +861,11 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         )
         return
 
+    if not globalz.PROJECT_DATA:
+        alert_message = "An unexpected error happened during sync. Could not get project data from Davinci."
+        send_result_with_alert("unexpected sync error", alert_message, task_id)
+        return
+
     # safety check: do we have bmd items?
     all_timeline_items = (
         globalz.PROJECT_DATA["timeline"]["video_track_items"]
@@ -843,6 +874,8 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     if not all_timeline_items:
         print("critical error, can't continue")
+        alert_message = "An unexpected error happened during sync. Could not get timeline items from Davinci."
+        send_result_with_alert("unexpected sync error", alert_message, task_id)
         return
 
     some_bmd_item = all_timeline_items[0]["bmd_item"]
@@ -852,6 +885,9 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     # export state of current timeline to otio, EXPENSIVE
     input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
+
+    send_progress_update(task_id=task_id, progress=50.0, message="ah")
+
     export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
     print(f"Exported timeline to OTIO in {input_otio_path}")
 

@@ -25,6 +25,7 @@ export function deriveAllClipDetectionParams(
     detectionParams[clipId] = {
       loudnessThreshold: params.threshold,
       minSilenceDurationSeconds: params.minDuration,
+      minContentDuration: params.minContent,
       paddingLeftSeconds: params.paddingLeft,
       paddingRightSeconds: params.paddingRight,
     };

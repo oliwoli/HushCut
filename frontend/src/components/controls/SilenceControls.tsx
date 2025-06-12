@@ -1,25 +1,21 @@
 // components/SilenceControls.tsx
 
-import React, { useState, useCallback, useEffect } from 'react';
-import { useDebounce } from 'use-debounce';
-import { useClipStore, useClipParameter, defaultParameters, ClipStore } from '@/stores/clipStore';
-import { shallow } from 'zustand/shallow';
+import { ClipStore, defaultParameters, useClipParameter, useClipStore } from '@/stores/clipStore';
 import { Link, Unlink } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useDebounce } from 'use-debounce';
+import { shallow } from 'zustand/shallow';
 
 // Import your reusable UI components
-import { Slider } from '@/components/ui/slider';
-import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import ResetButton from './ResetButton'; // Assuming this exists
+import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
+import ResetButton from './ResetButton'; // Assuming this exists
 
-// =====================================================================
-// Part 1: The Private, Self-Contained Minimum Duration Control
-// This is the same component from our previous step.
-// =====================================================================
 const _MinDurationControl = React.memo(() => {
     const currentClipId = useClipStore(s => s.currentClipId);
-    const [minDuration, setMinDuration] = useClipParameter(currentClipId ?? '', 'minDuration');
+    const [minDuration, setMinDuration] = useClipParameter('minDuration');
     const setParameter = useClipStore(s => s.setParameter);
 
     const resetMinDuration = useCallback(() => {
@@ -70,15 +66,8 @@ const _PaddingControl = React.memo(() => {
     const { paddingLeft, paddingRight, setParameter, setAllParameters } = useStoreWithEqualityFn(
         useClipStore,
         (s: ClipStore) => {
-            // FIX:
-            // 1. First, safely get the parameters for the active clip.
-            //    If currentClipId is null, 'activeClipParams' will be undefined.
-            //    This avoids using `null` as an index.
             const activeClipParams = currentClipId ? s.parameters[currentClipId] : undefined;
 
-            // 2. NOW, we can safely access the properties.
-            //    If 'activeClipParams' is undefined, optional chaining (?.) short-circuits,
-            //    and the nullish coalescing operator (??) provides the default value.
             return {
                 paddingLeft: activeClipParams?.paddingLeft ?? defaultParameters.paddingLeft,
                 paddingRight: activeClipParams?.paddingRight ?? defaultParameters.paddingRight,
@@ -155,11 +144,14 @@ const _PaddingControl = React.memo(() => {
     );
 });
 
+const _MinContentControl = React.memo(() => {
+    const currentClipId = useClipStore(s => s.currentClipId);
+    return (
+        <></>
+    );
+});
 
-// =====================================================================
-// Part 3: The Main Exported Component
-// This component's only job is layout. It has no state and will not re-render.
-// =====================================================================
+
 export const SilenceControls = () => {
     return (
         <div className="space-y-4 w-full p-5">

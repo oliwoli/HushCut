@@ -2,20 +2,23 @@
 import React, { useEffect, useState } from 'react';
 import { LogSlider } from "@/components/ui-custom/volumeSlider";
 import { useDebounce } from 'use-debounce';
-import { useClipStore, useClipParameter } from '@/stores/clipStore';
+import { useClipStore, useClipParameter, useIsClipModified, defaultParameters } from '@/stores/clipStore';
 
 interface ThresholdControlProps {
-    clipId: string
 }
 
 
-const _ThresholdControl: React.FC<ThresholdControlProps> = ({ clipId }) => {
-    const [threshold, setThreshold] = useClipParameter(clipId, "threshold");
+const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
+    const clipId = useClipStore(s => s.currentClipId);
+    if (!clipId) return null
+    const [threshold, setThreshold] = useClipParameter("threshold");
 
-    const resetThreshold = useClipStore(s => s.resetThreshold);
+
+    const isModified = useIsClipModified();
+
 
     const [immediateValue, setImmediateValue] = useState(threshold);
-    const [debouncedValue] = useDebounce(immediateValue, 300); // debounce for smoother updates
+    const [debouncedValue] = useDebounce(immediateValue, 30); // debounce for smoother updates
 
     useEffect(() => {
         setThreshold(debouncedValue);
@@ -30,10 +33,18 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = ({ clipId }) => {
             <LogSlider
                 defaultDb={threshold}
                 onGainChange={setImmediateValue}
-                onDoubleClick={() => resetThreshold(clipId)}
+                onDoubleClick={() => {
+                    console.log("default threshold:", defaultParameters.threshold)
+                    setImmediateValue(defaultParameters.threshold);
+                }}
             />
             <div className="flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300">
                 <p className="text-base/tight">
+                    Silence
+                    <br />
+                    Threshold
+                </p>
+                <p className={`text-base/tight ${!isModified ? 'text-yellow-400' : ''}`}>
                     Silence
                     <br />
                     Threshold

@@ -74,6 +74,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       return {
         loudnessThreshold: params?.threshold ?? defaultParameters.threshold,
         minSilenceDurationSeconds: params?.minDuration ?? defaultParameters.minDuration,
+        minContentDuration: params?.minContent ?? defaultParameters.minContent,
         paddingLeftSeconds: params?.paddingLeft ?? defaultParameters.paddingLeft,
         paddingRightSeconds: params?.paddingRight ?? defaultParameters.paddingRight,
       };
@@ -113,7 +114,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
 
   const audioUrl = activeClip?.previewUrl
-  const [threshold] = useClipParameter(clipId, "threshold");
+  const [threshold] = useClipParameter("threshold");
 
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container

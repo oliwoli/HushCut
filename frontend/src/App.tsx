@@ -44,14 +44,24 @@ EventsOn("projectDataReceived", (projectData: main.ProjectDataPayload) => {
 });
 
 
+EventsOn("taskUpdate", (data) => {
+  console.log("Event: taskUpdate", data);
+  // Simple alert for now, TODO: use nicer shadcn component
+  alert(`Update! ${data}`);
+});
+
+
 const DEFAULT_THRESHOLD = -30;
 const DEFAULT_MIN_DURATION = 1.0;
 const MIN_DURATION_LIMIT = 0.01;
 const DEFAULT_PADDING = 0.25;
+const MIN_CONTENT_DURATION = 0.5
+
 
 const getDefaultDetectionParams = (): DetectionParams => ({
   loudnessThreshold: DEFAULT_THRESHOLD,
   minSilenceDurationSeconds: DEFAULT_MIN_DURATION,
+  minContentDuration: MIN_DURATION_LIMIT,
   paddingLeftSeconds: DEFAULT_PADDING,
   paddingRightSeconds: DEFAULT_PADDING,
   // If you want to store paddingLocked per-clip, add it here:
@@ -306,7 +316,6 @@ function AppContent() {
   };
 
   const titleBarHeight = "2.25rem";
-
   return (
     <>
       <div
@@ -322,7 +331,7 @@ function AppContent() {
           {projectData?.files && currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
-              currentFileId={currentActiveClip?.id || null}
+              currentFileId={currentClipId}
               onFileChange={handleAudioClipSelection}
               fps={projectData?.timeline?.fps}
               disabled={
@@ -338,7 +347,7 @@ function AppContent() {
             <div className="flex flex-row space-x-6 items-start">
               {currentClipId && (
                 <>
-                  <ThresholdControl clipId={currentClipId} />
+                  <ThresholdControl key={currentClipId} />
                   <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible">
                     {httpPort &&
                       currentActiveClip &&
@@ -357,7 +366,7 @@ function AppContent() {
               )}
             </div>
             <div className="space-y-2 w-full p-5">
-              <SilenceControls />
+              <SilenceControls key={currentClipId} />
             </div>
             <div className="flex space-y-8 w-full">
               <div className="items-center space-y-2 mt-4">
@@ -369,15 +378,6 @@ function AppContent() {
                   />
                 )}
               </div>
-              {/* <Toaster
-                    position="bottom-right"
-                    toastOptions={{
-                      classNames: {
-                        toast:
-                          "min-w-[10px] w-auto bg-red-400 mt-10 z-10 absolute",
-                      },
-                    }}
-                  /> */}
             </div>
 
           </div>
@@ -410,7 +410,6 @@ export default function App() {
         <GlobalAlertDialog />
       </ClientPortal>
 
-      {/* You would do the same for your title bar */}
       <ClientPortal targetId="title-bar-root">
         {MemoizedTitleBar}
       </ClientPortal>
