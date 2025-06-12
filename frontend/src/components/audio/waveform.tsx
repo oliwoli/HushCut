@@ -1,5 +1,5 @@
 import { PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react";
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
@@ -435,7 +435,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           }
         });
         addRegionsTimeoutRef.current = null;
-      }, 30);
+      }, 300);
     },
     [clipOriginalStartSeconds, duration]
   );
@@ -502,8 +502,35 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     showHoursFormat
   );
 
+  const skipClass = useMemo(() => {
+    return skipRegionsEnabled
+      ? "text-amber-500 hover:text-amber-400"
+      : "text-stone-500 dark:hover:text-gray-400";
+  }, [skipRegionsEnabled]);
+
+  const skipTitle = useMemo(() => {
+    return skipRegionsEnabled
+      ? "Disable skipping silent regions"
+      : "Enable skipping silent regions";
+  }, [skipRegionsEnabled]);
+
+  const SkipButton = useMemo(() => {
+    return memo(function SkipButton() {
+      return (
+        <button
+          onClick={toggleSkipRegions}
+          className={`p-1.5 rounded flex items-center text-xs ${skipClass}`}
+          title={skipTitle}
+        >
+          <RedoDotIcon size={21} className="mr-1" />
+          {/* Optional text: {skipRegionsEnabled ? "Skip ON" : "Skip OFF"} */}
+        </button>
+      );
+    });
+  }, [toggleSkipRegions, skipClass, skipTitle]);
+
   return (
-    <div className="mx-2">
+    <>
       <div
         ref={waveformContainerRef}
         className="h-[260px] w-full mt-2 bg-[#2c2d32] border-2 border-stone-900 rounded-md box-border overflow-hidden relative"
@@ -542,22 +569,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             )}
           </button>
           {!isLoading && duration > 0 && (
-            <button
-              onClick={toggleSkipRegions}
-              className={`p-1.5 rounded flex items-center text-xs ${
-                skipRegionsEnabled
-                  ? "text-amber-500 hover:text-amber-400"
-                  : "text-stone-500 dark:hover:text-gray-400"
-              }`}
-              title={
-                skipRegionsEnabled
-                  ? "Disable skipping silent regions"
-                  : "Enable skipping silent regions"
-              }
-            >
-              <RedoDotIcon size={21} className="mr-1" />
-              {/* Optional text: {skipRegionsEnabled ? "Skip ON" : "Skip OFF"} */}
-            </button>
+            <SkipButton />
           )}
           {!isLoading && duration > 0 && (
             <span className="ml-2 text-xs gap-1.5 flex pt-1 text-gray-400/80 font-mono tracking-tighter mb-[3px]">
@@ -567,7 +579,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 };
 

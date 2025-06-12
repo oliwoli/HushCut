@@ -19,18 +19,30 @@ function AlertDialogTrigger({
 }
 
 function AlertDialogPortal({
+  children,
   ...props
-}: AlertDialogPrimitive.AlertDialogPortalProps) {
+}: AlertDialogPrimitive.AlertDialogPortalProps & { children?: React.ReactNode }) {
+  // This component now has no internal state or effects.
+  // We can only run this on the client, so we add a check.
+  if (typeof window === "undefined") {
+    // Don't render on the server.
+    return null;
+  }
 
-  // This hook ensures we only access `document` on the client-side.
-  const [container, setContainer] = React.useState<HTMLElement | null>(null);
-  React.useEffect(() => {
-    setContainer(document.getElementById('overlays'));
-  }, []);
+  // Find the container synchronously. Since it's in index.html, it will be found.
+  const container = document.getElementById('overlays');
+
+  // We must return null if the container doesn't exist to prevent errors.
+  if (!container) {
+    console.error("Portal target #overlays not found in the DOM.");
+    return null;
+  }
 
   return (
-    <AlertDialogPrimitive.Portal container={container} data-slot="alert-dialog-portal" {...props} />
-  )
+    <AlertDialogPrimitive.Portal container={container} {...props}>
+      {children}
+    </AlertDialogPrimitive.Portal>
+  );
 }
 
 function AlertDialogOverlay({

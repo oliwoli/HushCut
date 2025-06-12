@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { EventsOn } from "@wails/runtime";
-
-// 1. We switch back to AlertDialog because it has the desired persistence.
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,11 +9,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useBusy } from "@/context/useBusy";
 
 interface AlertData {
   title: string;
   message: string;
-  severity?: "info" | "warning" | "error";
 }
 
 const GlobalAlertDialog = () => {
@@ -23,68 +21,80 @@ const GlobalAlertDialog = () => {
   const [alertData, setAlertData] = useState<AlertData>({
     title: "",
     message: "",
-    severity: "info",
   });
 
-  const unsubscribeRef = useRef<(() => void) | null>(null);
+  const isBusy = useBusy(s => s.isBusy);
+  const setIsBusy = useBusy(s => s.setIsBusy);
+
+  const alertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handler = (data: any) => {
-      console.log("Event: showAlert", data);
-      setAlertData({
-        title: data.title || "No title",
-        message: data.message || "No message",
-        severity: data.severity || "info",
-      });
-      setAlertOpen(true);
+      alertTimerRef.current = setTimeout(() => {
+        if (isBusy) {
+          setAlertData({
+            title: data.title || "No title",
+            message: data.message || "No message",
+          });
+          setAlertOpen(true);
+        } else {
+          console.warn("showAlert event received, but app is not busy. Ignoring.");
+        }
+      }, 50)
     };
 
-    unsubscribeRef.current = EventsOn("showAlert", handler);
-
+    const unsubscribe = EventsOn("showAlert", handler);
     return () => {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-      }
+      if (unsubscribe) unsubscribe();
     };
   }, []);
 
-  // 2. This is the "hack" you proposed, implemented in a useEffect hook.
+  // Pointer-events logic
   useEffect(() => {
     const rootEl = document.getElementById('root');
+    let timerId;
 
     if (alertOpen) {
-      // Radix applies its style changes in a microtask. To ensure our override
-      // runs *after* Radix, we use a setTimeout with a delay of 0.
-      const timerId = setTimeout(() => {
-        // Force the body to be interactive, overriding Radix's style.
+      console.log("opening alert!")
+      timerId = setTimeout(() => {
         document.body.style.pointerEvents = 'auto';
-        // Apply the 'none' style to our main app container instead.
-        if (rootEl) {
-          rootEl.style.pointerEvents = 'none';
-        }
+        if (rootEl) rootEl.style.pointerEvents = 'none';
       }, 0);
 
-      return () => clearTimeout(timerId);
-
     } else {
-      // When the dialog closes, clean up our custom styles.
-      document.body.style.pointerEvents = '';
-      if (rootEl) {
-        rootEl.style.pointerEvents = '';
-      }
+      // Cleanup styles after the closing animation.
+      timerId = setTimeout(() => {
+        document.body.style.pointerEvents = '';
+        if (rootEl) rootEl.style.pointerEvents = '';
+      }, 200);
     }
-  }, [alertOpen]); // This effect runs whenever the dialog opens or closes.
 
+    return () => clearTimeout(timerId);
+  }, [alertOpen]);
+
+  // NEW: Custom handler to release the lock when the dialog closes.
+  const handleOpenChange = (isOpen: boolean) => {
+    setAlertOpen(isOpen);
+    if (!isOpen) {
+      console.log("closing alert!")
+      setIsBusy(false);
+    }
+    else {
+      console.log("opening alert!")
+    }
+  };
 
   return (
-    <AlertDialog open={alertOpen} onOpenChange={setAlertOpen}>
+    // Use our new handler for onOpenChange
+    <AlertDialog open={alertOpen} onOpenChange={handleOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{alertData.title}</AlertDialogTitle>
           <AlertDialogDescription>{alertData.message}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogAction onClick={() => setAlertOpen(false)}>
+          {/* AlertDialogAction will trigger onOpenChange(false) automatically */}
+          <AlertDialogAction>
             Continue
           </AlertDialogAction>
         </AlertDialogFooter>

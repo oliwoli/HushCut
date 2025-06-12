@@ -22,16 +22,12 @@ export function GetGoServerPort() {
   return window['go']['main']['App']['GetGoServerPort']();
 }
 
-export function GetLogarithmicWaveform(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['GetLogarithmicWaveform'](arg1, arg2, arg3, arg4, arg5);
-}
-
 export function GetOrDetectSilencesWithCache(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['GetOrDetectSilencesWithCache'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
-export function GetOrGenerateWaveformWithCache(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['GetOrGenerateWaveformWithCache'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function GetOrGenerateWaveformWithCache(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['GetOrGenerateWaveformWithCache'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function GetProjectDataPayloadType() {
@@ -40,6 +36,10 @@ export function GetProjectDataPayloadType() {
 
 export function GetPythonReadyStatus() {
   return window['go']['main']['App']['GetPythonReadyStatus']();
+}
+
+export function GetWaveform(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['GetWaveform'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function LaunchHttpServer(arg1) {
@@ -52,6 +52,10 @@ export function LaunchPythonBackend(arg1, arg2) {
 
 export function MakeFinalTimeline(arg1) {
   return window['go']['main']['App']['MakeFinalTimeline'](arg1);
+}
+
+export function ProcessWavToLinearPeaks(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ProcessWavToLinearPeaks'](arg1, arg2, arg3, arg4);
 }
 
 export function ProcessWavToLogarithmicPeaks(arg1, arg2, arg3, arg4, arg5, arg6) {

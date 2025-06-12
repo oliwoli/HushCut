@@ -8,18 +8,21 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react({
+      babel: {
+        plugins: [["babel-plugin-react-compiler"]],
+      }
+    }), // Uses Babel with .babelrc or babel.config.js
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
-      // This key '@' must exactly match what you use in your imports (e.g., import ... from '@/components')
-      // The value must be an absolute path to your 'src' directory (or wherever '@/' should point)
       '@': path.resolve(__dirname, './src'),
       '@wails': path.resolve(__dirname, './wailsjs'), // 👈 Alias for wailsjs
-      // If shadcn created components in a different subfolder like 'src/components',
-      // and you aliased '@/' to 'src/', then imports like '@/components/ui/slider'
-      // should correctly resolve to 'src/components/ui/slider'.
     },
   },
 })

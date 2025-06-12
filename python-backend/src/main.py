@@ -818,6 +818,15 @@ def main(sync: bool = False, task_id: Optional[str] = None) -> Optional[bool]:
 
     append_and_link_timeline_items()
 
+    response_payload = {
+        "status": "success",
+        "message": "Edit successful!",
+    }
+
+    send_message_to_go(
+        message_type="taskResult", payload=response_payload, task_id=task_id
+    )
+
     # apply_edits()
 
 
@@ -1253,7 +1262,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                 )
                 misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output_path)
 
-                main()
+                main(sync=False, task_id=task_id)
                 return
 
             elif command == "saveProject":

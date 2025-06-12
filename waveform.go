@@ -290,3 +290,213 @@ processingLoop:
 		Peaks:    processedPeaks,
 	}, nil
 }
+
+
+func (a *App) ProcessWavToLinearPeaks(
+	webInputPath string,
+	samplesPerPixel int,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
+) (*PrecomputedWaveformData, error) {
+
+	if samplesPerPixel < 1 {
+		return nil, fmt.Errorf("samples_per_pixel must be at least 1")
+	}
+	if clipStartSeconds < 0 {
+		return nil, fmt.Errorf("ClipStartSeconds must be non-negative")
+	}
+	if clipEndSeconds <= clipStartSeconds {
+		return nil, fmt.Errorf("ClipEndSeconds (%.2f) must be greater than ClipStartSeconds (%.2f)", clipEndSeconds, clipStartSeconds)
+	}
+
+	absPath, err := a.resolvePublicAudioPath(webInputPath)
+	if err != nil {
+		return nil, fmt.Errorf("path resolution error: %w", err)
+	}
+
+	file, err := os.Open(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open input file '%s': %w", absPath, err)
+	}
+	defer file.Close()
+
+	decoder := wav.NewDecoder(file)
+	if !decoder.IsValidFile() {
+		return nil, fmt.Errorf("'%s' is not a valid WAV file", absPath)
+	}
+
+	// This function specifically supports 16-bit PCM WAV files.
+	if decoder.WavAudioFormat != 1 || decoder.BitDepth != 16 {
+		return nil, fmt.Errorf("unsupported WAV format: only 16-bit PCM is supported (got %d-bit, format %d)", decoder.BitDepth, decoder.WavAudioFormat)
+	}
+
+	format := decoder.Format()
+	if format == nil {
+		return nil, fmt.Errorf("could not retrieve audio format details from '%s'", absPath)
+	}
+	sampleRate := int(format.SampleRate)
+	if sampleRate == 0 {
+		return nil, fmt.Errorf("file '%s' reported 0 sample rate", absPath)
+	}
+	inputChannels := int(format.NumChannels)
+	if inputChannels == 0 {
+		return nil, fmt.Errorf("file '%s' reported 0 channels", absPath)
+	}
+
+	// Determine effective clip range based on audio duration, if known
+	actualClipStartSeconds := clipStartSeconds
+	actualClipEndSeconds := clipEndSeconds
+
+	audioFileDuration, err := decoder.Duration() // This is time.Duration
+	if err == nil {                              // Duration is known
+		fileDurationSeconds := audioFileDuration.Seconds()
+		if actualClipStartSeconds >= fileDurationSeconds {
+			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil // Clip starts after or at EOF
+		}
+		if actualClipEndSeconds > fileDurationSeconds {
+			actualClipEndSeconds = fileDurationSeconds // Trim clip end to file duration
+		}
+		if actualClipEndSeconds <= actualClipStartSeconds { // After trimming, clip might be empty/invalid
+			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil
+		}
+	}
+	// If err != nil for decoder.Duration(), we proceed without knowing the exact file end, relying on EOF.
+
+	startFrameOffset := int(actualClipStartSeconds * float64(sampleRate))
+	endFrameOffset := int(actualClipEndSeconds * float64(sampleRate))
+
+	if startFrameOffset >= endFrameOffset {
+		effectiveDuration := actualClipEndSeconds - actualClipStartSeconds
+		if effectiveDuration < 0 {
+			effectiveDuration = 0
+		}
+		return &PrecomputedWaveformData{Duration: effectiveDuration, Peaks: []float64{}}, nil
+	}
+
+	numFramesInClip := endFrameOffset - startFrameOffset
+	expectedNumPeaks := 100 // Default capacity
+	if numFramesInClip > 0 && samplesPerPixel > 0 {
+		expectedNumPeaks = (numFramesInClip + samplesPerPixel - 1) / samplesPerPixel
+	}
+
+	processedPeaks := make([]float64, 0, expectedNumPeaks)
+	var currentMaxAbsSampleInBlock int32 = 0
+	samplesProcessedInBlock := 0
+	currentFrameInFile := 0 // Tracks the current frame index from the beginning of the file
+
+	chunkSize := 8192 // Number of samples (not frames) in each read buffer
+	if chunkSize%inputChannels != 0 {
+		chunkSize = (chunkSize/inputChannels + 1) * inputChannels
+	}
+	pcmBuffer := &audio.IntBuffer{
+		Format: format,
+		Data:   make([]int, chunkSize),
+	}
+
+	processingLoop:
+	for {
+		if currentFrameInFile >= endFrameOffset {
+			break
+		}
+
+		numSamplesRead, readErr := decoder.PCMBuffer(pcmBuffer)
+
+		if numSamplesRead == 0 {
+			if readErr != io.EOF && readErr != nil {
+				return nil, fmt.Errorf("error reading PCM chunk: %w", readErr)
+			}
+			break // EOF or other reason for no samples
+		}
+
+		samplesInChunk := pcmBuffer.Data[:numSamplesRead]
+		numFramesInChunk := numSamplesRead / inputChannels
+
+		for i := 0; i < numFramesInChunk; i++ {
+			frameToProcessIndex := currentFrameInFile
+			currentFrameInFile++
+
+			if frameToProcessIndex >= endFrameOffset {
+				break processingLoop
+			}
+			if frameToProcessIndex < startFrameOffset {
+				continue
+			}
+
+			var maxSampleInFrame int32 = 0
+			for ch := 0; ch < inputChannels; ch++ {
+				sampleVal := int32(samplesInChunk[i*inputChannels+ch])
+				absVal := sampleVal
+				if absVal < 0 {
+					absVal = -absVal
+				}
+				if absVal > maxSampleInFrame {
+					maxSampleInFrame = absVal
+				}
+			}
+
+			if maxSampleInFrame > currentMaxAbsSampleInBlock {
+				currentMaxAbsSampleInBlock = maxSampleInFrame
+			}
+			samplesProcessedInBlock++
+
+			if samplesProcessedInBlock >= samplesPerPixel {
+				// --- Linear Peak Calculation ---
+				// Normalize the max absolute sample value. 32767 is the max for 16-bit audio.
+				normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
+				if normalizedLinearPeak > 1.0 { // Clamp to 1.0 for safety
+					normalizedLinearPeak = 1.0
+				}
+				processedPeaks = append(processedPeaks, normalizedLinearPeak)
+				// --- End of Linear Peak Calculation ---
+
+				currentMaxAbsSampleInBlock = 0
+				samplesProcessedInBlock = 0
+			}
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("error reading PCM chunk (mid-file): %w", readErr)
+		}
+	}
+
+	// Handle any remaining samples for the last data point if they fall within the clip
+	if samplesProcessedInBlock > 0 {
+		// --- Final Linear Peak Calculation ---
+		normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
+		if normalizedLinearPeak > 1.0 {
+			normalizedLinearPeak = 1.0
+		}
+		processedPeaks = append(processedPeaks, normalizedLinearPeak)
+		// --- End of Final Linear Peak Calculation ---
+	}
+
+	// Calculate the final duration of the segment for which peaks were generated.
+	var finalOutputDuration float64
+	effectiveDataEndTimeSeconds := float64(currentFrameInFile) / float64(sampleRate)
+	finalEffectiveEndBoundary := actualClipEndSeconds
+	if effectiveDataEndTimeSeconds < actualClipEndSeconds {
+		finalEffectiveEndBoundary = effectiveDataEndTimeSeconds
+	}
+
+	if finalEffectiveEndBoundary > actualClipStartSeconds {
+		finalOutputDuration = finalEffectiveEndBoundary - actualClipStartSeconds
+	} else {
+		finalOutputDuration = 0
+	}
+
+	if finalOutputDuration < 0 {
+		finalOutputDuration = 0
+	}
+
+	if len(processedPeaks) == 0 {
+		finalOutputDuration = 0
+	}
+
+	return &PrecomputedWaveformData{
+		Duration: finalOutputDuration,
+		Peaks:    processedPeaks,
+	}, nil
+}

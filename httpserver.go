@@ -33,6 +33,11 @@ type PythonMessage struct {
 	Payload json.RawMessage `json:"payload"` // Delay parsing payload until type is known
 }
 
+type TaskUpdatePayload struct {
+    Message  string  `json:"message"`
+    Progress float64 `json:"progress,omitempty"` // Optional progress percentage (0.0 to 1.0)
+}
+
 type ToastPayload struct {
 	Message   string `json:"message"`
 	ToastType string `json:"toastType,omitempty"` // e.g., "info", "success", "warning", "error"
@@ -517,11 +522,37 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("msgEndpoint: Received type: '%s'", msg.Type)
-	taskIDFromQuery := r.URL.Query().Get("task_id")
+	taskID := r.URL.Query().Get("task_id")
+
+	if msg.Type == "taskUpdate" {
+        if taskID == "" {
+            http.Error(w, "'taskUpdate' requires a task_id", http.StatusBadRequest)
+            return
+        }
+
+        var updateData TaskUpdatePayload
+        if err := json.Unmarshal(msg.Payload, &updateData); err != nil {
+            http.Error(w, "Invalid payload for 'taskUpdate'", http.StatusBadRequest)
+            log.Printf("msgEndpoint: Error unmarshalling taskUpdate payload: %v", err)
+            return
+        }
+
+        // Emit an event to the frontend with the progress update.
+        // The frontend will listen for "taskProgressUpdate".
+        runtime.EventsEmit(a.ctx, "taskProgressUpdate", map[string]interface{}{
+            "taskID":   taskID,
+            "message":  updateData.Message,
+            "progress": updateData.Progress,
+        })
+
+        w.WriteHeader(http.StatusOK)
+        fmt.Fprintln(w, "Task update received.")
+        return // IMPORTANT: We are done. We do not touch the pendingTasks channel.
+    }
 
 	// --- New Primary Handler for Task-Related Responses from Python ---
 	if msg.Type == "taskResult" {
-		if taskIDFromQuery == "" {
+		if taskID == "" {
 			log.Printf("msgEndpoint: Received 'taskResult' without task_id. Ignoring for task channel.")
 			// Optionally, if it has ShouldShowAlert, you could emit a generic alert, but it's cleaner if Python always includes task_id for these.
 			http.Error(w, "'taskResult' requires a task_id", http.StatusBadRequest)
@@ -535,23 +566,23 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("msgEndpoint: Received 'taskResult' for taskID '%s'. Status: '%s', ShouldShowAlert: %t",
-			taskIDFromQuery, taskData.Status, taskData.ShouldShowAlert)
+			taskID, taskData.Status, taskData.ShouldShowAlert)
 
 		a.pendingMu.Lock()
-		respCh, ok := a.pendingTasks[taskIDFromQuery]
+		respCh, ok := a.pendingTasks[taskID]
 		a.pendingMu.Unlock()
 
 		if ok {
 			// Send the entire taskData (which includes Python's alert *request*) to SyncWithDavinci
 			select {
 			case respCh <- taskData:
-				log.Printf("msgEndpoint: Successfully sent taskData to SyncWithDavinci channel for task %s", taskIDFromQuery)
+				log.Printf("msgEndpoint: Successfully sent taskData to SyncWithDavinci channel for task %s", taskID)
 			default:
-				log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel full/listener gone.", taskIDFromQuery)
+				log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel full/listener gone.", taskID)
 				// If SyncWithDavinci is gone but Python wanted an alert, we *could* emit it here as a fallback.
 				// However, this implies SyncWithDavinci might have timed out or errored earlier.
 				if taskData.ShouldShowAlert {
-					log.Printf("msgEndpoint: SyncWithDavinci listener gone for task %s, but Python requested alert. Emitting globally.", taskIDFromQuery)
+					log.Printf("msgEndpoint: SyncWithDavinci listener gone for task %s, but Python requested alert. Emitting globally.", taskID)
 					runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
 						"title":    taskData.AlertTitle,
 						"message":  taskData.AlertMessage,
@@ -560,10 +591,10 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		} else {
-			log.Printf("msgEndpoint: Warning - Received 'taskResult' for taskID '%s', but no pending task found.", taskIDFromQuery)
+			log.Printf("msgEndpoint: Warning - Received 'taskResult' for taskID '%s', but no pending task found.", taskID)
 			// Similar to above, if no pending task, but Python wanted an alert for this orphaned task_id.
 			if taskData.ShouldShowAlert {
-				log.Printf("msgEndpoint: No pending task for %s, but Python requested alert. Emitting globally.", taskIDFromQuery)
+				log.Printf("msgEndpoint: No pending task for %s, but Python requested alert. Emitting globally.", taskID)
 				runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
 					"title":    taskData.AlertTitle,
 					"message":  taskData.AlertMessage,
@@ -586,8 +617,8 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 		runtime.EventsEmit(a.ctx, "showToast", data)
 
 	case "showAlert": // This is now for alerts NOT related to a SyncWithDavinci task
-		if taskIDFromQuery != "" {
-			log.Printf("msgEndpoint: 'showAlert' with task_id '%s' received. This is likely an old Python flow. Emitting alert globally but not notifying task channel.", taskIDFromQuery)
+		if taskID != "" {
+			log.Printf("msgEndpoint: 'showAlert' with task_id '%s' received. This is likely an old Python flow. Emitting alert globally but not notifying task channel.", taskID)
 		}
 		var data AlertPayload
 		if err := json.Unmarshal(msg.Payload, &data); err != nil { /* ... error handling ... */
@@ -596,8 +627,8 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 		runtime.EventsEmit(a.ctx, "showAlert", data) // Global alert
 
 	case "projectData": // This is now for generic data pushes NOT related to a SyncWithDavinci task completion
-		if taskIDFromQuery != "" {
-			log.Printf("msgEndpoint: 'projectData' with task_id '%s' received. If this is a task response, Python should use 'taskResult' type.", taskIDFromQuery)
+		if taskID != "" {
+			log.Printf("msgEndpoint: 'projectData' with task_id '%s' received. If this is a task response, Python should use 'taskResult' type.", taskID)
 			// If you need to temporarily support old Python sending projectData as task response:
 			// ... (handle by trying to parse as ProjectDataPayload and sending a minimal PythonCommandResponse to channel)
 			// But it's better to update Python.
@@ -765,19 +796,67 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 	return &finalResponse, nil // finalResponse.AlertIssued will be false if no alert was processed
 }
 
-func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (string, error) {
-	if !a.pythonReady { // Check if Python has signaled its overall readiness
-		return "Python backend is not ready yet.", fmt.Errorf("python backend not ready")
-	}
-	log.Println("Go: Requesting final timeline from Python...")
-	response, err := a.SendCommandToPython("makeFinalTimeline", map[string]any{"projectData": projectData}) // No params for "sync" in this example
-	if err != nil {
-		log.Printf("Go: Error calling 'makeFinalTimeline' on Python: %v", err)
-		// Emit an event to frontend about the error
-		runtime.EventsEmit(a.ctx, "showToast", map[string]string{"message": fmt.Sprintf("Error making final timeline: %v", err), "toastType": "error"})
-		return fmt.Sprintf("Error: %v", err), err
-	}
-	// Emit success to frontend
-	//runtime.EventsEmit(a.ctx, "showToast", map[string]string{"message": response.Message, "toastType": "info"})
-	return response.Message, nil
+func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (*PythonCommandResponse, error) {
+    if !a.pythonReady {
+        return nil, fmt.Errorf("python backend not ready")
+    }
+
+    // 1. Adopt the async task pattern
+    taskID := uuid.NewString()
+    respCh := make(chan PythonCommandResponse, 1)
+
+    a.pendingMu.Lock()
+    a.pendingTasks[taskID] = respCh
+    a.pendingMu.Unlock()
+
+    defer func() {
+        a.pendingMu.Lock()
+        delete(a.pendingTasks, taskID)
+        a.pendingMu.Unlock()
+        log.Printf("Go: Cleaned up task %s", taskID)
+    }()
+    
+    // The frontend can now listen for "taskProgressUpdate" events with this taskID
+    log.Printf("Go: Starting task 'makeFinalTimeline' with ID: %s", taskID)
+
+    // 2. Add taskId to the parameters sent to Python
+    params := map[string]interface{}{
+        "taskId":      taskID,
+        "projectData": projectData,
+    }
+
+    // 3. Send the command and just check the acknowledgement
+    pyAckResp, err := a.SendCommandToPython("makeFinalTimeline", params)
+    if err != nil {
+        return nil, fmt.Errorf("failed to send 'makeFinalTimeline' command: %w", err)
+    }
+    if pyAckResp.Status != "success" {
+        return nil, fmt.Errorf("python 'makeFinalTimeline' ack error: %s", pyAckResp.Message)
+    }
+
+    log.Printf("Go: Waiting for final timeline result for task %s...", taskID)
+
+    // 4. Wait for the final result from the channel
+    finalResponse := <-respCh
+    log.Printf("Go: Received final timeline result for task %s", taskID)
+
+    // 5. Process the final response (handle alerts, errors, etc.)
+    if finalResponse.ShouldShowAlert {
+        runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+            "title":    finalResponse.AlertTitle, "message":  finalResponse.AlertMessage, "severity": finalResponse.AlertSeverity,
+        })
+        finalResponse.AlertIssued = true
+        if finalResponse.Status != "error" { finalResponse.Status = "error" }
+        if finalResponse.Message == "" { finalResponse.Message = finalResponse.AlertMessage }
+    }
+    
+    // Return the full response object, which is more flexible than just a string
+    if finalResponse.Status != "success" {
+        // We return the response object so the frontend can see the message, even on error.
+        // The second return value (error) is nil because the *communication* was successful.
+        // The frontend should check the Status field of the returned object.
+        return &finalResponse, nil
+    }
+
+    return &finalResponse, nil
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import deepEqual from 'fast-deep-equal';
 import { DetectionParams } from '@/types';
 
@@ -60,9 +60,9 @@ export function useClipParameters(activeClipId: string | null) {
         }));
       }
     }
-  }, [threshold, minDuration, paddingLeft, paddingRight, activeClipId, allClipParams]);
+  }, [threshold, minDuration, paddingLeft, paddingRight, activeClipId]);
 
-  const handlePaddingChange = (side: 'left' | 'right', value: number) => {
+  const handlePaddingChange = useCallback((side: 'left' | 'right', value: number) => {
     const clampedValue = Math.max(0, value);
     if (paddingLocked) {
       setPaddingLeft(clampedValue);
@@ -70,7 +70,15 @@ export function useClipParameters(activeClipId: string | null) {
     } else {
       side === 'left' ? setPaddingLeft(clampedValue) : setPaddingRight(clampedValue);
     }
-  };
+  }, [paddingLocked]); // Dependency: this function only needs to be recreated if `paddingLocked` changes
+
+  const resetThreshold = useCallback(() => setThreshold(DEFAULT_THRESHOLD), []);
+  const resetMinDuration = useCallback(() => setMinDuration(DEFAULT_MIN_DURATION), []);
+  const resetPadding = useCallback(() => {
+    setPaddingLeft(DEFAULT_PADDING);
+    setPaddingRight(DEFAULT_PADDING);
+    setPaddingLinked(true);
+  }, []);
   
   const effectiveParams = useMemo<DetectionParams>(() => {
     if (activeClipId && allClipParams[activeClipId]) {
@@ -80,30 +88,19 @@ export function useClipParameters(activeClipId: string | null) {
   }, [activeClipId, allClipParams]);
 
   return {
-    // State values
     threshold,
     minDuration,
     paddingLeft,
     paddingRight,
     paddingLocked,
-
-    // Setters
-    setThreshold,
-    setMinDuration,
-    handlePaddingChange,
-    setPaddingLinked,
-    
-    // Derived state and data
+    setThreshold, // State setters from useState are already stable
+    setMinDuration, // State setters from useState are already stable
+    setPaddingLinked, // State setters from useState are already stable
+    handlePaddingChange, // Now memoized
     allClipParams,
     effectiveParams,
-
-    // Reset functions
-    resetThreshold: () => setThreshold(DEFAULT_THRESHOLD),
-    resetMinDuration: () => setMinDuration(DEFAULT_MIN_DURATION),
-    resetPadding: () => {
-      setPaddingLeft(DEFAULT_PADDING);
-      setPaddingRight(DEFAULT_PADDING);
-      setPaddingLinked(true);
-    },
+    resetThreshold, // Now memoized
+    resetMinDuration, // Now memoized
+    resetPadding, // Now memoized
   };
 }

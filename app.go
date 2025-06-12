@@ -472,11 +472,11 @@ func (a *App) GetOrDetectSilencesWithCache(
 }
 
 // New method to be called from Wails frontend
-func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
+func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
 	maxDb := 0.0 // Consistent with original function; this is now passed to the caching layer.
 
 	// The caching function GetOrGenerateWaveformWithCache will handle path resolution
-	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
+	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
 	if err != nil {
 		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))
 		return nil, fmt.Errorf("failed to get/generate waveform for '%s': %v", filePath, err)
@@ -490,6 +490,7 @@ func (a *App) GetLogarithmicWaveform(filePath string, samplesPerPixel int, minDb
 func (a *App) GetOrGenerateWaveformWithCache(
 	webInputPath string,
 	samplesPerPixel int,
+	peakType string,
 	minDb float64,
 	maxDb float64,
 	clipStartSeconds float64,
@@ -509,8 +510,9 @@ func (a *App) GetOrGenerateWaveformWithCache(
 
 	// The cache key uses the original webInputPath as the primary identifier.
 	key := WaveformCacheKey{
-		FilePath:         webInputPath, // Use the URL/web path for the key
+		FilePath:         webInputPath,
 		SamplesPerPixel:  samplesPerPixel,
+		PeakType:         peakType,
 		MinDb:            minDb,
 		MaxDb:            maxDb,
 		ClipStartSeconds: clipStartSeconds,
@@ -521,25 +523,33 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	cachedData, found := a.waveformCache[key]
 	a.cacheMutex.RUnlock()
 
-	if found {
-		// log.Printf("Waveform Cache HIT for: %s, Samples: %d", webInputPath, samplesPerPixel)
-		return cachedData, nil
-	}
-	// log.Printf("Waveform Cache MISS for: %s, Samples: %d", webInputPath, samplesPerPixel)
+    if found {
+        return cachedData, nil
+    }
 
-	// If not found, perform the generation.
-	// Pass the original webInputPath to ProcessWavToLogarithmicPeaks, as it handles its own path resolution.
-	waveformData, err := a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
-	if err != nil {
-		// Do not cache errors, so subsequent calls can retry.
-		return nil, fmt.Errorf("error during waveform peak processing for '%s': %w", webInputPath, err)
-	}
+    // --- CACHE MISS: Decide which processor to call ---
+    var waveformData *PrecomputedWaveformData
 
-	a.cacheMutex.Lock()
-	a.waveformCache[key] = waveformData
-	a.cacheMutex.Unlock()
+    switch peakType {
+    case "linear":
+        // Call the (to-be-implemented) linear processor
+        waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel, clipStartSeconds, clipEndSeconds)
+    case "logarithmic":
+        // Call the existing logarithmic processor
+        waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
+    default:
+        err = fmt.Errorf("unknown peakType: '%s'", peakType)
+    }
 
-	return waveformData, nil
+    if err != nil {
+        return nil, fmt.Errorf("error during waveform processing for '%s': %w", webInputPath, err)
+    }
+
+    a.cacheMutex.Lock()
+    a.waveformCache[key] = waveformData
+    a.cacheMutex.Unlock()
+
+    return waveformData, nil
 }
 
 func (a *App) GetPythonReadyStatus() bool {

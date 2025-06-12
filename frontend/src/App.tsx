@@ -1,3 +1,9 @@
+import React from "react";
+import { scan } from "react-scan";
+scan({
+  enabled: true,
+});
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import deepEqual from "fast-deep-equal";
 import { Slider } from "@/components/ui/slider";
@@ -5,35 +11,34 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { Label } from "@/components/ui/label";
-import { LogSlider } from "./components/ui-custom/volumeSlider";
 import { RotateCcw, Link, Unlink, Ellipsis, XIcon } from "lucide-react";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 
-import { clamp, cn } from "@/lib/utils";
 import {
   GetGoServerPort,
-  GetLogarithmicWaveform,
+  GetWaveform,
   SyncWithDavinci,
 } from "@wails/go/main/App";
+
 import { GetPythonReadyStatus } from "@wails/go/main/App";
 import { EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveform";
 import RemoveSilencesButton from "./lib/PythonRunner";
-import { CloseApp } from "@wails/go/main/App";
 import { ActiveClip, DetectionParams } from "./types";
 import { useSilenceData } from "./hooks/useSilenceData";
 import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
 import { useClipParameters } from "./hooks/useClipParameters";
-import ReactDOM from "react-dom";
+import { createPortal } from "react-dom";
+import { MinDurationControl } from "./components/controls/MinDurationControl";
+import ResetButton from "./components/controls/ResetButton";
+import { ThresholdControl } from "./components/controls/ThresholdControl";
+import { TitleBar } from "./components/ui-custom/titlebar";
+
+import { useBusy } from './context/useBusy';
+
 
 EventsOn("showToast", (data) => {
   console.log("Event: showToast", data);
@@ -45,19 +50,6 @@ EventsOn("projectDataReceived", (projectData: main.ProjectDataPayload) => {
   console.log("Event: projectDataReceived", projectData);
 });
 
-// Reusable reset button with dimmed default state and hover transition
-function ResetButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={onClick}
-      className="text-zinc-500 hover:text-zinc-300"
-    >
-      <RotateCcw className="h-4 w-4" />
-    </Button>
-  );
-}
 
 const DEFAULT_THRESHOLD = -30;
 const DEFAULT_MIN_DURATION = 1.0;
@@ -102,8 +94,9 @@ const createActiveFileFromTimelineItem = (
 };
 
 
-
-export default function App() {
+function AppContent() {
+  const isBusy = useBusy(s => s.isBusy);
+  const setIsBusy = useBusy(s => s.setIsBusy);
   const [httpPort, setHttpPort] = useState<Number | null>(null);
   const [currentClipId, setCurrentClipId] = useState<string | null>(null);
   const [projectData, setProjectData] =
@@ -173,8 +166,6 @@ export default function App() {
     null
   );
 
-
-
   // Effect to prepare data for WaveformPlayer when currentActiveClip changes
   useEffect(() => {
     if (
@@ -216,9 +207,10 @@ export default function App() {
         );
         // setIsLoading(true); // You might have a more general loading state
         try {
-          const peakDataForSegment = await GetLogarithmicWaveform(
+          const peakDataForSegment = await GetWaveform(
             currentActiveClip.processedFileName + ".wav", // Pass the base filename
             256, // samplesPerPixel - adjust as needed
+            "logarithmic",
             -60.0, // dbRange - adjust as needed
             clipStartSeconds,
             clipEndSeconds
@@ -271,6 +263,12 @@ export default function App() {
   }, [currentActiveClip, projectData, httpPort]);
 
   const handleSync = async () => {
+    if (isBusy) {
+      console.log("Sync skipped: App is busy.");
+      return;
+    }
+    console.log("syncing...")
+    setIsBusy(true);
     const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
 
     const conditionalSetProjectData = (
@@ -309,12 +307,14 @@ export default function App() {
           description: response.message || "An error occurred during sync.",
           duration: 5000,
         });
+        setIsBusy(false);
       } else if (response && response.status === "success") {
         conditionalSetProjectData(response.data);
         toast.success("Synced with DaVinci Resolve", {
           id: loadingToastId,
           duration: 1500,
         });
+        setIsBusy(false);
       } else {
         console.error(
           "SyncWithDavinci: Unexpected response structure from Go",
@@ -325,6 +325,7 @@ export default function App() {
           id: loadingToastId,
           duration: 5000,
         });
+        setIsBusy(false);
       }
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
@@ -342,6 +343,7 @@ export default function App() {
           duration: 5000,
         });
       }
+      setIsBusy(false);
     }
   };
 
@@ -418,36 +420,6 @@ export default function App() {
 
   const titleBarHeight = "2.35rem";
 
-  const titleBar = (
-    <ContextMenu>
-      <ContextMenuTrigger>
-        <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-[999999]">
-          <Button
-            size={"sm"}
-            className="px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 hover:text-white"
-            onClick={CloseApp}
-          >
-            <XIcon className="scale-90" strokeWidth={2.5} />
-          </Button>
-          <h1 className="text-sm font-normal text-neutral-200">Pruner</h1>
-          <div className="flex items-center space-x-2">
-            <Button
-              size="icon"
-              className="bg-transparent hover:text-white hover:bg-transparent"
-            >
-              <Ellipsis className="h-8 w-8 text-xl scale-150 text-zinc-400 opacity-80 hover:text-blue-500 hover:opacity-100" />
-            </Button>
-          </div>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-64">
-        <ContextMenuItem inset onClick={CloseApp}>
-          Close
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  )
-
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => {
     setIsMounted(true);
@@ -455,12 +427,6 @@ export default function App() {
 
   return (
     <>
-      {/* TITLE BAR */}
-      {isMounted && ReactDOM.createPortal(
-        titleBar,
-        document.getElementById('title-bar-root')!
-      )}
-
       <div
         className="p-6 pt-3 bg-[#28282e] border-1 border-t-0 border-zinc-900"
         style={{
@@ -470,43 +436,29 @@ export default function App() {
         }}
       >
         <header className="flex items-center justify-between"></header>
-
         <main className="flex-1 gap-8 mt-8 max-w-screen select-none">
-          <GlobalAlertDialog />
           {projectData?.files && currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
               currentFileId={currentActiveClip?.id || null}
               onFileChange={handleAudioClipSelection}
+              fps={projectData?.timeline?.fps}
               disabled={
                 !httpPort ||
                 !projectData?.timeline?.audio_track_items ||
                 projectData.timeline.audio_track_items.length === 0
               }
-              className="w-full md:w-1/2 lg:w-1/3" // Example responsive width
+              className="w-full" // Example responsive width
             />
           )}
           <div className="flex flex-col space-y-8">
             {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
-              <div className="flex flex-col space-y-1 items-center">
-                <LogSlider
-                  defaultDb={threshold}
-                  onGainChange={(gain) => setThreshold(gain)}
-                  onDoubleClick={resetThreshold}
-                />
-                <div className="flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300">
-                  <p className="text-base/tight">
-                    Silence
-                    <br />
-                    Threshold
-                  </p>
-                  <span className="text-xs text-zinc-100 whitespace-nowrap font-mono tracking-tighter mt-1">
-                    {threshold.toFixed(2)}{" "}
-                    <span className="opacity-80">dB</span>
-                  </span>
-                </div>
-              </div>
+              <ThresholdControl
+                threshold={threshold}
+                setThreshold={setThreshold}
+                resetThreshold={resetThreshold}
+              />
               <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible">
                 {httpPort &&
                   cutAudioSegmentUrl &&
@@ -526,107 +478,99 @@ export default function App() {
                       detectionParams={currentClipEffectiveParams}
                     />
                   )}
-                <div className="space-y-2 w-full">
-                  <div className="flex items-center space-x-5">
-                    <Label className="font-medium w-32 flex-row-reverse">
-                      Minimum Duration
-                    </Label>
-                    <div className="flex w-64 items-center space-x-2">
+              </div>
+            </div>
+            <div className="space-y-2 w-full p-5">
+              <MinDurationControl
+                minDuration={minDuration}
+                setMinDuration={setMinDuration}
+                resetMinDuration={resetMinDuration}
+              />
+            </div>
+
+
+            <div className="space-y-2 flex-1">
+              <div className="flex items-baseline space-x-5">
+                <Label className="font-medium w-32 text-right flex-row-reverse">
+                  Padding
+                </Label>
+                <div className="flex items-start space-x-0">
+                  {/* Left Padding */}
+                  <div className="flex flex-col space-y-1 w-full">
+                    <div className="flex items-center">
                       <Slider
                         min={0}
-                        max={5}
-                        step={0.001}
-                        value={[minDuration]}
-                        onValueChange={(vals) => setMinDuration(vals[0])}
-                        className="w-[128px] max-w-[128px] min-w-[128px]"
+                        max={1}
+                        step={0.01}
+                        value={[paddingLeft]}
+                        onValueChange={(vals) =>
+                          handlePaddingChange("left", vals[0])
+                        }
+                        className="w-32"
                       />
-                      <span className="text-sm text-zinc-100 font-mono tracking-tighter">
-                        {minDuration.toFixed(2)}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setPaddingLinked((l) => !l)}
+                        className="text-zinc-500 hover:text-zinc-300 text-center"
+                      >
+                        {paddingLocked ? (
+                          <Link className="h-4 w-4" />
+                        ) : (
+                          <Unlink className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                    <span className="text-sm text-zinc-400">
+                      Left:{" "}
+                      <span className="text-zinc-100 font-mono tracking-tighter">
+                        {paddingLeft.toFixed(2)}
                         <span className="text-zinc-400 ml-1">s</span>
                       </span>
-                      <ResetButton onClick={resetMinDuration} />
-                    </div>
+                    </span>
                   </div>
-                </div>
-                <div className="space-y-2 flex-1">
-                  <div className="flex items-baseline space-x-5">
-                    <Label className="font-medium w-32 text-right flex-row-reverse">
-                      Padding
-                    </Label>
-                    <div className="flex items-start space-x-0">
-                      {/* Left Padding */}
-                      <div className="flex flex-col space-y-1 w-full">
-                        <div className="flex items-center">
-                          <Slider
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            value={[paddingLeft]}
-                            onValueChange={(vals) =>
-                              handlePaddingChange("left", vals[0])
-                            }
-                            className="w-32"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setPaddingLinked((l) => !l)}
-                            className="text-zinc-500 hover:text-zinc-300 text-center"
-                          >
-                            {paddingLocked ? (
-                              <Link className="h-4 w-4" />
-                            ) : (
-                              <Unlink className="h-4 w-4" />
-                            )}
-                          </Button>
-                        </div>
-                        <span className="text-sm text-zinc-400">
-                          Left:{" "}
-                          <span className="text-zinc-100 font-mono tracking-tighter">
-                            {paddingLeft.toFixed(2)}
-                            <span className="text-zinc-400 ml-1">s</span>
-                          </span>
-                        </span>
-                      </div>
 
-                      {/* Right Padding */}
-                      <div className="flex flex-col space-y-1 w-full">
-                        <div className="flex items-center space-x-2">
-                          <Slider
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={[paddingRight]}
-                            onValueChange={(vals) =>
-                              handlePaddingChange("right", vals[0])
-                            }
-                            className="w-32"
-                          />
-                          <ResetButton onClick={() => resetPadding()} />
-                        </div>
-                        <span className="text-sm text-zinc-400">
-                          Right:{" "}
-                          <span className="text-zinc-100 font-mono tracking-tighter">
-                            {paddingRight.toFixed(2)}
-                            <span className="text-zinc-400 ml-1">s</span>
-                          </span>
-                        </span>
-                      </div>
+                  {/* Right Padding */}
+                  <div className="flex flex-col space-y-1 w-full">
+                    <div className="flex items-center space-x-2">
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={[paddingRight]}
+                        onValueChange={(vals) =>
+                          handlePaddingChange("right", vals[0])
+                        }
+                        className="w-32"
+                      />
+                      <ResetButton onClick={() => resetPadding()} />
                     </div>
+                    <span className="text-sm text-zinc-400">
+                      Right:{" "}
+                      <span className="text-zinc-100 font-mono tracking-tighter">
+                        {paddingRight.toFixed(2)}
+                        <span className="text-zinc-400 ml-1">s</span>
+                      </span>
+                    </span>
                   </div>
                 </div>
-                <div className="flex flex-col space-y-8 w-full">
-                  <div className="items-center space-y-2 mt-4">
-                    {projectData && currentClipEffectiveParams && (
-                      <RemoveSilencesButton
-                        projectData={projectData}
-                        keepSilenceSegments={false}
-                        allClipDetectionParams={allClipDetectionParams}
-                        defaultDetectionParams={getDefaultDetectionParams()}
-                      />
-                    )}
-                  </div>
-                  <Toaster
+
+              </div>
+
+            </div>
+
+            <div className="flex space-y-8 w-full">
+              <div className="items-center space-y-2 mt-4">
+                {projectData && currentClipEffectiveParams && (
+                  <RemoveSilencesButton
+                    projectData={projectData}
+                    keepSilenceSegments={false}
+                    allClipDetectionParams={allClipDetectionParams}
+                    defaultDetectionParams={getDefaultDetectionParams()}
+                  />
+                )}
+              </div>
+              {/* <Toaster
                     position="bottom-right"
                     toastOptions={{
                       classNames: {
@@ -634,14 +578,44 @@ export default function App() {
                           "min-w-[10px] w-auto bg-red-400 mt-10 z-10 absolute",
                       },
                     }}
-                  />
-                </div>
-              </div>
+                  /> */}
             </div>
+
           </div>
         </main>
         <div id="dialog-portal-container" />
       </div>
     </>
   );
+}
+
+export default function App() {
+
+  interface ClientPortalProps {
+    children: React.ReactNode; // The standard type for any valid React child
+    targetId: string;
+  }
+
+  const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
+    if (typeof window === 'undefined') return null; // Skip SSR
+
+    const container = document.getElementById(targetId);
+    return container ? createPortal(children, container) : null;
+  };
+
+  const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
+
+  return (
+    <>
+      <ClientPortal targetId="overlays">
+        <GlobalAlertDialog />
+      </ClientPortal>
+
+      {/* You would do the same for your title bar */}
+      <ClientPortal targetId="title-bar-root">
+        {MemoizedTitleBar}
+      </ClientPortal>
+      <AppContent />
+    </>
+  )
 }

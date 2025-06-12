@@ -12,21 +12,23 @@ export function GetConfig():Promise<Record<string, any>>;
 
 export function GetGoServerPort():Promise<number>;
 
-export function GetLogarithmicWaveform(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number):Promise<main.PrecomputedWaveformData>;
-
 export function GetOrDetectSilencesWithCache(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number):Promise<Array<main.SilencePeriod>>;
 
-export function GetOrGenerateWaveformWithCache(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
+export function GetOrGenerateWaveformWithCache(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number,arg7:number):Promise<main.PrecomputedWaveformData>;
 
 export function GetProjectDataPayloadType():Promise<main.ProjectDataPayload>;
 
 export function GetPythonReadyStatus():Promise<boolean>;
 
+export function GetWaveform(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
+
 export function LaunchHttpServer(arg1:any):Promise<void>;
 
 export function LaunchPythonBackend(arg1:number,arg2:number):Promise<void>;
 
-export function MakeFinalTimeline(arg1:main.ProjectDataPayload):Promise<string>;
+export function MakeFinalTimeline(arg1:main.ProjectDataPayload):Promise<main.PythonCommandResponse>;
+
+export function ProcessWavToLinearPeaks(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
 
 export function ProcessWavToLogarithmicPeaks(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
 

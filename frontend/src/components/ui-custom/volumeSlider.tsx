@@ -1,7 +1,8 @@
-import * as React from "react";
-import * as SliderPrimitive from "@radix-ui/react-slider";
 import { cn } from "@/lib/utils"; // Assuming this utility exists
-import { useEffect } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
+import * as SliderPrimitive from "@radix-ui/react-slider"
+
+
 
 const defaultMarks = [0, -5, -10, -20, -30, -40, -50, -60];
 
@@ -14,17 +15,17 @@ export interface SliderProps {
   onDoubleClick?: () => void;
 }
 
-export function LogSlider({
+export function _LogSlider({
   marks = defaultMarks,
   minDb = -60,
   maxDb = 0,
   defaultDb = -20,
   onGainChange,
-  onDoubleClick = () => {},
+  onDoubleClick = () => { },
 }: SliderProps) {
-  const [currentDbValue, setCurrentDbValue] = React.useState(defaultDb);
+  const [currentDbValue, setCurrentDbValue] = useState(defaultDb);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setCurrentDbValue(defaultDb);
   }, [defaultDb]);
 
@@ -37,14 +38,6 @@ export function LogSlider({
   const actualMinDb = Math.min(minDb, maxDb);
   const actualMaxDb = Math.max(minDb, maxDb);
   const rangeDb = actualMaxDb - actualMinDb;
-
-  const sortedVisibleMarks = React.useMemo(
-    () =>
-      marks
-        .filter((mark) => mark >= actualMinDb && mark <= actualMaxDb)
-        .sort((a, b) => a - b),
-    [marks, actualMinDb, actualMaxDb]
-  );
 
   return (
     <div className="flex items-center h-[287px] select-none mt-[5px]">
@@ -85,8 +78,8 @@ export function LogSlider({
             rangeDb > 0
               ? ((dB - actualMinDb) / rangeDb) * 100
               : dB === actualMinDb
-              ? 0
-              : 100;
+                ? 0
+                : 100;
 
           const absVal = Math.abs(dB);
           const isLabeled = marks.includes(dB);
@@ -96,8 +89,8 @@ export function LogSlider({
           const tickWidth = isMajor
             ? "w-[12px]"
             : isMedium || isLabeled
-            ? "w-[8px]"
-            : "w-[4px]";
+              ? "w-[8px]"
+              : "w-[4px]";
 
           const tickOpacity = isLabeled ? "opacity-80" : "opacity-80";
 
@@ -127,3 +120,17 @@ export function LogSlider({
     </div>
   );
 }
+
+// Custom props comparison
+function areEqual(prev: SliderProps, next: SliderProps) {
+  return (
+    prev.defaultDb === next.defaultDb &&
+    prev.minDb === next.minDb &&
+    prev.maxDb === next.maxDb &&
+    prev.onGainChange === next.onGainChange &&
+    prev.onDoubleClick === next.onDoubleClick &&
+    JSON.stringify(prev.marks) === JSON.stringify(next.marks)
+  );
+}
+
+export const LogSlider = memo(_LogSlider, areEqual);

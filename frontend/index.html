@@ -3,13 +3,18 @@
 <head>
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-    <title>ResoCut</title>
+    <title>Pruner</title>
 </head>
-<body style="background-color: #28282e">
-<div id="root"></div>
-<div id="overlays"></div>
-<div id="title-bar-root"></div>
-<script src="./src/main.tsx" type="module"></script>
+<body style="background-color: #28282e; pointer-events: all !important;">
+    <!-- Main React application -->
+    <div id="root"></div>
+
+    <div id="title-bar-root"></div>
+
+    <!-- alert dialog and other overlays -->
+    <div id="overlays"></div>
+    
+    <script src="./src/main.tsx" type="module"></script>
 </body>
 </html>
 

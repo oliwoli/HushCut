@@ -11,6 +11,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/logger"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 )
 
 //go:embed all:frontend/dist
@@ -36,6 +37,7 @@ type CacheKey struct {
 type WaveformCacheKey struct {
 	FilePath         string // It's advisable to use an absolute/canonical path here if effectiveAudioFolderPath can change
 	SamplesPerPixel  int
+	PeakType         string // "logarithmic" or "linear"
 	MinDb            float64
 	MaxDb            float64 // maxDb is used by ProcessWavToLogarithmicPeaks
 	ClipStartSeconds float64
@@ -63,6 +65,9 @@ func (h *FileLoader) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	res.Write(fileData)
 }
 
+//go:embed build/appicon.png
+var icon []byte
+
 func main() {
 	// Serve the frontend assets
 
@@ -71,7 +76,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "resocut",
+		Title:  "Pruner",
 		Width:  1024,
 		Height: 768,
 		AssetServer: &assetserver.Options{
@@ -87,6 +92,12 @@ func main() {
 		LogLevel:    logger.INFO,
 		AlwaysOnTop: true,
 		Frameless:   true,
+		Linux: &linux.Options{
+			Icon: icon,
+			WindowIsTranslucent: false,
+			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
+			ProgramName: "Pruner",
+		},
 	})
 
 	if err != nil {
