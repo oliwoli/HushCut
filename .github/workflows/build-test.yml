@@ -57,6 +57,10 @@ jobs:
           echo "TEMP=C:\tmp" >> $env:GITHUB_ENV
           echo "TMP=C:\tmp" >> $env:GITHUB_ENV
 
+      - name: Setup MSVC environment
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: install opentimelineio
         if: matrix.os == 'windows-latest'
         run: |
