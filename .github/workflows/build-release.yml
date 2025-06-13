@@ -55,7 +55,7 @@ jobs:
         shell: bash
 
       - name: Build Wails frontend
-        uses: dAppServer/wails-build-action@v2.2
+        uses: dAppServer/wails-build-action@v3
         with:
           build-name: wailsApp
           build-platform: ${{ matrix.platform }}
