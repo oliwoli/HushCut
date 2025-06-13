@@ -45,7 +45,7 @@ jobs:
 
       - name: Build Python backend
         run: |
-          pyinstaller python-backend/main.spec -y
+          pyinstaller python-backend/src/main.py -y
           mkdir -p build/bin
           cp dist/main/main${{ matrix.ext }} build/bin/python_backend${{ matrix.ext }}
           if [ -d dist/main/_internal ]; then
