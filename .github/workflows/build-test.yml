@@ -64,8 +64,7 @@ jobs:
       - name: install opentimelineio
         if: matrix.os == 'windows-latest'
         run: |
-          pip install --config-settings="cmake.args=-DCMAKE_BUILD_TYPE=Release -DPython3_DEBUG=OFF" opentimelineio
-
+          pip install --config-settings="cmake.args=-DPython_LIBRARIES=${{ env.pythonLocation }}\libs\python313.lib" opentimelineio
 
       - name: Install Python deps
         run: |
