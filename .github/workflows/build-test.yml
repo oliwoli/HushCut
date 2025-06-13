@@ -38,34 +38,6 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Enable MSVC
-        if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      # Windows-only: Install CMake and Ninja
-      - name: Install CMake and Ninja (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' --yes
-          choco install ninja --yes
-
-      # Windows-only: Shorten TEMP path
-      - name: Shorten TEMP path
-        if: matrix.os == 'windows-latest'
-        run: |
-          mkdir C:\tmp
-          echo "TEMP=C:\tmp" >> $env:GITHUB_ENV
-          echo "TMP=C:\tmp" >> $env:GITHUB_ENV
-
-      - name: Setup MSVC environment
-        if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: install opentimelineio
-        if: matrix.os == 'windows-latest'
-        run: |
-          pip install --config-settings="cmake.args=-DPython_LIBRARIES=${{ env.pythonLocation }}\libs\python313.lib" opentimelineio
-
       - name: Install Python deps
         run: |
           pip install --upgrade pip setuptools wheel
@@ -74,7 +46,7 @@ jobs:
 
       - name: Build Python backend
         run: |
-          pyinstaller python-backend/main.spec -y
+          pyinstaller python-backend/src/main.py -y
           mkdir -p build/bin
           cp dist/main/main${{ matrix.ext }} build/bin/python_backend${{ matrix.ext }}
           if [ -d dist/main/_internal ]; then
