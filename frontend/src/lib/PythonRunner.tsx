@@ -14,6 +14,7 @@ import type { DetectionParams, SilencePeriod } from "../types";
 
 import { useClipStore } from '@/stores/clipStore';
 import { ClipParameters, defaultParameters } from "@/stores/clipStore";
+import { useSyncBusyState } from "@/stores/appSync";
 
 
 export function deriveAllClipDetectionParams(
@@ -158,6 +159,9 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     keepSilenceSegments = false,
   } = props;
 
+
+  const setBusy = useSyncBusyState(s => s.setBusy);
+
   const [processedData, setProcessedData] =
     useState<main.ProjectDataPayload | null>(null);
   const processedDataInputRef = useRef<main.ProjectDataPayload | null>(null);
@@ -274,6 +278,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       console.warn("Click: Processing already in progress.");
       return;
     }
+    setBusy(true);
     const allParameters = useClipStore.getState().parameters;
     const currentAllClipParams = deriveAllClipDetectionParams(allParameters);
 
@@ -327,7 +332,29 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       }
 
       console.log("Click: Making final timeline...");
-      await MakeFinalTimeline(dataToSend);
+
+
+      const response = await MakeFinalTimeline(dataToSend);
+
+      if (!response || response.status === "error") {
+        const errMessage =
+          response?.message || "Unknown error occurred in timeline generation.";
+        console.error("Click: Timeline generation failed:", errMessage);
+        if (onScriptError) onScriptError(errMessage);
+        return;
+      }
+
+      if (response.alertIssued) {
+        console.warn(
+          "Sync operation resulted in an alert (issued by Go). Message:",
+          response.message
+        );
+      }
+      else { console.log("eh") }
+      setBusy(false);
+
+
+
       console.log("Click: 'Prune Silences' process finished successfully.");
       if (onScriptDone)
         onScriptDone("'Prune Silences' process completed successfully.");

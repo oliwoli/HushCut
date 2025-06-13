@@ -23,6 +23,7 @@ import subprocess
 import argparse
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import atexit
 from uuid import uuid4
 
 from edit_silence import (
@@ -55,7 +56,6 @@ from otio_as_bridge import unify_linked_items_in_project_data
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-
 # GLOBALS
 TEMP_DIR: str = os.path.join(os.path.dirname(__file__), "..", "wav_files")
 TEMP_DIR = os.path.abspath(TEMP_DIR)
@@ -72,6 +72,101 @@ GO_SERVER_PORT = 0
 
 STANDALONE_MODE = False
 RESOLVE = None
+
+
+class ProgressTracker:
+    def __init__(self):
+        """
+        Initializes the tracker and a background thread pool for sending updates.
+        """
+        self.task_id = ""
+        self._tasks = {}
+        self._total_weight = 0.0
+        self._task_progress = {}
+        self._last_report = time()
+
+        # 1. Create a thread pool that will handle our HTTP requests.
+        #    max_workers can be tuned, but 2-3 is fine for this kind of task.
+        self._executor = ThreadPoolExecutor(
+            max_workers=3, thread_name_prefix="ProgressUpdater"
+        )
+
+        # 2. Register a function to be called when the program exits to ensure
+        #    threads are cleaned up gracefully.
+        atexit.register(self.shutdown)
+
+    def shutdown(self):
+        """Shuts down the thread pool executor."""
+        print("\nShutting down progress updater threads...")
+        # wait=True ensures we wait for pending updates to be sent before exiting.
+        # Set to False if you want the program to exit immediately.
+        self._executor.shutdown(wait=True)
+        print("Shutdown complete.")
+
+    def start_new_run(self, weighted_tasks: dict[str, int], task_id: str):
+        # This method's logic remains the same.
+        print(f"Initializing tracker for Task ID: {task_id}")
+        self.task_id = task_id
+        original_total = sum(weighted_tasks.values())
+        if original_total == 0:
+            self._tasks, self._total_weight = {}, 0.0
+        else:
+            scaling_factor = 100 / original_total
+            self._tasks = {
+                name: weight * scaling_factor for name, weight in weighted_tasks.items()
+            }
+            self._total_weight = 100.0
+        self._task_progress = {task: 0.0 for task in self._tasks}
+        self._report_progress("Initialized")
+
+    def _report_progress(self, message: str):
+        """
+        Submits the send_progress_update function to the thread pool
+        to be executed in the background.
+        """
+        # 3. Instead of calling the function directly, submit it to the executor.
+        #    The main thread will not wait for this to complete.
+        if time() - self._last_report > 5:
+            self._executor.submit(
+                send_progress_update, self.task_id, self.get_percentage(), message
+            )
+            self.last_report = time()
+
+    # --- No changes needed for the methods below ---
+
+    def update_task_progress(
+        self, task_name: str, percentage: float, message: str = ""
+    ):
+        # ... (logic is identical)
+        if not self.task_id:
+            print("Warning: Tracker not initialized. Call start_new_run() first.")
+            return
+        if task_name not in self._tasks:
+            print(f"Warning: Task '{task_name}' not found.")
+            return
+        percentage = max(0, min(100, percentage))
+        self._task_progress[task_name] = self._tasks[task_name] * (percentage / 100.0)
+        update_message = message if message is not None else task_name
+        print(
+            f"Updating '{task_name}' to {percentage:.1f}%. Overall: {self.get_percentage():.2f}%"
+        )
+        self._report_progress(update_message)
+
+    def complete_task(self, task_name: str):
+        self.update_task_progress(task_name, 100.0)
+
+    def get_percentage(self) -> float:
+        if self._total_weight == 0:
+            return 0.0
+        return (sum(self._task_progress.values()) / self._total_weight) * 100
+
+    def __str__(self):
+        return (
+            f"Task ID '{self.task_id}' | Overall Progress: {self.get_percentage():.2f}%"
+        )
+
+
+TRACKER = ProgressTracker()
 
 
 def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] = None):
@@ -436,7 +531,9 @@ def simple_get_items_by_tracktype(
     return items
 
 
-def _verify_timeline_state(timeline: Any, expected_clips: List[Dict]) -> bool:
+def _verify_timeline_state(
+    timeline: Any, expected_clips: List[Dict], attempt_num: int
+) -> bool:
     """
     Verifies that the clips on the timeline match the expected state.
 
@@ -760,8 +857,11 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global PROJECT
     global TIMELINE
     global MEDIA_POOL
+    global TRACKER
     script_start_time: float = time()
 
+    TRACKER.start_new_run(globalz.TASKS, task_id)
+    TRACKER.update_task_progress("init", 0.1, message="Initializing...")
     if not RESOLVE:
         task_id = task_id or ""
         get_resolve(task_id)
@@ -883,17 +983,23 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         print("critical error, can't continue")
         return
 
+    TRACKER.complete_task("init")
+    TRACKER.update_task_progress("pre_process", 1.0, "Pre-processing...")
+
     # export state of current timeline to otio, EXPENSIVE
     input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
-
-    send_progress_update(task_id=task_id, progress=50.0, message="ah")
 
     export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
     print(f"Exported timeline to OTIO in {input_otio_path}")
 
     unify_edits = unify_linked_items_in_project_data(input_otio_path)
 
+    TRACKER.complete_task("pre_process")
+    TRACKER.update_task_progress("append", 1.0, "Appending Clips to Timeline")
+
     append_and_link_timeline_items()
+
+    TRACKER.update_task_progress("append", 100.0, "All Done!")
 
     response_payload = {
         "status": "success",
@@ -922,7 +1028,7 @@ class ClipInfo(TypedDict):
     trackIndex: int
 
 
-def _append_and_link(
+def _append_clips_to_timeline(
     timeline: Any, media_pool: Any, timeline_items: List[TimelineItem]
 ) -> Tuple[List[Tuple[Dict, Tuple[int, int]]], List[Any]]:
     clips_to_process: List[Tuple[Dict, Tuple[int, int]]] = []
@@ -1047,22 +1153,24 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     success = False
     num_retries = 3
     sleep_time_between = 2.5
+    TRACKER.update_task_progress("append", 0.1, message="Appending Clips to Timeline")
     for attempt in range(1, num_retries + 1):
         print("-" * 20)
         print(f"Attempt {attempt} of {num_retries}...")
 
         # The internal function returns our "source of truth" and the API's response
-        processed_clips, bmd_items_from_api = _append_and_link(
+        processed_clips, bmd_items_from_api = _append_clips_to_timeline(
             timeline, media_pool, timeline_items
         )
-
+        TRACKER.complete_task("append")
         if not processed_clips:
             success = True
             break
 
         # Use the list of clips we INTENDED to create for verification
         expected_clip_infos = [item[0] for item in processed_clips]
-        if _verify_timeline_state(timeline, expected_clip_infos):
+        if _verify_timeline_state(timeline, expected_clip_infos, attempt):
+            TRACKER.complete_task("verify")
             print("Verification successful. Proceeding to link.")
 
             # === THE CORRECTED LINKING LOGIC ===
@@ -1102,12 +1210,20 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
                     link_groups[link_key].append(item_dict["bmd_item"])
 
             # 4. Perform the linking
+            length_link_groups = len(link_groups.items())
+            index = 1
             for group_key, clips_to_link in link_groups.items():
                 if len(clips_to_link) >= 2:
                     print(
                         f"Linking {len(clips_to_link)} clips for group {group_key}..."
                     )
+
                     timeline.SetClipsLinked(clips_to_link, True)
+                if index % 50 == 1:
+                    percentage = (index / length_link_groups) * 100
+                    TRACKER.update_task_progress("link", percentage, "Linking clips...")
+                    index += 50
+            TRACKER.complete_task("link")
 
             print("✅ Operation completed successfully.")
             success = True

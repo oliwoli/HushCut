@@ -35,6 +35,7 @@ type PythonMessage struct {
 
 type TaskUpdatePayload struct {
     Message  string  `json:"message"`
+	TaskType string  `json:"tasktype,omitempty"`
     Progress float64 `json:"progress,omitempty"` // Optional progress percentage (0.0 to 1.0)
 }
 
@@ -800,6 +801,7 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (*PythonCommand
     if !a.pythonReady {
         return nil, fmt.Errorf("python backend not ready")
     }
+	runtime.EventsEmit(a.ctx, "showFinalTimelineProgress")
 
     // 1. Adopt the async task pattern
     taskID := uuid.NewString()
@@ -857,6 +859,6 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (*PythonCommand
         // The frontend should check the Status field of the returned object.
         return &finalResponse, nil
     }
-
+	runtime.EventsEmit(a.ctx, "finished")
     return &finalResponse, nil
 }

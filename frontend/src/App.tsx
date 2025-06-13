@@ -31,23 +31,15 @@ import { useSyncBusyState } from "./stores/appSync";
 
 import { useClipStore } from '@/stores/clipStore';
 import { SilenceControls } from "./components/controls/SilenceControls";
+import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "./components/ui/drawer";
+import { Button } from "./components/ui/button";
+import { Progress } from "./components/ui/progress";
 
 
 EventsOn("showToast", (data) => {
   console.log("Event: showToast", data);
   // Simple alert for now, TODO: use nicer shadcn component
   alert(`Toast [${data.toastType || "info"}]: ${data.message}`);
-});
-
-EventsOn("projectDataReceived", (projectData: main.ProjectDataPayload) => {
-  console.log("Event: projectDataReceived", projectData);
-});
-
-
-EventsOn("taskUpdate", (data) => {
-  console.log("Event: taskUpdate", data);
-  // Simple alert for now, TODO: use nicer shadcn component
-  alert(`Update! ${data}`);
 });
 
 
@@ -388,6 +380,58 @@ function AppContent() {
   );
 }
 
+
+interface FinalTimelineProps {
+  open: boolean;
+  progressPercentage: number | null;
+  message: string;
+  onOpenChange: (open: boolean) => void; // <-- Add this to your interface
+}
+
+export function FinalTimelineProgress({ open, progressPercentage, message, onOpenChange }: FinalTimelineProps) {
+  const displayMessage = progressPercentage === 100 ? "All Done" : message;
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent className="min-h-[0%]">
+        <div className="mx-auto w-full max-w-full">
+          <DrawerHeader>
+            <DrawerTitle className="text-7xl mt-12">{displayMessage}</DrawerTitle>
+          </DrawerHeader>
+
+          <div className="p-4 pb-0 space-y-2 max-w-full">
+            <Progress value={0.2} className={`bg-amber-50 w-[${progressPercentage}%]`}></Progress>
+            <div className="flex items-center justify-center space-x-2 mx-auto max-w-sm">
+              <DrawerDescription>{progressPercentage?.toFixed(2)} %</DrawerDescription>
+              <div className="flex-1 text-center">
+                <div className="text-xs font-bold tracking-tighter font-mono">
+
+                </div>
+                <div className="text-muted-foreground text-[0.70rem] uppercase">
+
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 h-[120px]">
+              <div className="w-full h-full">
+                Finished in...
+                Silences Removed:
+              </div>
+            </div>
+          </div>
+          <DrawerFooter>
+            <Button onClick={() => onOpenChange(false)}>Continue</Button>
+            <DrawerClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DrawerClose>
+          </DrawerFooter>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+
+}
+
+
 export default function App() {
 
   interface ClientPortalProps {
@@ -404,10 +448,47 @@ export default function App() {
 
   const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
 
+
+  const [showFinalProgress, setShowFinalProgress] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const off1 = EventsOn("taskProgressUpdate", (data: { message: string; progress: number }) => {
+      console.log("taskProgressUpdate", data);
+      if (data.progress) setProgress(data.progress);
+      if (data.message) setMessage(data.message ?? "Processing...");
+    });
+
+    const off2 = EventsOn("showFinalTimelineProgress", () => {
+      console.log("showFinalTimelineProgress");
+      setShowFinalProgress(true);
+    });
+
+    const off3 = EventsOn("finished", () => {
+      setProgress(100);
+      setMessage("All Done!")
+      setShowFinalProgress(true);
+    });
+
+
+    return () => {
+      off1();
+      off2();
+      off3();
+    };
+  }, []);
+
   return (
     <>
       <ClientPortal targetId="overlays">
         <GlobalAlertDialog />
+        <FinalTimelineProgress
+          open={showFinalProgress}
+          progressPercentage={progress}
+          message={message}
+          onOpenChange={setShowFinalProgress}
+        />
       </ClientPortal>
 
       <ClientPortal targetId="title-bar-root">

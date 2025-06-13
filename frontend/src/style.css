@@ -67,7 +67,7 @@ body {
 
 /* silence region */
 ::part(region) {
-  /* pointer-events: unset !important; */
+  pointer-events: unset !important;
   box-sizing: border-box;
   -moz-box-sizing: border-box;
   -webkit-box-sizing: border-box;

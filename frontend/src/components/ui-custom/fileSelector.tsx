@@ -205,7 +205,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   }
 
   return (
-    <ScrollArea className={cn("w-full whitespace-nowrap", className)}>
+    <ScrollArea className={cn("w-full whitespace-nowrap pb-4", className)}>
       <div className="flex w-max space-x-4">
         {sortedItems.map((item) => {
           const itemUniqueIdentifier = item.id || item.processed_file_name;
