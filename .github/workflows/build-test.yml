@@ -57,6 +57,12 @@ jobs:
           echo "TEMP=C:\tmp" >> $env:GITHUB_ENV
           echo "TMP=C:\tmp" >> $env:GITHUB_ENV
 
+      - name: install opentimelineio
+        if: matrix.os == 'windows-latest'
+        run: |
+          pip install --config-settings="cmake.args=-DCMAKE_BUILD_TYPE=Release -DPython3_DEBUG=OFF" opentimelineio
+
+
       - name: Install Python deps
         run: |
           pip install --upgrade pip setuptools wheel
