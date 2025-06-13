@@ -63,7 +63,7 @@ jobs:
           go-version: '1.20'
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
         with:
           name: ${{ matrix.platform }}-build
           path: build/bin/
