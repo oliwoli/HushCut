@@ -305,7 +305,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     }
 
     setIsProcessingClick(true);
-    console.log("Click: Starting 'Prune Silences' process...");
+    console.log("Click: Starting 'HushCut Silences' process...");
 
     try {
       let dataToSend: main.ProjectDataPayload;
@@ -353,11 +353,11 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       //else { console.log("eh") }
       setBusy(false);
 
-      console.log("Click: 'Prune Silences' process finished successfully.");
+      console.log("Click: 'HushCut Silences' process finished successfully.");
       if (onScriptDone)
-        onScriptDone("'Prune Silences' process completed successfully.");
+        onScriptDone("'HushCut Silences' process completed successfully.");
     } catch (error: any) {
-      console.error("Click: Error during 'Prune Silences' process:", error);
+      console.error("Click: Error during 'HushCut Silences' process:", error);
       const errorMessage =
         typeof error === "string"
           ? error
@@ -369,7 +369,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   };
 
   const buttonDisabled = isProcessingClick;
-  const currentButtonText = isProcessingClick ? "Processing..." : "Prune Silences";
+  const currentButtonText = isProcessingClick ? "Processing..." : "Remove Silences";
 
   return (
     <Button

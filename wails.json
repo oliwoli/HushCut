@@ -1,7 +1,7 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "pruner",
-  "outputfilename": "pruner",
+  "name": "HushCut",
+  "outputfilename": "HushCut",
   "frontend:install": "pnpm install",
   "frontend:build": "pnpm run build",
   "frontend:dev:watcher": "pnpm dev",

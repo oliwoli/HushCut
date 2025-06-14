@@ -76,7 +76,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "Pruner",
+		Title:  "HushCut",
 		Width:  1024,
 		Height: 1100,
 		AssetServer: &assetserver.Options{
@@ -96,7 +96,7 @@ func main() {
 			Icon: icon,
 			WindowIsTranslucent: false,
 			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
-			ProgramName: "Pruner",
+			ProgramName: "HushCut",
 		},
 	})
 
