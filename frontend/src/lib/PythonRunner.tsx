@@ -374,7 +374,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   return (
     <Button
       onClick={handleClick}
-      onMouseEnter={handleMouseEnter} // Re-added onMouseEnter
+      onMouseEnter={handleMouseEnter}
       disabled={buttonDisabled}
       className={`bg-teal-800 border-1 text-white p-8 hover:bg-teal-700 font-[400] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""
         }`}
