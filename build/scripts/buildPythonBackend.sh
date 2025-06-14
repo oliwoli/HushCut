@@ -26,7 +26,7 @@ echo "Activating Python virtual environment from: $PROJECT_ROOT/python-backend/v
 source python-backend/venv/bin/activate
 
 echo "Running PyInstaller with spec file: $PROJECT_ROOT/python-backend/main.spec"
-pyinstaller python-backend/main.spec -y
+pyinstaller python-backend/src/main.py -y
 
 echo "Copying PyInstaller output to Wails build directory..."
 
