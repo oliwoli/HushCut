@@ -17,7 +17,7 @@ const _TitleBar = () => {
                         >
                             <XIcon className="scale-90" strokeWidth={2.5} />
                         </Button>
-                        <h1 className="text-sm font-normal text-neutral-200">Pruner</h1>
+                        <h1 className="text-sm font-normal text-neutral-200">Pruner (WIP and working title)</h1>
                         <div className="flex items-center space-x-2">
                             <Button
                                 size="icon"

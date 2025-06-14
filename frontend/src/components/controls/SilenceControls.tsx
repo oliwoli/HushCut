@@ -38,8 +38,8 @@ const _MinDurationControl = React.memo(() => {
     const isDisabled = !currentClipId;
 
     return (
-        <>
-            <Label className="font-medium w-32">
+        <div className='space-y-1'>
+            <Label className="font-medium w-32 text-stone-400">
                 Minimum Duration
             </Label>
             <div className="flex items-center space-x-5">
@@ -58,7 +58,7 @@ const _MinDurationControl = React.memo(() => {
                     <ResetButton onClick={resetMinDuration} disabled={isDisabled} />
                 </div>
             </div>
-        </>
+        </div>
     );
 });
 
@@ -105,8 +105,8 @@ const _PaddingControl = React.memo(() => {
     const isDisabled = !currentClipId;
 
     return (
-        <>
-            <Label className="font-medium w-32 text-right">
+        <div className='space-y-1'>
+            <Label className="font-medium w-32 text-right text-stone-400">
                 Padding
             </Label>
             <div className="flex items-baseline space-x-5">
@@ -144,7 +144,7 @@ const _PaddingControl = React.memo(() => {
                     </div>
                 </div>
             </div>
-        </>
+        </div>
     );
 });
 
@@ -158,7 +158,7 @@ const _MinContentControl = React.memo(() => {
 
 export const SilenceControls = () => {
     return (
-        <div className="space-y-4 w-full p-5">
+        <div className="space-y-6 w-full p-5">
             <_MinDurationControl />
             <_PaddingControl />
         </div>

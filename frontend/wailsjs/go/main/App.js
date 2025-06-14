@@ -50,8 +50,8 @@ export function LaunchPythonBackend(arg1, arg2) {
   return window['go']['main']['App']['LaunchPythonBackend'](arg1, arg2);
 }
 
-export function MakeFinalTimeline(arg1) {
-  return window['go']['main']['App']['MakeFinalTimeline'](arg1);
+export function MakeFinalTimeline(arg1, arg2) {
+  return window['go']['main']['App']['MakeFinalTimeline'](arg1, arg2);
 }
 
 export function ProcessWavToLinearPeaks(arg1, arg2, arg3, arg4) {
@@ -60,6 +60,10 @@ export function ProcessWavToLinearPeaks(arg1, arg2, arg3, arg4) {
 
 export function ProcessWavToLogarithmicPeaks(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['ProcessWavToLogarithmicPeaks'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function ResolveBinaryPath(arg1) {
+  return window['go']['main']['App']['ResolveBinaryPath'](arg1);
 }
 
 export function RunPythonScriptWithArgs(arg1) {

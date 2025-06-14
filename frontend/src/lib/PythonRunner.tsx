@@ -12,7 +12,7 @@ import {
 import { main } from "@wails/go/models";
 import type { DetectionParams, SilencePeriod } from "../types";
 
-import { useClipStore } from '@/stores/clipStore';
+import { useClipStore, useGlobalStore } from '@/stores/clipStore';
 import { ClipParameters, defaultParameters } from "@/stores/clipStore";
 import { useSyncBusyState } from "@/stores/appSync";
 
@@ -94,7 +94,7 @@ async function prepareProjectDataWithEdits(
       }
 
       const itemSpecificParams = allClipParams[clipId] || defaultParams;
-      const filePathForGo = item.processed_file_name + ".wav";
+      const filePathForGo = item.processed_file_name;
       const clipStartSeconds = item.source_start_frame / timelineFps;
       const clipEndSeconds = item.source_end_frame / timelineFps;
 
@@ -150,6 +150,8 @@ async function prepareProjectDataWithEdits(
 }
 
 const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
+  const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
+
   const {
     projectData: initialProjectData,
     defaultDetectionParams,
@@ -332,9 +334,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       }
 
       console.log("Click: Making final timeline...");
-
-
-      const response = await MakeFinalTimeline(dataToSend);
+      const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
 
       if (!response || response.status === "error") {
         const errMessage =
@@ -350,10 +350,8 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
           response.message
         );
       }
-      else { console.log("eh") }
+      //else { console.log("eh") }
       setBusy(false);
-
-
 
       console.log("Click: 'Prune Silences' process finished successfully.");
       if (onScriptDone)

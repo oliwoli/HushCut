@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections import Counter
+from collections.abc import Mapping
 import json
 
 import threading
@@ -40,6 +41,7 @@ from local_types import (
     TimelineItem,
     FileSource,
     ProjectData,
+    AudioFromVideo,
 )
 
 import globalz
@@ -72,6 +74,8 @@ GO_SERVER_PORT = 0
 
 STANDALONE_MODE = False
 RESOLVE = None
+FFMPEG = "ffmpeg"
+MAKE_NEW_TIMELINE = True
 
 
 class ProgressTracker:
@@ -186,6 +190,8 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
 
         # This is an independent HTTP request from Python to Go
         def fallback_serializer(obj):
+            if hasattr(obj, "__dict__"):
+                return obj.__dict__
             return "<BMDObject>"
 
         response = requests.post(
@@ -206,7 +212,7 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
             f"Python (to Go): Error sending message type '{message_type}': {e}",
             flush=True,
         )
-        print(f"Payload: {payload}")
+        # print(f"Payload: {payload}")
         return False
 
 
@@ -314,22 +320,15 @@ def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
         print("Failed to export timeline.")
 
 
-class AudioFromVideo(TypedDict):
-    video_bmd_media_pool_item: Any
-    video_file_path: str
-    audio_file_path: str
-    audio_file_uuid: str
-    audio_file_name: str
-    silence_intervals: List[SilenceInterval]
-
-
-def extract_audio(file: Any, target_folder: str) -> Optional[AudioFromVideo]:
+def extract_audio(file: FileSource, target_folder: str) -> Optional[AudioFromVideo]:
+    global FFMPEG
     filepath = file.get("file_path")
     if not filepath or not os.path.exists(filepath):
         return
 
     wav_path = os.path.join(target_folder, f"{file['uuid']}.wav")
 
+    # This object is created regardless, as it's needed for the return value
     audio_from_video: AudioFromVideo = {
         "audio_file_name": os.path.basename(wav_path),
         "audio_file_path": wav_path,
@@ -339,12 +338,14 @@ def extract_audio(file: Any, target_folder: str) -> Optional[AudioFromVideo]:
         "silence_intervals": [],
     }
 
+    # The caller now determines if this function is needed.
+    # The check remains here as a safeguard.
     if misc_utils.is_valid_audio(wav_path):
         return audio_from_video
 
     print(f"Extracting audio from: {filepath}")
     audio_extract_cmd = [
-        "ffmpeg",
+        FFMPEG,
         "-y",
         "-i",
         filepath,
@@ -356,7 +357,13 @@ def extract_audio(file: Any, target_folder: str) -> Optional[AudioFromVideo]:
         wav_path,
     ]
     subprocess.run(audio_extract_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return audio_from_video
+
+    # Final check to ensure extraction was successful
+    if misc_utils.is_valid_audio(wav_path):
+        return audio_from_video
+    else:
+        print(f"Error: Failed to extract or validate audio for {filepath}")
+        return None
 
 
 def process_audio_files(
@@ -366,7 +373,12 @@ def process_audio_files(
     start_time = time()
     audios_from_video: list[AudioFromVideo] = []
 
-    print(f"Starting audio extraction with {max_workers} workers.")
+    if not audio_source_files:
+        return []
+
+    print(
+        f"Starting audio extraction for {len(audio_source_files)} files with {max_workers} workers."
+    )
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(extract_audio, file, target_folder)
@@ -375,7 +387,7 @@ def process_audio_files(
 
         for future in as_completed(futures):
             result = future.result()
-            if result:  # Only add valid paths
+            if result:  # Only add valid results
                 audios_from_video.append(result)
 
     print(
@@ -386,9 +398,10 @@ def process_audio_files(
 
 def detect_silence_in_file(audio_file: AudioFromVideo, timeline_fps) -> AudioFromVideo:
     """Runs FFmpeg silence detection on a single WAV file and returns intervals."""
+    global FFMPEG
     processed_audio = audio_file["audio_file_path"]
     silence_detect_cmd = [
-        "ffmpeg",
+        FFMPEG,
         "-i",
         processed_audio,
         "-af",
@@ -437,6 +450,9 @@ def detect_silence_parallel(
     """Runs silence detection in parallel across audio files."""
     results: dict[str, AudioFromVideo] = {}
 
+    if not processed_audio:
+        return {}
+
     print(f"Starting silence detection with {max_workers} workers.")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
@@ -473,7 +489,7 @@ def get_items_by_tracktype(
     items: list[TimelineItem] = []
     track_count = timeline.GetTrackCount(track_type)
     for i in range(1, track_count + 1):
-        track_items = timeline.GetItemListInTrack(track_type, i)
+        track_items = timeline.GetItemListInTrack(track_type, i) or []
         for item in track_items:
             start_frame = item.GetStart(True)
             item_name = item.GetName()
@@ -498,7 +514,7 @@ def get_items_by_tracktype(
                 "track_type": track_type,
                 "track_index": i,
                 "source_file_path": source_file_path,
-                "processed_file_name": misc_utils.uuid_from_path(source_file_path).hex,
+                "processed_file_name": None,  # Initialized as None
                 "source_start_frame": source_start_float,
                 "source_end_frame": source_end_float,
             }
@@ -632,124 +648,146 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     }
 
     # Final structure:
-    globalz.PROJECT_DATA = {
-        "project_name": project.GetName(),
-        "timeline": tl_dict,
-        "files": {},
-    }
+    if not globalz.PROJECT_DATA:
+        globalz.PROJECT_DATA = {
+            "project_name": project.GetName(),
+            "timeline": tl_dict,
+            "files": {},
+        }
+    else:
+        # Preserve existing files, update timeline specific data
+        globalz.PROJECT_DATA["project_name"] = project.GetName()
+        globalz.PROJECT_DATA["timeline"] = tl_dict
 
-    seen_uuids: list[str] = []
+    seen_uuids: set[str] = set()
     audio_source_files: list[FileSource] = []  # includes duplicates (true to timeline)
     audio_sources_set: list[FileSource] = []  # no duplicates
+
     for item in audio_track_items:
         source_media_item = get_source_media_from_timeline_item(item)
         if not source_media_item:
             continue
         item["bmd_mpi"] = source_media_item["bmd_media_pool_item"]
         audio_source_files.append(source_media_item)
-        if source_media_item["uuid"] in seen_uuids:
-            continue
-        seen_uuids.append(source_media_item["uuid"])
-        audio_sources_set.append(source_media_item)
+        if source_media_item["uuid"] not in seen_uuids:
+            seen_uuids.add(source_media_item["uuid"])
+            audio_sources_set.append(source_media_item)
 
     if len(audio_source_files) == 0:
-        return False, "No files to process"
+        return False, "No audio files to process on the timeline."
 
-    print(f"Source media files count: {len(audio_source_files)}")
-
+    print(
+        f"Found {len(audio_source_files)} audio clips from {len(audio_sources_set)} unique source files."
+    )
     assign_bmd_mpi_to_items(video_track_items)
-    # assign_bmd_mpi_to_items(audio_track_items)
 
-    processed_audio_paths: list[AudioFromVideo] = []
-    # if at this point, audio source files is the same as PROJECT_DATA, we don't need to reprocess/check if the files exist
-    if globalz.PROJECT_DATA:
-        project_data_source_files = list(globalz.PROJECT_DATA["files"].keys())
-        print(f"Project data source files count: {len(project_data_source_files)}")
-        curr_audio_source_files = [file["file_path"] for file in audio_sources_set]
-        print(f"Current audio source files count: {len(curr_audio_source_files)}")
+    # -- REFACTORED AUDIO PROCESSING --
 
-        curr_audio_source_files.sort(key=lambda x: x.lower())
-        project_data_source_files.sort(key=lambda x: x.lower())
+    # 1. Ensure FileData entries exist for all unique sources.
+    for source in audio_sources_set:
+        if source["file_path"] not in globalz.PROJECT_DATA["files"]:
+            globalz.PROJECT_DATA["files"][source["file_path"]] = {
+                "properties": {"FPS": timeline_fps},
+                "timelineItems": [],
+                "fileSource": source,
+                "silenceDetections": None,
+            }
 
-        if curr_audio_source_files == project_data_source_files:
+    # 2. Identify files needing extraction vs. those already processed.
+    sources_to_extract: list[FileSource] = []
+    all_processed_audio: list[AudioFromVideo] = []
+
+    for source in audio_sources_set:
+        file_path = source["file_path"]
+        file_data = globalz.PROJECT_DATA["files"].get(file_path)
+
+        # Add a guard clause to satisfy the IDE and make the code more robust.
+        if not file_data:
+            print(f"Warning: Could not find file data for '{file_path}'. Skipping.")
+            continue
+
+        processed_path = file_data.get("processed_audio_path")
+
+        if processed_path and misc_utils.is_valid_audio(processed_path):
             print(
-                "Audio source files are the same as PROJECT_DATA, skipping processing."
+                f"Skipping extraction for '{os.path.basename(file_path)}', already processed."
+            )
+            all_processed_audio.append(
+                {
+                    "audio_file_name": os.path.basename(processed_path),
+                    "audio_file_path": processed_path,
+                    "audio_file_uuid": source["uuid"],
+                    "video_file_path": file_path,
+                    "video_bmd_media_pool_item": source["bmd_media_pool_item"],
+                    # This line is also now safe because of the guard clause
+                    "silence_intervals": file_data.get("silenceDetections") or [],
+                }
             )
         else:
-            processed_audio_paths = process_audio_files(audio_sources_set, TEMP_DIR)
-    else:
-        processed_audio_paths = process_audio_files(audio_sources_set, TEMP_DIR)
+            sources_to_extract.append(source)
 
-    if STANDALONE_MODE:
-        silence_intervals_by_file = detect_silence_parallel(
-            processed_audio_paths, timeline_fps
-        )
+    # 3. Process only the files that need it.
+    newly_processed_audio = process_audio_files(sources_to_extract, TEMP_DIR)
 
-    for file in audio_source_files:
-        audio_path = file["file_path"]
-        globalz.PROJECT_DATA["files"][audio_path] = {
-            "properties": {
-                "FPS": timeline_fps,
-            },
-            "silenceDetections": [],
-            "timelineItems": [],
-            "fileSource": file,
-        }
-
-        if STANDALONE_MODE:
-            if audio_path not in silence_intervals_by_file:
-                print(f"No silence detected in {audio_path}")
-                continue
-
-            silence_intervals: AudioFromVideo = silence_intervals_by_file[audio_path]
-
-            globalz.PROJECT_DATA["files"][audio_path]["silenceDetections"] = (
-                silence_intervals["silence_intervals"]
+    # 4. Update state for newly processed files and add them to the main list.
+    for processed_info in newly_processed_audio:
+        source_path = processed_info["video_file_path"]
+        if source_path in globalz.PROJECT_DATA["files"]:
+            globalz.PROJECT_DATA["files"][source_path]["processed_audio_path"] = (
+                processed_info["audio_file_path"]
             )
-            print(f"Detected {len(silence_intervals)} silence segments in {audio_path}")
+        all_processed_audio.append(processed_info)
+
+    # 5. Run silence detection on all available audio files (new and old).
+    if STANDALONE_MODE:
+        silence_results = detect_silence_parallel(all_processed_audio, timeline_fps)
+        # Update the main data structure with new silence detections
+        for file_path, result_data in silence_results.items():
+            if file_path in globalz.PROJECT_DATA["files"]:
+                globalz.PROJECT_DATA["files"][file_path]["silenceDetections"] = (
+                    result_data["silence_intervals"]
+                )
+                print(
+                    f"Detected {len(result_data['silence_intervals'])} silence segments in {file_path}"
+                )
+
+    # -- END REFACTORED BLOCK --
+
+    # 6. Populate `processed_file_name` on each timeline item for frontend compatibility
+    for item in audio_track_items:
+        source_path = item.get("source_file_path")
+        if source_path and source_path in globalz.PROJECT_DATA["files"]:
+            file_data = globalz.PROJECT_DATA["files"][source_path]
+            processed_path = file_data.get("processed_audio_path")
+            if processed_path:
+                item["processed_file_name"] = os.path.basename(processed_path)
 
     start_calc_edits = time()
     for item in globalz.PROJECT_DATA["timeline"]["audio_track_items"]:
-        bmd_item = item["bmd_item"]
-        clip_start_frame_timeline = item["start_frame"]
-        clip_start_frame_source = item["source_start_frame"]
-        clip_end_frame_timeline = item["end_frame"]
-        clip_end_frame_source = item["source_end_frame"]
-        # clip_linked_items = bmd_item.GetLinkedItems()
-        clip_media_pool_item = bmd_item.GetMediaPoolItem()
-        if not clip_media_pool_item:
-            continue
-        clip_file_path = clip_media_pool_item.GetClipProperty("File Path")
-        if clip_file_path is None or clip_file_path == "":
+        clip_file_path = item["source_file_path"]
+        if not clip_file_path or clip_file_path not in globalz.PROJECT_DATA["files"]:
             continue
 
         main_clip_data: ClipData = {
-            "start_frame": clip_start_frame_timeline,
-            "end_frame": clip_end_frame_timeline,
-            "source_start_frame": clip_start_frame_source,
-            "source_end_frame": clip_end_frame_source,
+            "start_frame": item["start_frame"],
+            "end_frame": item["end_frame"],
+            "source_start_frame": item["source_start_frame"],
+            "source_end_frame": item["source_end_frame"],
         }
-        timeline_items: list[TimelineItem] = globalz.PROJECT_DATA["files"][
-            clip_file_path
-        ]["timelineItems"]
 
-        silence_detections: Union[List[SilenceInterval], None] = globalz.PROJECT_DATA[
-            "files"
-        ][clip_file_path]["silenceDetections"]
+        file_data = globalz.PROJECT_DATA["files"][clip_file_path]
+        if item not in file_data["timelineItems"]:
+            file_data["timelineItems"].append(item)
+
+        silence_detections = file_data.get("silenceDetections")
 
         if silence_detections:
             edit_instructions: List[EditInstruction] = (
                 create_edits_with_optional_silence(main_clip_data, silence_detections)
             )
             item["edit_instructions"] = edit_instructions
-            timeline_items.append(item)
 
     print(f"It took {time() - start_calc_edits:.2f} seconds to calculate edits")
-
-    # json_ex_start = time()
-    # json_output_path = os.path.join(TEMP_DIR, "silence_detections.json")
-    # misc_utils.export_to_json(globalz.PROJECT_DATA, json_output_path)
-    # print(f"it took {time() - json_ex_start:.2f} seconds to export to JSON")
 
     return True, None
 
@@ -766,7 +804,9 @@ def merge_project_data(project_data_from_go: ProjectData) -> None:
     return
 
 
-def deep_merge_bmd_aware(target_dict: ProjectData, source_dict: dict) -> None:
+def deep_merge_bmd_aware(
+    target_dict: ProjectData, source_dict: Mapping[str, Any]
+) -> None:
     for key, source_value in source_dict.items():
         if source_value == "<BMDObject>":
             if key not in target_dict or target_dict.get(key) is None:
@@ -810,6 +850,50 @@ def deep_merge_bmd_aware(target_dict: ProjectData, source_dict: dict) -> None:
             continue
 
         target_dict[key] = source_value
+
+
+def apply_edits_from_go(
+    target_project: ProjectData, source_project: ProjectData
+) -> None:
+    """
+    Applies ONLY the 'edit_instructions' from a source project data structure
+    to the target, matching audio timeline items by their unique ID.
+
+    This function is intentionally simple to robustly update the target with
+    the essential data from the frontend without side effects.
+    """
+    print("Applying edit instructions from Go...")
+
+    # Create an efficient lookup map of the audio items sent from Go.
+    source_audio_items = source_project.get("timeline", {}).get("audio_track_items", [])
+    source_items_by_id = {
+        item["id"]: item for item in source_audio_items if "id" in item
+    }
+
+    if not source_items_by_id:
+        print(
+            "Warning: No audio items with IDs found in data from Go. No edits applied."
+        )
+        return
+
+    # Get the target audio items that we will modify in-place.
+    target_audio_items = target_project.get("timeline", {}).get("audio_track_items", [])
+
+    items_updated_count = 0
+    # Iterate through the target items and apply the source's edit instructions.
+    for target_item in target_audio_items:
+        item_id = target_item.get("id")
+
+        # Find the matching item from the source data.
+        if item_id and item_id in source_items_by_id:
+            source_item = source_items_by_id[item_id]
+
+            # This is the core logic: copy the edit_instructions if they exist.
+            if "edit_instructions" in source_item:
+                target_item["edit_instructions"] = source_item["edit_instructions"]
+                items_updated_count += 1
+
+    print(f"Finished applying edits. Updated {items_updated_count} timeline items.")
 
 
 def send_result_with_alert(
@@ -988,12 +1072,12 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
     print(f"Exported timeline to OTIO in {input_otio_path}")
 
-    unify_edits = unify_linked_items_in_project_data(input_otio_path)
+    unify_linked_items_in_project_data(input_otio_path)
 
     TRACKER.complete_task("prepare")
     TRACKER.update_task_progress("append", 1.0, "Adding Clips to Timeline")
 
-    append_and_link_timeline_items()
+    append_and_link_timeline_items(MAKE_NEW_TIMELINE)
 
     TRACKER.complete_task("append")
 
@@ -1376,6 +1460,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data_dict).encode("utf-8"))
 
     def do_POST(self):
+        global MAKE_NEW_TIMELINE
         if not self.path == "/command":
             self._send_json_response(
                 404, {"status": "error", "message": "Endpoint not found."}
@@ -1437,22 +1522,39 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                 main(sync=True, task_id=task_id)
                 return
             elif command == "makeFinalTimeline":
-                project_data_from_go = params.get("projectData")
-                # turn project_data_from_go into a ProjectData object
-                project_data_from_go = ProjectData(**project_data_from_go)
+                project_data_from_go_raw = params.get("projectData")
+                MAKE_NEW_TIMELINE = params.get("makeNewTimeline", False)
+
+                if not project_data_from_go_raw:
+                    # Handle case where no data is sent
+                    # (You might want to add a proper error response here)
+                    return
+
+                # Assuming project_data_from_go_raw is a dict
+                project_data_from_go = ProjectData(**project_data_from_go_raw)
+
                 response_payload = {
                     "status": "success",
                     "message": "Final timeline generation started.",
                 }
                 self._send_json_response(200, response_payload)
-                # merge_project_data(project_data_from_go)
-                deep_merge_bmd_aware(globalz.PROJECT_DATA, project_data_from_go)
+
+                # FIX: Check for None before calling the function
+                if globalz.PROJECT_DATA:
+                    apply_edits_from_go(globalz.PROJECT_DATA, project_data_from_go)
+
+                else:
+                    # If no data exists yet, the incoming data becomes the new base
+                    globalz.PROJECT_DATA = project_data_from_go
 
                 # save project data to json for debugging
-                debug_output_path = os.path.join(
-                    os.path.dirname(TEMP_DIR), "project_data_from_go.json"
-                )
-                misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output_path)
+                # debug_output_path = os.path.join(
+                #     os.path.dirname(TEMP_DIR), "project_data_from_go.json"
+                # )
+
+                # Also check here before saving
+                # if globalz.PROJECT_DATA:
+                #    misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output_path)
 
                 main(sync=False, task_id=task_id)
                 return
@@ -1528,9 +1630,9 @@ def run_python_command_server(listen_port: int):
 def init():
     global GO_SERVER_PORT
     global RESOLVE
+    global FFMPEG
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-threshold", type=float)
     parser.add_argument(
         "-gp", "--go-port", type=int
     )  # port to communicate with http server
@@ -1538,14 +1640,13 @@ def init():
         "-lp", "--listen-on-port", type=int
     )  # port to receive commands from go
     parser.add_argument("--auth-token", type=str)  # authorization token
-    parser.add_argument("-min_duration", type=float)
-    parser.add_argument("-padding_l", type=float)
-    parser.add_argument("-padding_r", type=float)
+    parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("-s", "--sync", action="store_true")
     parser.add_argument("--standalone", action="store_true")
     args = parser.parse_args()
 
     GO_SERVER_PORT = args.go_port
+    FFMPEG = args.ffmpeg
 
     # --- FUTURE: Store shared secret ---
     # global EXPECTED_GO_COMMAND_TOKEN, ENABLE_COMMAND_AUTH

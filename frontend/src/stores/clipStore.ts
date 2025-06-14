@@ -4,8 +4,18 @@ import { create } from "zustand";
 import { useCallback, useMemo } from 'react';
 import deepEqual from 'fast-deep-equal';
 import { useStoreWithEqualityFn } from "zustand/traditional";
-import { DetectionParams } from '@/types';
-import { shallow } from 'zustand/shallow';
+
+
+interface GlobalStore {
+  makeNewTimeline: boolean;
+  setMakeNewTimeline: (value: boolean) => void;
+}
+
+export const useGlobalStore = create<GlobalStore>((set) => ({
+  makeNewTimeline: false,
+  setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
+}));
+
 
 // The SINGLE source of truth for default parameter values
 export const defaultParameters = {

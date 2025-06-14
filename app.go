@@ -34,7 +34,6 @@ type App struct {
 	effectiveAudioFolderPath string // Resolved absolute path to the audio folder
 	pendingMu                sync.Mutex
 	pendingTasks             map[string]chan PythonCommandResponse
-	pythonBackendBinaryPath  string
 	ffmpegBinaryPath         string
 }
 
@@ -54,21 +53,44 @@ func NewApp() *App {
 }
 
 
-func ResolveBinaryPath(ctx context.Context, binaryName string) (string, error) {
-	platform := runtime.Environment(ctx).Platform
+func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
+	platform := runtime.Environment(a.ctx).Platform
 
+	// Adjust binary name for Windows
+	if platform == "windows" {
+		binaryName += ".exe"
+	}
+
+	// Attempt to resolve relative to the Go executable
+	if goExecutablePath, err := os.Executable(); err == nil {
+		goExecutableDir := filepath.Dir(goExecutablePath)
+
+		var candidatePath string
+		switch platform {
+		case "darwin":
+			// Look in ../Resources/ relative to the executable
+			candidatePath = filepath.Join(goExecutableDir, "..", "Resources", binaryName)
+
+		case "windows", "linux":
+			// Look in the same directory as the executable
+			candidatePath = filepath.Join(goExecutableDir, binaryName)
+		}
+
+		if candidatePath != "" {
+			if _, statErr := os.Stat(candidatePath); statErr == nil {
+				return filepath.Abs(candidatePath)
+			}
+		}
+	}
+
+	// Fallbacks if not found relative to executable
 	switch platform {
 	case "darwin":
-		// In macOS, binaries are in Contents/Resources/
-		path := filepath.Join("..", "Resources", binaryName)
-		return filepath.Abs(path)
+		// Fallback: relative to working directory (development mode?)
+		return filepath.Abs(filepath.Join("..", "Resources", binaryName))
 
-	case "windows":
-		binaryName += ".exe"
-		fallthrough
-
-	case "linux":
-		// On Linux/Windows, binaries are in the same dir as the app binary
+	case "windows", "linux":
+		// Fallback: look in current working directory
 		return filepath.Abs(binaryName)
 
 	default:
@@ -79,20 +101,11 @@ func ResolveBinaryPath(ctx context.Context, binaryName string) (string, error) {
 
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
-	pythonTargetName := "python_backend"
-
-	var determinedPath string
-
-	goExecutablePath, err := os.Executable()
-	if err == nil {
-		goExecutableDir := filepath.Dir(goExecutablePath)
-		pathAlongsideExe := filepath.Join(goExecutableDir, pythonTargetName)
-
-		if _, statErr := os.Stat(pathAlongsideExe); statErr == nil {
-			// Found it next to the Go executable!
-			determinedPath = pathAlongsideExe
-		}
+	determinedPath, err := a.ResolveBinaryPath("python_backend")
+	if err != nil {
+		return err
 	}
+	log.Printf("Resolved path to python_backend: %s", determinedPath)
 
 	cmdArgs := []string{
 		"--go-port", fmt.Sprintf("%d", port),
@@ -119,9 +132,33 @@ func (a *App) GetGoServerPort() int {
 	return actualPort // Accesses the global from httpserver.go
 }
 
+
+func binaryExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	cmd := exec.Command(path, "-version")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Run() == nil
+}
+
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
+	var err error
+	a.ffmpegBinaryPath, err = a.ResolveBinaryPath("ffmpeg")
+	if err != nil || !binaryExists(a.ffmpegBinaryPath) {
+		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
+	
+		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+			a.ffmpegBinaryPath = pathInSystem
+			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
+		} else {
+			log.Fatalf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
+		}
+	}
 
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
@@ -130,17 +167,6 @@ func (a *App) startup(ctx context.Context) {
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
-
-	var err error
-	a.ffmpegBinaryPath, err = ResolveBinaryPath(a.ctx, "ffmpeg")
-	if err != nil {
-		log.Fatalf("Failed to resolve ffmpeg binary path: %v", err)
-	}
-
-	a.pythonBackendBinaryPath, err = ResolveBinaryPath(a.ctx, "python_backend")
-	if err != nil {
-		log.Fatalf("python backend: %v", err)
-	}
 
 }
 
@@ -335,11 +361,8 @@ func (a *App) RunPythonScriptWithArgs(args []string) error {
 
 	// Wait in background
 	go func() {
-		err := cmd.Wait()
-		if err != nil {
-			runtime.EventsEmit(a.ctx, "python:done", "Script finished with error: "+err.Error())
-		} else {
-			runtime.EventsEmit(a.ctx, "python:done", "Script completed successfully.")
+		if err := cmd.Wait(); err != nil {
+			log.Printf("Python backend exited with error: %v", err)
 		}
 	}()
 
@@ -400,10 +423,7 @@ func (a *App) DetectSilences(
 		"-f", "null",
 		"-",
 	}
-
-	log.Println("FFmpeg command: ", args)
-
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command(a.ffmpegBinaryPath, args...)
 	var outputBuffer bytes.Buffer
 	cmd.Stdout = &outputBuffer
 	cmd.Stderr = &outputBuffer

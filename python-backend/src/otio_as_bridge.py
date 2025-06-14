@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import List, Dict, Tuple, Optional, cast
 
 # Assuming these are correctly defined in your project
@@ -9,7 +10,7 @@ from local_types import (
 import globalz
 
 # from pprint import pprint
-# from misc_utils import export_to_json
+from misc_utils import export_to_json
 
 
 def process_track_items(
@@ -260,5 +261,5 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             )
 
     # current_dir = os.path.dirname(os.path.abspath(__file__))
-    # debug_json_path = os.path.join(current_dir, "debug_project_data.json")
+    ##debug_json_path = os.path.join(current_dir, "debug_project_data.json")
     # export_to_json(globalz.PROJECT_DATA, debug_json_path)

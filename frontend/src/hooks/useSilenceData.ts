@@ -71,7 +71,7 @@ export function useSilenceData(
 
     try {
       const result = await GetOrDetectSilencesWithCache(
-        activeFile.processedFileName + ".wav", // String() wrapper is not strictly needed if already string
+        activeFile.processedFileName, // String() wrapper is not strictly needed if already string
         detectionParams.loudnessThreshold,
         detectionParams.minSilenceDurationSeconds,
         detectionParams.paddingLeftSeconds,
@@ -125,5 +125,6 @@ export function useSilenceData(
     debouncedFetch.cancel(); // Cancel any pending debounced call
     return fetchLogic();    // Call fetchLogic directly
   }, [fetchLogic, debouncedFetch]);
+  console.log("silence data: ", silenceData);
   return { silenceData, isLoading, error, refetch };
 }

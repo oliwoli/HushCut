@@ -26,11 +26,13 @@ export function LaunchHttpServer(arg1:any):Promise<void>;
 
 export function LaunchPythonBackend(arg1:number,arg2:number):Promise<void>;
 
-export function MakeFinalTimeline(arg1:main.ProjectDataPayload):Promise<main.PythonCommandResponse>;
+export function MakeFinalTimeline(arg1:main.ProjectDataPayload,arg2:boolean):Promise<main.PythonCommandResponse>;
 
 export function ProcessWavToLinearPeaks(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
 
 export function ProcessWavToLogarithmicPeaks(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
+
+export function ResolveBinaryPath(arg1:string):Promise<string>;
 
 export function RunPythonScriptWithArgs(arg1:Array<string>):Promise<void>;
 

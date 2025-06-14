@@ -34,6 +34,7 @@ import { SilenceControls } from "./components/controls/SilenceControls";
 import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "./components/ui/drawer";
 import { Button } from "./components/ui/button";
 import { Progress } from "./components/ui/progress";
+import { DavinciSettings } from "./components/controls/DavinciSettings";
 
 
 EventsOn("showToast", (data) => {
@@ -357,11 +358,12 @@ function AppContent() {
                 </>
               )}
             </div>
-            <div className="w-full px-1 bg-stone-800 rounded-2xl">
+            <div className="w-full px-1 bg-[#28282e] rounded-2xl border-1 overflow-hidden shadow-xl">
               <div className="p-5 space-y-6">
                 <SilenceControls key={currentClipId} />
+                <DavinciSettings />
                 {projectData && (
-                  <div className="flex justify-center">
+                  <div className="flex justify-start mb-4">
                     <RemoveSilencesButton
                       projectData={projectData}
                       keepSilenceSegments={false}

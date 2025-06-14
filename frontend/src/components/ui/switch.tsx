@@ -11,7 +11,11 @@ function Switch({
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "peer data-[state=checked]:bg-[#171717] data-[state=unchecked]:bg-input focus-visible:border-ring focus-visible:ring-ring/50 dark:data-[state=unchecked]:bg-input/80 inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+        // Track styles
+        "peer inline-flex h-[1rem] w-[1.9rem] shrink-0 items-center rounded-full bg-[#111] transition-colors duration-100",
+        "data-[state=checked]:bg-[#111] data-[state=unchecked]:bg-[#111]",
+        "focus-visible:outline-none focus-visible:ring-0",
+        "disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}
@@ -19,11 +23,16 @@ function Switch({
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "bg-background dark:data-[state=unchecked]:bg-foreground dark:data-[state=checked]:bg-orange-400 pointer-events-none block size-4 rounded-full ring-0 transition-transform data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0"
+          // Thumb styles
+          "pointer-events-none block size-[0.6rem] rounded-full transition-transform duration-200",
+          "transform data-[state=checked]:translate-x-[calc(100%+6px)] data-[state=unchecked]:translate-x-1",
+          "data-[state=checked]:bg-[#d30000]", // bright red when on
+          "data-[state=unchecked]:bg-[#444]" // dark gray when off
         )}
       />
     </SwitchPrimitive.Root>
-  )
+  );
 }
+
 
 export { Switch }

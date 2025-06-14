@@ -50,7 +50,7 @@ export function useWaveformData(
 
         // 1. Construct the URL for the cut audio segment
         const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
-            activeClip.processedFileName + ".wav"
+            activeClip.processedFileName
         )}&start=${clipStartSeconds.toFixed(3)}&end=${clipEndSeconds.toFixed(3)}`;
         setCutAudioSegmentUrl(newCutAudioUrl);
 
@@ -60,7 +60,7 @@ export function useWaveformData(
             setIsLoading(true);
             try {
             const peakDataForSegment = await GetWaveform(
-                activeClip.processedFileName + ".wav",
+                activeClip.processedFileName,
                 256, "logarithmic", -60.0,
                 clipStartSeconds,
                 clipEndSeconds

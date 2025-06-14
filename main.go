@@ -78,7 +78,7 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:  "Pruner",
 		Width:  1024,
-		Height: 768,
+		Height: 1100,
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: NewFileLoader(),

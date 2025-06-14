@@ -403,7 +403,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 	log.Printf("RenderClip: Processing request for %s, segment %f to %f seconds. Range: %s",
 		originalFilePath, startSeconds, endSeconds, r.Header.Get("Range"))
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.Command(a.ffmpegBinaryPath,
 		"-i", originalFilePath,
 		"-ss", fmt.Sprintf("%f", startSeconds),
 		"-to", fmt.Sprintf("%f", endSeconds),
@@ -797,7 +797,7 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 	return &finalResponse, nil // finalResponse.AlertIssued will be false if no alert was processed
 }
 
-func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (*PythonCommandResponse, error) {
+func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline bool) (*PythonCommandResponse, error) {
     if !a.pythonReady {
         return nil, fmt.Errorf("python backend not ready")
     }
@@ -825,6 +825,7 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload) (*PythonCommand
     params := map[string]interface{}{
         "taskId":      taskID,
         "projectData": projectData,
+		"makeNewTimeline": makeNewTimeline,
     }
 
     // 3. Send the command and just check the acknowledgement

@@ -100,7 +100,7 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
         // MODIFICATION: Call the new generic GetWaveform function with 'linear' type.
         // minDb is irrelevant here, so we can pass 0 or a default.
         const peakData = await GetWaveform(
-          item.processed_file_name + ".wav",
+          item.processed_file_name,
           dynamicSamplesPerPixel,
           "linear",
           -60.0, // Not used by the linear processor, but required by the function signature

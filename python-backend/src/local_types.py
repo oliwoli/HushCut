@@ -33,7 +33,7 @@ class TimelineItem(TypedDict):
     track_type: Literal["video", "audio", "subtitle"]
     track_index: int
     source_file_path: str
-    processed_file_name: str
+    processed_file_name: Optional[str]
     start_frame: float
     end_frame: float
     source_start_frame: float
@@ -52,7 +52,7 @@ def make_empty_timeline_item() -> TimelineItem:
         "track_type": "video",  # or some default
         "track_index": 0,
         "source_file_path": "",
-        "processed_file_name": "",
+        "processed_file_name": None,
         "start_frame": 0.0,
         "end_frame": 0.0,
         "source_start_frame": 0.0,
@@ -84,6 +84,7 @@ class FileSource(TypedDict):
 
 class FileData(TypedDict):
     properties: FileProperties
+    processed_audio_path: NotRequired[str]
     silenceDetections: Optional[List[SilenceInterval]]
     timelineItems: list[TimelineItem]
     fileSource: FileSource
@@ -112,3 +113,12 @@ class Track(TypedDict):
 class ItemsByTracks(TypedDict):
     videotrack: List[Track]
     audiotrack: List[Track]
+
+
+class AudioFromVideo(TypedDict):
+    video_bmd_media_pool_item: Any
+    video_file_path: str
+    audio_file_path: str
+    audio_file_uuid: str
+    audio_file_name: str
+    silence_intervals: List[SilenceInterval]
