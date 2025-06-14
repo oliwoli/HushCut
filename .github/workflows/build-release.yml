@@ -91,7 +91,7 @@ jobs:
             chmod +x build/bin/ffmpeg
           elif [[ "${{ matrix.label }}" == "windows" ]]; then
             curl -L -o ffmpeg.7z https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z
-            unzip ffmpeg.7z
+            7z x ffmpeg.7z
             mv -v ffmpeg-*/bin/ffmpeg.exe build/bin/
           elif [[ "${{ matrix.label }}" == "macos" ]]; then
             curl -JL -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
