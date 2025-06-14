@@ -3,7 +3,7 @@ name: Build and optionally make Release
 on:
   push:
     branches:
-      - '**'
+      - '*'
     tags:
       - '*'
 
