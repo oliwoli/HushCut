@@ -1,7 +1,9 @@
-name: Release Build (Wails + PyInstaller)
+name: Build and optionally make Release
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - '*'
 
@@ -10,6 +12,8 @@ env:
 
 jobs:
   build:
+    env:
+        IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
     strategy:
@@ -19,15 +23,20 @@ jobs:
           - os: ubuntu-latest
             platform: linux/amd64
             ext: ''
+            label: linux
           - os: windows-latest
             platform: windows/amd64
             ext: .exe
+            label: windows
           - os: macos-latest
             platform: darwin/universal
-            artifact_suffix: darwin-universal
             ext: ''
+            label: macos
 
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
@@ -55,11 +64,10 @@ jobs:
             cp -r dist/main/_internal build/bin/
           fi
           rm -rf dist build/main
-        shell: bash
 
       - name: Install pnpm
         run: npm install -g pnpm
-      
+
       - name: Build Wails frontend
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
         with:
@@ -67,3 +75,57 @@ jobs:
           build-platform: ${{ matrix.platform }}
           package: true
           go-version: '1.22'
+
+      - name: Download FFmpeg
+        if: env.IS_TAG == 'true'
+        run: |
+          if [[ "${{ matrix.label }}" == "linux" ]]; then
+            curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+            tar -xf ffmpeg.tar.xz
+            mv ffmpeg-*-amd64-static/ffmpeg build/bin/
+            chmod +x build/bin/ffmpeg
+          elif [[ "${{ matrix.label }}" == "windows" ]]; then
+            curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.zip
+            unzip ffmpeg.zip
+            mv -v ffmpeg-*/bin/ffmpeg.exe build/bin/
+          elif [[ "${{ matrix.label }}" == "macos" ]]; then
+            curl -JL -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
+            unzip ffmpeg.zip -d build/bin
+            chmod +x build/bin/ffmpeg
+          fi
+
+      - name: Zip bin folder
+        if: env.IS_TAG == 'true'
+        run: zip -r pruner-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
+
+      - name: Upload artifact
+        if: env.IS_TAG == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pruner-${{ github.ref_name }}-${{ matrix.label }}
+          path: pruner-${{ github.ref_name }}-${{ matrix.label }}.zip
+
+  upload-release-assets:
+    env:
+        IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+    if: env.IS_TAG == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display downloaded files
+        run: ls -R artifacts
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
