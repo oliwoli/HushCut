@@ -314,10 +314,6 @@ def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
         print("Failed to export timeline.")
 
 
-# if not load_dotenv():
-#     raise FileNotFoundError(".env file not found.")
-
-
 class AudioFromVideo(TypedDict):
     video_bmd_media_pool_item: Any
     video_file_path: str
@@ -545,6 +541,7 @@ def _verify_timeline_state(
         True if the timeline state is correct, False otherwise.
     """
     print("Verifying timeline state...")
+    TRACKER.update_task_progress("append", 50.0, message="Verifying")
     # 1. Build the "checklist" of expected cuts.
     # We use a Counter to handle multiple clips starting at the same frame on the same track.
     expected_cuts = Counter()
@@ -860,8 +857,10 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global TRACKER
     script_start_time: float = time()
 
-    TRACKER.start_new_run(globalz.TASKS, task_id)
-    TRACKER.update_task_progress("init", 0.1, message="Initializing...")
+    if not sync:
+        TRACKER.start_new_run(globalz.TASKS, task_id)
+        TRACKER.update_task_progress("init", 0.1, message="Preparing")
+
     if not RESOLVE:
         task_id = task_id or ""
         get_resolve(task_id)
@@ -983,9 +982,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         print("critical error, can't continue")
         return
 
-    TRACKER.complete_task("init")
-    TRACKER.update_task_progress("pre_process", 1.0, "Pre-processing...")
-
     # export state of current timeline to otio, EXPENSIVE
     input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
 
@@ -994,12 +990,12 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     unify_edits = unify_linked_items_in_project_data(input_otio_path)
 
-    TRACKER.complete_task("pre_process")
-    TRACKER.update_task_progress("append", 1.0, "Appending Clips to Timeline")
+    TRACKER.complete_task("prepare")
+    TRACKER.update_task_progress("append", 1.0, "Adding Clips to Timeline")
 
     append_and_link_timeline_items()
 
-    TRACKER.update_task_progress("append", 100.0, "All Done!")
+    TRACKER.complete_task("append")
 
     response_payload = {
         "status": "success",
@@ -1153,10 +1149,9 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     success = False
     num_retries = 3
     sleep_time_between = 2.5
-    TRACKER.update_task_progress("append", 0.1, message="Appending Clips to Timeline")
+    TRACKER.update_task_progress("append", 2.0, message="Adding Clips to Timeline")
     for attempt in range(1, num_retries + 1):
         print("-" * 20)
-        print(f"Attempt {attempt} of {num_retries}...")
 
         # The internal function returns our "source of truth" and the API's response
         processed_clips, bmd_items_from_api = _append_clips_to_timeline(
@@ -1230,6 +1225,10 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
             break
         else:
             print(f"Attempt {attempt} failed. Rolling back changes...")
+            verify_percentage = (attempt / num_retries) * 100
+            TRACKER.update_task_progress(
+                "verify", verify_percentage, "Verification failed. Retrying..."
+            )
             if bmd_items_from_api:
                 timeline.DeleteClips(bmd_items_from_api, delete_gaps=False)
 
