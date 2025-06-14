@@ -34,11 +34,14 @@ type App struct {
 	effectiveAudioFolderPath string // Resolved absolute path to the audio folder
 	pendingMu                sync.Mutex
 	pendingTasks             map[string]chan PythonCommandResponse
+	pythonBackendBinaryPath  string
+	ffmpegBinaryPath         string
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
 	configPath := "shared/config.json"
+
 	return &App{
 		configPath:               configPath,
 		silenceCache:             make(map[CacheKey][]SilencePeriod),
@@ -49,6 +52,30 @@ func NewApp() *App {
 		pendingTasks:             make(map[string]chan PythonCommandResponse),
 	}
 }
+
+
+func ResolveBinaryPath(ctx context.Context, binaryName string) (string, error) {
+	platform := runtime.Environment(ctx).Platform
+
+	switch platform {
+	case "darwin":
+		// In macOS, binaries are in Contents/Resources/
+		path := filepath.Join("..", "Resources", binaryName)
+		return filepath.Abs(path)
+
+	case "windows":
+		binaryName += ".exe"
+		fallthrough
+
+	case "linux":
+		// On Linux/Windows, binaries are in the same dir as the app binary
+		return filepath.Abs(binaryName)
+
+	default:
+		return "", fmt.Errorf("unsupported platform: %s", platform)
+	}
+}
+
 
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
@@ -103,6 +130,18 @@ func (a *App) startup(ctx context.Context) {
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
+
+	var err error
+	a.ffmpegBinaryPath, err = ResolveBinaryPath(a.ctx, "ffmpeg")
+	if err != nil {
+		log.Fatalf("Failed to resolve ffmpeg binary path: %v", err)
+	}
+
+	a.pythonBackendBinaryPath, err = ResolveBinaryPath(a.ctx, "python_backend")
+	if err != nil {
+		log.Fatalf("python backend: %v", err)
+	}
+
 }
 
 func (a *App) shutdown(ctx context.Context) {
