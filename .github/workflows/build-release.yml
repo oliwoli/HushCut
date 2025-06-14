@@ -63,6 +63,12 @@ jobs:
           fi
           rm -rf dist build/main
 
+      - name: Move Python backend to macOS Resources folder
+        if: matrix.label == 'macos'
+        run: |
+          mv -v build/bin/python_backend build/bin/pruner-${{ github.ref_name }}-macos.app/Contents/Resources/
+
+
       - name: Install pnpm
         run: npm install -g pnpm
 
@@ -80,7 +86,7 @@ jobs:
           if [[ "${{ matrix.label }}" == "linux" ]]; then
             curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
             tar -xf ffmpeg.tar.xz
-            mv ffmpeg-*-amd64-static/ffmpeg build/bin/
+            mv -v ffmpeg-*-amd64-static/ffmpeg build/bin/
             chmod +x build/bin/ffmpeg
           elif [[ "${{ matrix.label }}" == "windows" ]]; then
             curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.zip
@@ -88,8 +94,8 @@ jobs:
             mv -v ffmpeg-*/bin/ffmpeg.exe build/bin/
           elif [[ "${{ matrix.label }}" == "macos" ]]; then
             curl -JL -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
-            unzip ffmpeg.zip -d build/bin
-            chmod +x build/bin/ffmpeg
+            unzip ffmpeg.zip -d build/bin/pruner-${{ github.ref_name }}-${{ matrix.label }}.app/Resources
+            chmod +x build/bin/pruner-${{ github.ref_name }}-${{ matrix.label }}.app/Resources/ffmpeg
           fi
 
       - name: Zip bin folder
