@@ -311,7 +311,7 @@ function AppContent() {
   return (
     <>
       <div
-        className="p-6 pt-3 bg-[#28282e] border-1 border-t-0 border-zinc-900"
+        className="pt-3 bg-[#28282e] border-1 border-t-0 border-zinc-900"
         style={{
           marginTop: titleBarHeight,
           height: `calc(100vh - ${titleBarHeight})`,
@@ -331,10 +331,10 @@ function AppContent() {
                 !projectData?.timeline?.audio_track_items ||
                 projectData.timeline.audio_track_items.length === 0
               }
-              className="w-full mt-2"
+              className="w-full mt-2 overflow-visible"
             />
           )}
-          <div className="flex flex-col space-y-8">
+          <div className="flex flex-col space-y-8 px-4">
             {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
               {currentClipId && (
@@ -357,18 +357,25 @@ function AppContent() {
                 </>
               )}
             </div>
-            <div className="space-y-2 w-full p-5">
-              <SilenceControls key={currentClipId} />
+            <div className="w-full px-1 bg-stone-800 rounded-2xl">
+              <div className="p-5 space-y-6">
+                <SilenceControls key={currentClipId} />
+                {projectData && (
+                  <div className="flex justify-center">
+                    <RemoveSilencesButton
+                      projectData={projectData}
+                      keepSilenceSegments={false}
+                      defaultDetectionParams={getDefaultDetectionParams()}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
+
+
             <div className="flex space-y-8 w-full">
               <div className="items-center space-y-2 mt-4">
-                {projectData && (
-                  <RemoveSilencesButton
-                    projectData={projectData}
-                    keepSilenceSegments={false}
-                    defaultDetectionParams={getDefaultDetectionParams()}
-                  />
-                )}
+
               </div>
             </div>
 
@@ -385,50 +392,52 @@ interface FinalTimelineProps {
   open: boolean;
   progressPercentage: number | null;
   message: string;
+  totalTime: number
   onOpenChange: (open: boolean) => void; // <-- Add this to your interface
 }
 
-export function FinalTimelineProgress({ open, progressPercentage, message, onOpenChange }: FinalTimelineProps) {
-  const displayMessage = progressPercentage === 100 ? "All Done" : message;
+export function FinalTimelineProgress({ open, progressPercentage, message, totalTime, onOpenChange }: FinalTimelineProps) {
+  const displayMessage = progressPercentage === 100 ? "Done" : message;
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="min-h-[0%]">
-        <div className="mx-auto w-full max-w-full">
-          <DrawerHeader>
-            <DrawerTitle className="text-7xl mt-12">{displayMessage}</DrawerTitle>
-          </DrawerHeader>
+      <DrawerContent>
+        <div className="max-w-full p-4 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
+          <DrawerTitle className="text-2xl sm:text-4xl md:text-6xl mt-12 font-medium">{displayMessage}</DrawerTitle>
+          <Progress value={progressPercentage} className="h-0.5" />
+          <DrawerDescription>
+            {progressPercentage && progressPercentage === 100 && (
+              <>
+                Completed in: <span className="text-stone-200 mr-[2px]">{totalTime.toFixed(2)}</span><span>s</span>
+              </>
+            )}
 
-          <div className="p-4 pb-0 space-y-2 max-w-full">
-            <Progress value={0.2} className={`bg-amber-50 w-[${progressPercentage}%]`}></Progress>
-            <div className="flex items-center justify-center space-x-2 mx-auto max-w-sm">
-              <DrawerDescription>{progressPercentage?.toFixed(2)} %</DrawerDescription>
-              <div className="flex-1 text-center">
-                <div className="text-xs font-bold tracking-tighter font-mono">
+            {!progressPercentage || progressPercentage < 100 && (
+              <>
+                Please wait.
+              </>
+            )}
 
-                </div>
-                <div className="text-muted-foreground text-[0.70rem] uppercase">
-
-                </div>
-              </div>
-            </div>
-            <div className="mt-3 h-[120px]">
-              <div className="w-full h-full">
-                Finished in...
-                Silences Removed:
-              </div>
-            </div>
-          </div>
-          <DrawerFooter>
-            <Button onClick={() => onOpenChange(false)}>Continue</Button>
+          </DrawerDescription>
+          <DrawerFooter className="flex flex-col sm:flex-row sm:justify-start gap-3 pt-6 px-0">
+            <Button
+              onClick={() => onOpenChange(false)}
+              className="rounded-2xl text-base px-6 py-2 shadow transition-colors"
+            >
+              Continue
+            </Button>
             <DrawerClose asChild>
-              <Button variant="outline">Cancel</Button>
+              <Button
+                variant="outline"
+                className="rounded-2xl text-base px-6 py-2 border-muted text-muted-foreground hover:bg-muted/20 transition-colors"
+              >
+                Cancel
+              </Button>
             </DrawerClose>
           </DrawerFooter>
         </div>
       </DrawerContent>
     </Drawer>
   );
-
 }
 
 
@@ -453,22 +462,43 @@ export default function App() {
   const [progress, setProgress] = useState<number | null>(null);
   const [message, setMessage] = useState("");
 
+  const timeStartedRef = useRef<number | null>(null);
+  const timeFinishedRef = useRef<number | null>(null);
+  const [totalTime, setTotalTime] = useState(0);
+
   useEffect(() => {
     const off1 = EventsOn("taskProgressUpdate", (data: { message: string; progress: number }) => {
       console.log("taskProgressUpdate", data);
-      if (data.progress) setProgress(data.progress);
-      if (data.message) setMessage(data.message ?? "Processing...");
+
+      if (data.progress != null) {
+        setProgress(prev => {
+          if (prev === null) return data.progress;
+          return data.progress < prev ? prev : data.progress;
+        });
+      }
+
+      if (data.message) setMessage(data.message);
     });
 
     const off2 = EventsOn("showFinalTimelineProgress", () => {
+      if (showFinalProgress) return;
       console.log("showFinalTimelineProgress");
+      timeStartedRef.current = Date.now();
+      setProgress(0);
+      setMessage("Preparing");
       setShowFinalProgress(true);
     });
 
     const off3 = EventsOn("finished", () => {
+      timeFinishedRef.current = Date.now();
+      if (timeStartedRef.current) {
+        const elapsed = (timeFinishedRef.current! - timeStartedRef.current!) / 1000;
+        setTotalTime(elapsed);
+      }
       setProgress(100);
-      setMessage("All Done!")
-      setShowFinalProgress(true);
+      setTimeout(() => {
+        setProgress(100);
+      }, 50);
     });
 
 
@@ -487,6 +517,7 @@ export default function App() {
           open={showFinalProgress}
           progressPercentage={progress}
           message={message}
+          totalTime={totalTime}
           onOpenChange={setShowFinalProgress}
         />
       </ClientPortal>

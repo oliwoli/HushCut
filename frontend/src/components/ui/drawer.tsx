@@ -6,7 +6,14 @@ import { cn } from "@/lib/utils"
 function Drawer({
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />
+  const container = document.getElementById('overlays');
+
+  // We must return null if the container doesn't exist to prevent errors.
+  if (!container) {
+    console.error("Portal target #overlays not found in the DOM.");
+    return null;
+  }
+  return <DrawerPrimitive.Root container={container} data-slot="drawer" {...props} />
 }
 
 function DrawerTrigger({

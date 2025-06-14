@@ -38,25 +38,27 @@ const _MinDurationControl = React.memo(() => {
     const isDisabled = !currentClipId;
 
     return (
-        <div className="flex items-center space-x-5">
-            <Label className="font-medium w-32 flex-row-reverse">
+        <>
+            <Label className="font-medium w-32">
                 Minimum Duration
             </Label>
-            <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
-                <Slider
-                    min={0} max={5} step={0.001}
-                    value={[immediateValue]}
-                    onValueChange={(vals) => setImmediateValue(vals[0])}
-                    className="w-[128px] max-w-[128px] min-w-[128px]"
-                    disabled={isDisabled}
-                />
-                <span className="text-sm text-zinc-100 font-mono tracking-tighter">
-                    {immediateValue.toFixed(2)}
-                    <span className="text-zinc-400 ml-1">s</span>
-                </span>
-                <ResetButton onClick={resetMinDuration} disabled={isDisabled} />
+            <div className="flex items-center space-x-5">
+                <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
+                    <Slider
+                        min={0} max={5} step={0.001}
+                        value={[immediateValue]}
+                        onValueChange={(vals) => setImmediateValue(vals[0])}
+                        className="w-[128px] max-w-[128px] min-w-[128px]"
+                        disabled={isDisabled}
+                    />
+                    <span className="text-sm text-zinc-100 font-mono tracking-tighter">
+                        {immediateValue.toFixed(2)}
+                        <span className="text-zinc-400 ml-1">s</span>
+                    </span>
+                    <ResetButton onClick={resetMinDuration} disabled={isDisabled} />
+                </div>
             </div>
-        </div>
+        </>
     );
 });
 
@@ -103,44 +105,46 @@ const _PaddingControl = React.memo(() => {
     const isDisabled = !currentClipId;
 
     return (
-        <div className="flex items-baseline space-x-5">
-            <Label className="font-medium w-32 text-right flex-row-reverse">
+        <>
+            <Label className="font-medium w-32 text-right">
                 Padding
             </Label>
-            <div className="flex items-start space-x-0" aria-disabled={isDisabled}>
-                {/* Left Padding */}
-                <div className="flex flex-col space-y-1 w-full">
-                    <div className="flex items-center">
-                        <Slider
-                            min={0} max={1} step={0.01}
-                            value={[paddingLeft]}
-                            onValueChange={(vals) => handlePaddingChange("left", vals[0])}
-                            className="w-32"
-                            disabled={isDisabled}
-                        />
-                        <Button variant="ghost" size="icon" onClick={() => setPaddingLinked((l) => !l)} className="text-zinc-500 hover:text-zinc-300 text-center" disabled={isDisabled}>
-                            {paddingLocked ? <Link className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
-                        </Button>
+            <div className="flex items-baseline space-x-5">
+                <div className="flex items-start space-x-0" aria-disabled={isDisabled}>
+                    {/* Left Padding */}
+                    <div className="flex flex-col space-y-1 w-full">
+                        <div className="flex items-center">
+                            <Slider
+                                min={0} max={1} step={0.01}
+                                value={[paddingLeft]}
+                                onValueChange={(vals) => handlePaddingChange("left", vals[0])}
+                                className="w-32"
+                                disabled={isDisabled}
+                            />
+                            <Button variant="ghost" size="icon" onClick={() => setPaddingLinked((l) => !l)} className="text-zinc-500 hover:text-zinc-300 text-center" disabled={isDisabled}>
+                                {paddingLocked ? <Link className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
+                            </Button>
+                        </div>
+                        <span className="text-sm text-zinc-400">Left: <span className="text-zinc-100 font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
                     </div>
-                    <span className="text-sm text-zinc-400">Left: <span className="text-zinc-100 font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
-                </div>
 
-                {/* Right Padding */}
-                <div className="flex flex-col space-y-1 w-full">
-                    <div className="flex items-center space-x-2">
-                        <Slider
-                            min={0} max={1} step={0.05}
-                            value={[paddingRight]}
-                            onValueChange={(vals) => handlePaddingChange("right", vals[0])}
-                            className="w-32"
-                            disabled={isDisabled}
-                        />
-                        <ResetButton onClick={resetPadding} disabled={isDisabled} />
+                    {/* Right Padding */}
+                    <div className="flex flex-col space-y-1 w-full">
+                        <div className="flex items-center space-x-2">
+                            <Slider
+                                min={0} max={1} step={0.05}
+                                value={[paddingRight]}
+                                onValueChange={(vals) => handlePaddingChange("right", vals[0])}
+                                className="w-32"
+                                disabled={isDisabled}
+                            />
+                            <ResetButton onClick={resetPadding} disabled={isDisabled} />
+                        </div>
+                        <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
                     </div>
-                    <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
                 </div>
             </div>
-        </div>
+        </>
     );
 });
 

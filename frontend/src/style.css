@@ -187,6 +187,8 @@ div[part="minimap-overlay"] {
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
+  --color-neon: var(--neonidas);
+  --color-neon-hot: var(--neon-hot);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
@@ -214,6 +216,7 @@ div[part="minimap-overlay"] {
 }
 
 :root {
+  --neonidas: #fff;
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.13 0.028 261.692);
@@ -249,6 +252,8 @@ div[part="minimap-overlay"] {
 }
 
 .dark {
+  --neonidas: #7fecff;
+  --neon-hot: #ccffff;
   --background: oklch(0.141 0.005 285.823);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.21 0.034 264.665);

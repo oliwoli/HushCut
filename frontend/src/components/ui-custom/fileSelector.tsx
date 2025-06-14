@@ -1,5 +1,5 @@
 // ./components/ui/fileSelector.tsx
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, WheelEvent, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
@@ -127,7 +127,7 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
   }, [item.id, item.processed_file_name, startSeconds, endSeconds, clipDuration]);
 
   return (
-    <div className="flex flex-col flex-shrink-0 w-64">
+    <div className="flex flex-col flex-shrink-0 max-w-36 min-w-24">
       <div className="flex justify-between items-center text-xs text-zinc-500 font-mono px-1 pb-1">
         <span>{item.start_frame}</span>
         <span>Track {item.track_index}</span>
@@ -137,17 +137,17 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
         onClick={onClipClick}
         disabled={disabled}
         className={cn(
-          "h-24 text-left rounded-md transition-all duration-150 ease-in-out overflow-hidden relative",
+          "h-20 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 focus-visible:ring-blue-400",
-          "bg-teal-900/40 border",
+          "bg-gray-700/40 border",
           {
             "border-zinc-700 hover:border-zinc-600": !isSelected,
-            "border-blue-500 ring-1 ring-blue-500": isSelected,
+            "border-orange-500 ": isSelected,
             "cursor-not-allowed opacity-60": disabled,
           }
         )}
       >
-        <div className={cn("absolute inset-0 flex items-center justify-center text-teal-400/60 p-2 bottom-4", isLoading && "animate-pulse")}>
+        <div className={cn("absolute inset-0 flex items-center justify-center text-teal-400/60 p-1 bottom-6", isLoading && "animate-pulse")}>
           {isLoading ? <SimulatedWaveform /> : (
             waveformPeaks ?
               <LinearWaveform
@@ -159,7 +159,7 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
         <div className="relative z-10 h-full flex flex-col justify-end p-2 bg-gradient-to-t from-black/50 via-black/20 to-transparent">
           <div className="flex items-center space-x-1.5">
             <ClipLinkIcon className="text-zinc-400" />
-            <p className="font-medium text-sm text-zinc-200 truncate">{item.name}</p>
+            <p className="font-medium text-xs text-zinc-200/90 truncate">{item.name}</p>
           </div>
         </div>
       </button>
@@ -196,17 +196,45 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 
   if (sortedItems.length === 0) {
     return (
-      <div className={cn("flex flex-col items-center justify-center text-center p-8 bg-zinc-800/50 border-2 border-dashed border-zinc-700 rounded-lg", className)}>
+      <div className={cn("flex flex-col items-center justify-center text-center p-8 bg-zinc-800/50 border-2 border-dashed border-zinc-700 rounded-sm", className)}>
         <AudioFileIcon className="h-10 w-10 text-zinc-500 mb-3" />
         <h3 className="font-semibold text-lg text-zinc-300">No Audio Items</h3>
         <p className="text-sm text-zinc-500">The timeline does not contain any audio clips.</p>
       </div>
     );
   }
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = scrollAreaRef.current;
+    if (!element) return;
+
+    const handleWheel = (e: globalThis.WheelEvent) => {
+      // Find the scrollable viewport inside the component
+      const viewport = element.querySelector<HTMLDivElement>(':scope > [data-radix-scroll-area-viewport]');
+      if (!viewport || e.deltaY === 0) return;
+
+      // This will now work because the listener is not passive
+      e.preventDefault();
+
+      viewport.scrollBy({
+        left: e.deltaY, // You can use deltaY directly for a more natural scroll speed
+        behavior: 'auto', // 'auto' often feels more responsive than 'smooth' for wheel scrolling
+      });
+    };
+
+    // Add the event listener with the crucial `{ passive: false }` option
+    element.addEventListener('wheel', handleWheel, { passive: false });
+
+    // Return a cleanup function to remove the listener when the component unmounts
+    return () => {
+      element.removeEventListener('wheel', handleWheel);
+    };
+  }, []); // The empty dependency array ensures this effect runs only once
 
   return (
-    <ScrollArea className={cn("w-full whitespace-nowrap pb-4", className)}>
-      <div className="flex w-max space-x-4">
+    <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
+      <div className="flex w-max space-x-1 px-2">
         {sortedItems.map((item) => {
           const itemUniqueIdentifier = item.id || item.processed_file_name;
           if (!itemUniqueIdentifier) {
@@ -220,7 +248,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
               isSelected={currentFileId === itemUniqueIdentifier}
               onClipClick={() => onFileChange(itemUniqueIdentifier)}
               disabled={disabled}
-              fps={fps} // MODIFICATION: Pass fps down to the AudioClip
+              fps={fps}
             />
           );
         })}

@@ -44,11 +44,11 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                     <br />
                     Threshold
                 </p>
-                <p className={`text-base/tight ${!isModified ? 'text-yellow-400' : ''}`}>
+                {/* <p className={`text-base/tight ${!isModified ? 'text-yellow-400' : ''}`}>
                     Silence
                     <br />
                     Threshold
-                </p>
+                </p> */}
                 <span className="text-xs text-zinc-100 whitespace-nowrap font-mono tracking-tighter mt-1">
                     {immediateValue.toFixed(2)} <span className="opacity-80">dB</span>
                 </span>
