@@ -3,7 +3,7 @@ name: Build and optionally make Release
 on:
   push:
     branches:
-      - '*'
+      - '**'
     tags:
       - '*'
 
@@ -12,8 +12,6 @@ env:
 
 jobs:
   build:
-    env:
-        IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
     strategy:
@@ -77,7 +75,7 @@ jobs:
           go-version: '1.22'
 
       - name: Download FFmpeg
-        if: env.IS_TAG == 'true'
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           if [[ "${{ matrix.label }}" == "linux" ]]; then
             curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
@@ -95,11 +93,11 @@ jobs:
           fi
 
       - name: Zip bin folder
-        if: env.IS_TAG == 'true'
+        if: startsWith(github.ref, 'refs/tags/')
         run: zip -r pruner-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
 
       - name: Upload artifact
-        if: env.IS_TAG == 'true'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: pruner-${{ github.ref_name }}-${{ matrix.label }}
@@ -108,7 +106,7 @@ jobs:
   upload-release-assets:
     env:
         IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
-    if: env.IS_TAG == 'true'
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     permissions:
