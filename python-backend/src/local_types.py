@@ -25,6 +25,18 @@ class EditInstruction(TypedDict):
     enabled: bool  # TODO: move this into TimelineItem instead, maybe rename to "enabled_in_edit"
 
 
+class NestedAudioTimelineItem(TypedDict):
+    source_file_path: str
+    processed_file_name: Optional[str]
+    start_frame: float
+    end_frame: float
+    source_start_frame: float
+    source_end_frame: float
+    duration: float
+    edit_instructions: list[EditInstruction]
+    nested_items: NotRequired[list["NestedAudioTimelineItem"]]
+
+
 class TimelineItem(TypedDict):
     bmd_item: Any
     bmd_mpi: Any
@@ -41,6 +53,8 @@ class TimelineItem(TypedDict):
     duration: float
     edit_instructions: list[EditInstruction]
     link_group_id: NotRequired[int]
+    type: NotRequired[Literal["Compound", "Timeline"]]
+    nested_clips: NotRequired[list[NestedAudioTimelineItem]]
 
 
 def make_empty_timeline_item() -> TimelineItem:
@@ -93,6 +107,8 @@ class FileData(TypedDict):
 class Timeline(TypedDict):
     name: str
     fps: float
+    start_timecode: str
+    curr_timecode: str
     video_track_items: List[TimelineItem]
     audio_track_items: List[TimelineItem]
 

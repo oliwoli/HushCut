@@ -174,6 +174,10 @@ TRACKER = ProgressTracker()
 
 
 def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] = None):
+    global STANDALONE_MODE
+    if STANDALONE_MODE:
+        return
+
     global GO_SERVER_PORT
     if GO_SERVER_PORT == 0:
         print(
@@ -490,12 +494,12 @@ def get_items_by_tracktype(
     track_count = timeline.GetTrackCount(track_type)
     for i in range(1, track_count + 1):
         track_items = timeline.GetItemListInTrack(track_type, i) or []
-        for item in track_items:
-            start_frame = item.GetStart(True)
-            item_name = item.GetName()
-            media_pool_item = item.GetMediaPoolItem()
-            left_offset = item.GetLeftOffset(True)
-            duration = item.GetDuration(True)
+        for item_bmd in track_items:
+            start_frame = item_bmd.GetStart(True)
+            item_name = item_bmd.GetName()
+            media_pool_item = item_bmd.GetMediaPoolItem()
+            left_offset = item_bmd.GetLeftOffset(True)
+            duration = item_bmd.GetDuration(True)
             source_start_float = left_offset
             source_end_float = left_offset + duration
 
@@ -503,14 +507,14 @@ def get_items_by_tracktype(
                 media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
             )
             timeline_item: TimelineItem = {
-                "bmd_item": item,
-                "bmd_mpi": None,
+                "bmd_item": item_bmd,
+                "bmd_mpi": media_pool_item,
                 "duration": 0,  # unused, therefore 0 #item.GetDuration(),
                 "name": item_name,
                 "edit_instructions": [],
                 "start_frame": start_frame,
-                "end_frame": item.GetEnd(True),
-                "id": get_item_id(item, item_name, start_frame, track_type, i),
+                "end_frame": item_bmd.GetEnd(True),
+                "id": get_item_id(item_bmd, item_name, start_frame, track_type, i),
                 "track_type": track_type,
                 "track_index": i,
                 "source_file_path": source_file_path,
@@ -518,7 +522,16 @@ def get_items_by_tracktype(
                 "source_start_frame": source_start_float,
                 "source_end_frame": source_end_float,
             }
+            if media_pool_item and not source_file_path:
+                # This branch means it's likely a compound clip, generator, or title.
+                # Capture its type, and initialize nested_clips for later OTIO population.
+                clip_type = media_pool_item.GetClipProperty("Type")
+                print(f"Detected clip type: {clip_type} for item: {item_name}")
+                timeline_item["type"] = clip_type
+                timeline_item["nested_clips"] = []  # Initialize as empty list
+
             items.append(timeline_item)
+
     return items
 
 
@@ -633,6 +646,7 @@ def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
 
 
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
+    global PROJECT
     # switch_to_page("edit")
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
@@ -640,9 +654,25 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
 
+    curr_timecode = timeline.GetCurrentTimecode()
+    start_tc = timeline.GetStartTimecode()
+
+    if not PROJECT:
+        return False, None
+
+    # start_time_gather = time()
+    # tl_count = PROJECT.GetTimelineCount()
+    # for i in range(tl_count):
+    #     print(PROJECT.GetTimelineByIndex(i + 1).GetName())
+    # print(
+    #     f"it took {time() - start_time_gather} seconds to get all {tl_count} timeline names."
+    # )
+
     tl_dict: Timeline = {
         "name": timeline_name,
         "fps": timeline_fps,
+        "start_timecode": start_tc,
+        "curr_timecode": curr_timecode,
         "video_track_items": video_track_items,
         "audio_track_items": audio_track_items,
     }
@@ -673,15 +703,33 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
             seen_uuids.add(source_media_item["uuid"])
             audio_sources_set.append(source_media_item)
 
-    if len(audio_source_files) == 0:
-        return False, "No audio files to process on the timeline."
+    has_any_processable_items = False
+    for item in video_track_items + audio_track_items:
+        # If it's a direct media file, it's processable
+        if item.get("source_file_path"):
+            has_any_processable_items = True
+            break
+        # If it's a compound clip or timeline, we assume it *might* have audio inside,
+        # so we won't stop here. The OTIO processing will clarify its contents.
+        if item.get("type") in [
+            "Compound",
+            "Timeline",
+        ]:  # Assuming these are the types returned
+            has_any_processable_items = True
+            break
+
+    if not has_any_processable_items:
+        print(f"Video track items: {video_track_items}")
+        print(f"Audio track items: {audio_track_items}")
+        return (
+            False,
+            "No direct audio/video files or compound/nested clips found on the timeline to process.",
+        )
 
     print(
         f"Found {len(audio_source_files)} audio clips from {len(audio_sources_set)} unique source files."
     )
-    assign_bmd_mpi_to_items(video_track_items)
-
-    # -- REFACTORED AUDIO PROCESSING --
+    # assign_bmd_mpi_to_items(video_track_items)
 
     # 1. Ensure FileData entries exist for all unique sources.
     for source in audio_sources_set:
@@ -1011,7 +1059,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
         send_message_to_go("taskResult", response_payload, task_id=task_id)
         return False
-
     if sync or not globalz.PROJECT_DATA:
         success, alert_title = get_project_data(PROJECT, TIMELINE)
         if not alert_title:
@@ -1166,8 +1213,10 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     global TIMELINE
     global PROJECT
 
+    if not globalz.PROJECT_DATA:
+        return
     project_data = globalz.PROJECT_DATA
-    if not project_data or not project_data.get("timeline"):
+    if not project_data.get("timeline"):
         print("Error: Project data is missing or malformed.")
         return
 
@@ -1201,7 +1250,9 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
         timeline_name = f"linked_timeline_{uuid4().hex}"
         timeline = media_pool.CreateEmptyTimeline(timeline_name)
         if timeline:
-            timeline.SetStartTimecode("00:00:00:00")
+            timeline.SetStartTimecode(
+                globalz.PROJECT_DATA["timeline"]["start_timecode"]
+            )
     else:
         timeline = TIMELINE
         if not timeline:
@@ -1231,7 +1282,7 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     TIMELINE = timeline
 
     success = False
-    num_retries = 3
+    num_retries = 4
     sleep_time_between = 2.5
     TRACKER.update_task_progress("append", 2.0, message="Adding Clips to Timeline")
     for attempt in range(1, num_retries + 1):

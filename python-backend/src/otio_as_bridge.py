@@ -18,6 +18,7 @@ def process_track_items(
     pd_timeline: dict,
     pd_timeline_key: str,
     timeline_start_rate: int,
+    timeline_start_frame: float = 0.0,
     max_id: int = 0,
     track_index: int = 0,
 ) -> int:
@@ -39,7 +40,7 @@ def process_track_items(
             continue
 
         if "clip" in item_schema:
-            record_frame_float = playhead_frames
+            record_frame_float = playhead_frames + timeline_start_frame
             corresponding_item = None
             for tl_item in pd_timeline.get(pd_timeline_key, []):
                 if (
@@ -146,6 +147,8 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     max_link_group_id = 0
     track_type_counters = {"video": 0, "audio": 0, "subtitle": 0}
     timeline_rate = otio_data.get("global_start_time", {}).get("rate", 24)
+    start_time_value = otio_data.get("global_start_time", {}).get("value", 0.0)
+    timeline_start_frame = float(start_time_value)
     for track in otio_data.get("tracks", {}).get("children", []):
         kind = str(track.get("kind", "")).lower()
         if kind not in track_type_counters:
@@ -156,12 +159,13 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         max_link_group_id = max(
             max_link_group_id,
             process_track_items(
-                track.get("children", []),
-                pd_timeline,
-                pd_key,
-                timeline_rate,
-                max_link_group_id,
-                current_track_index,
+                items=track.get("children", []),
+                pd_timeline=pd_timeline,
+                pd_timeline_key=pd_key,
+                timeline_start_rate=timeline_rate,
+                timeline_start_frame=timeline_start_frame,
+                max_id=max_link_group_id,
+                track_index=current_track_index,
             ),
         )
 
@@ -260,6 +264,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                 f"Updated item '{item['id']}' in group {link_id} with {len(new_edit_instructions)} unified edit(s)."
             )
 
-    # current_dir = os.path.dirname(os.path.abspath(__file__))
-    ##debug_json_path = os.path.join(current_dir, "debug_project_data.json")
-    # export_to_json(globalz.PROJECT_DATA, debug_json_path)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    debug_json_path = os.path.join(current_dir, "debug_project_data.json")
+    print(f"exporting to {debug_json_path}")
+    export_to_json(globalz.PROJECT_DATA, debug_json_path)
