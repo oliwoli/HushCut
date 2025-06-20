@@ -65,35 +65,21 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   const detectionParams: DetectionParams | null = useStoreWithEqualityFn(
     useClipStore,
-    (s: ClipStore) => {
-      // If there's no active clip, there are no params.
+    (s) => { // `s` is the clipStore state
       if (!clipId) return null;
 
-      const params = s.parameters[clipId];
-      // Construct the DetectionParams object required by the hook.
+      const correctParams = s.parameters[clipId] ?? s.liveDefaultParameters;
+
       return {
-        loudnessThreshold: params?.threshold ?? defaultParameters.threshold,
-        minSilenceDurationSeconds: params?.minDuration ?? defaultParameters.minDuration,
-        minContentDuration: params?.minContent ?? defaultParameters.minContent,
-        paddingLeftSeconds: params?.paddingLeft ?? defaultParameters.paddingLeft,
-        paddingRightSeconds: params?.paddingRight ?? defaultParameters.paddingRight,
+        loudnessThreshold: correctParams.threshold,
+        minSilenceDurationSeconds: correctParams.minDuration,
+        minContentDuration: correctParams.minContent,
+        paddingLeftSeconds: correctParams.paddingLeft,
+        paddingRightSeconds: correctParams.paddingRight,
       };
     },
     shallow
   );
-  // const effectiveParams = useStoreWithEqualityFn(
-  //   useClipStore,
-  //   (s: ClipStore) => {
-  //     const params = s.parameters[clipId];
-  //     return {
-  //       threshold: params?.threshold ?? defaultParameters.threshold,
-  //       minDuration: params?.minDuration ?? defaultParameters.minDuration,
-  //       paddingLeft: params?.paddingLeft ?? defaultParameters.paddingLeft,
-  //       paddingRight: params?.paddingRight ?? defaultParameters.paddingRight,
-  //     };
-  //   },
-  //   shallow
-  // );
 
   const {
     peakData,
@@ -497,11 +483,12 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       !isLoading &&
       wavesurferRef.current &&
       regionsPluginRef.current &&
+      activeClip &&
       duration > 0
     ) {
       updateSilenceRegions(silenceData);
     }
-  }, [silenceData, isLoading, updateSilenceRegions, duration]);
+  }, [silenceData, isLoading, updateSilenceRegions, duration, activeClip]);
 
   useEffect(() => {
     if (silenceDataRef.current) {

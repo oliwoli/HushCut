@@ -12,23 +12,31 @@ import {
 import { main } from "@wails/go/models";
 import type { DetectionParams, SilencePeriod } from "../types";
 
-import { useClipStore, useGlobalStore } from '@/stores/clipStore';
+import { ClipStore, useClipStore, useGlobalStore } from '@/stores/clipStore';
 import { ClipParameters, defaultParameters } from "@/stores/clipStore";
 import { useSyncBusyState } from "@/stores/appSync";
 
 
 export function deriveAllClipDetectionParams(
-  parameters: Record<string, ClipParameters>
+  timelineItems: main.TimelineItem[], // <-- Pass in all timeline clips
+  clipStoreState: ClipStore             // <-- Pass in the full store state
 ): Record<string, DetectionParams> {
   const detectionParams: Record<string, DetectionParams> = {};
-  for (const clipId in parameters) {
-    const params = { ...defaultParameters, ...parameters[clipId] };
+
+  for (const item of timelineItems) {
+    const clipId = item.id;
+    if (!clipId) continue;
+
+    // This is the correct logic, identical to our previous fix.
+    // It checks for clip-specific params, then falls back to live defaults.
+    const correctClipParams = clipStoreState.parameters[clipId] ?? clipStoreState.liveDefaultParameters;
+
     detectionParams[clipId] = {
-      loudnessThreshold: params.threshold,
-      minSilenceDurationSeconds: params.minDuration,
-      minContentDuration: params.minContent,
-      paddingLeftSeconds: params.paddingLeft,
-      paddingRightSeconds: params.paddingRight,
+      loudnessThreshold: correctClipParams.threshold,
+      minSilenceDurationSeconds: correctClipParams.minDuration,
+      minContentDuration: correctClipParams.minContent,
+      paddingLeftSeconds: correctClipParams.paddingLeft,
+      paddingRightSeconds: correctClipParams.paddingRight,
     };
   }
   return detectionParams;
@@ -215,8 +223,9 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   }, [onScriptLog, onScriptDone]);
 
   const handleMouseEnter = useCallback(async () => {
-    const allParameters = useClipStore.getState().parameters;
-    const currentAllClipParams = deriveAllClipDetectionParams(allParameters);
+    const clipStoreState = useClipStore.getState();
+    const timelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
+    const currentAllClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
 
     // Use refs for props that might change, to avoid stale closures.
     const currentInitialData = initialProjectDataRef.current;
@@ -248,10 +257,15 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
         currentInitialData,
         currentAllClipParams,
         keepSilenceSegments,
-        currentDefaultParams
+        currentDefaultParams // This prop can now be removed
       );
 
-      const finalAllClipParams = deriveAllClipDetectionParams(useClipStore.getState().parameters);
+      // --- FIX APPLIED HERE ---
+      // Re-fetch the latest state and call the corrected helper function
+      // to get the most up-to-date parameters for comparison.
+      const finalClipStoreState = useClipStore.getState();
+      const finalTimelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
+      const finalAllClipParams = deriveAllClipDetectionParams(finalTimelineItems, finalClipStoreState);
 
       if (
         initialProjectDataRef.current === currentInitialData &&
@@ -281,8 +295,11 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       return;
     }
     setBusy(true);
-    const allParameters = useClipStore.getState().parameters;
-    const currentAllClipParams = deriveAllClipDetectionParams(allParameters);
+    const clipStoreState = useClipStore.getState();
+    const timelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
+
+    // Call the corrected helper function to get params for ALL clips
+    const currentAllClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
 
     const currentInitialData = initialProjectDataRef.current;
     const currentDefaultParams = defaultParamsRef.current;

@@ -85,11 +85,14 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
 
   useEffect(() => {
     let isCancelled = false;
+    const delayMs = isSelected ? 5 : 15;
+
     const fetchWaveform = async () => {
       if (!item.processed_file_name || clipDuration <= 0) {
         setIsLoading(false);
         return;
       }
+
       setIsLoading(true);
 
       const totalSamplesInClip = clipDuration * ASSUMED_SAMPLE_RATE;
@@ -97,19 +100,20 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
       dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, dynamicSamplesPerPixel);
 
       try {
-        // MODIFICATION: Call the new generic GetWaveform function with 'linear' type.
-        // minDb is irrelevant here, so we can pass 0 or a default.
+        await new Promise((res) => setTimeout(res, delayMs)); // ✅ delay before fetching
+
+        if (isCancelled) return;
+
         const peakData = await GetWaveform(
           item.processed_file_name,
           dynamicSamplesPerPixel,
           "linear",
-          -60.0, // Not used by the linear processor, but required by the function signature
+          -60.0,
           startSeconds,
           endSeconds
         );
 
         if (!isCancelled && peakData?.peaks) {
-          // No more conversion needed! The data is already in the format we want.
           setWaveformPeaks(peakData.peaks);
         } else if (!isCancelled) {
           setWaveformPeaks(null);
@@ -125,6 +129,7 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
     fetchWaveform();
     return () => { isCancelled = true; };
   }, [item.id, item.processed_file_name, startSeconds, endSeconds, clipDuration]);
+
 
   return (
     <div className="flex flex-col flex-shrink-0 max-w-36 min-w-24">
@@ -167,7 +172,6 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
   );
 };
 
-// MODIFICATION: Update props interface to include optional `fps`
 interface FileSelectorProps {
   audioItems: main.TimelineItem[] | null | undefined;
   currentFileId: string | null;
@@ -187,11 +191,14 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 }) => {
   const sortedItems = useMemo(() => {
     if (!audioItems || audioItems.length === 0) return [];
-    return [...audioItems].sort((a, b) => {
-      if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
-      if (a.track_index !== b.track_index) return a.track_index - b.track_index;
-      return a.end_frame - b.end_frame;
-    });
+    // QUICK FIX: Filter out compound clips as they are not yet supported and break the UI.
+    return [...audioItems]
+      .filter(item => item.type !== 'Compound')
+      .sort((a, b) => {
+        if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
+        if (a.track_index !== b.track_index) return a.track_index - b.track_index;
+        return a.end_frame - b.end_frame;
+      });
   }, [audioItems]);
 
   if (sortedItems.length === 0) {

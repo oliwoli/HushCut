@@ -78,9 +78,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         [key]: value,
       };
       
-      // --- THIS IS THE FIX ---
-      // We remove the `isFirstModification` check.
-      // Now, as long as the setting is on, we ALWAYS update the live defaults.
       const shouldUpdateLiveDefaults = state.syncDefaultsToLastEdit;
 
       return {

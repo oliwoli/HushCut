@@ -125,6 +125,8 @@ export function useSilenceData(
     debouncedFetch.cancel(); // Cancel any pending debounced call
     return fetchLogic();    // Call fetchLogic directly
   }, [fetchLogic, debouncedFetch]);
-  console.log("silence data: ", silenceData);
+  //console.log("silence data: ", silenceData);
+  //console.log("active file: ", activeFile);
+  //console.log("detection params: ", detectionParams)
   return { silenceData, isLoading, error, refetch };
 }
