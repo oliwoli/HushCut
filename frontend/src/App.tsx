@@ -109,12 +109,22 @@ function AppContent() {
       return;
     }
 
-    const availableIds = new Set(audioItems.map(item => item.id || item.processed_file_name));
+    // Filter out compound clips directly here as well to avoid selecting them by default
+    const availableClips = audioItems.filter(item => item.type !== 'Compound');
+    if (availableClips.length === 0) {
+      if (currentClipId !== null) {
+        setCurrentClipId(null);
+      }
+      return;
+    }
+
+    const availableIds = new Set(availableClips.map(item => item.id || item.processed_file_name));
 
     // If no clip is selected, or the selected clip no longer exists,
     // default to the first one in the list.
     if (!currentClipId || !availableIds.has(currentClipId)) {
-      const firstItemId = audioItems[0].id || audioItems[0].processed_file_name;
+      // FIX: Coalesce a potentially undefined/empty string to null
+      const firstItemId = (availableClips[0].id || availableClips[0].processed_file_name) || null;
       setCurrentClipId(firstItemId);
     }
   }, [projectData, currentClipId, setCurrentClipId]);
@@ -143,14 +153,6 @@ function AppContent() {
 
   }, [projectData, httpPort, currentClipId]);
 
-
-  const [activeClipSegmentPeakData, setActiveClipSegmentPeakData] =
-    useState<main.PrecomputedWaveformData | null>(null);
-
-  // This state will hold the URL for the dynamically rendered clip segment
-  const [cutAudioSegmentUrl, setCutAudioSegmentUrl] = useState<string | null>(
-    null
-  );
 
   const handleSync = async () => {
     if (isBusy) {
