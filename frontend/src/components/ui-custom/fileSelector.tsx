@@ -188,8 +188,8 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   const sortedItems = useMemo(() => {
     if (!audioItems || audioItems.length === 0) return [];
     return [...audioItems].sort((a, b) => {
-      if (a.track_index !== b.track_index) return a.track_index - b.track_index;
       if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
+      if (a.track_index !== b.track_index) return a.track_index - b.track_index;
       return a.end_frame - b.end_frame;
     });
   }, [audioItems]);
