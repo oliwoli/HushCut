@@ -264,7 +264,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                 f"Updated item '{item['id']}' in group {link_id} with {len(new_edit_instructions)} unified edit(s)."
             )
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    debug_json_path = os.path.join(current_dir, "debug_project_data.json")
-    print(f"exporting to {debug_json_path}")
-    export_to_json(globalz.PROJECT_DATA, debug_json_path)
+    # current_dir = os.path.dirname(os.path.abspath(__file__))
+    # debug_json_path = os.path.join(current_dir, "debug_project_data.json")
+    # print(f"exporting to {debug_json_path}")
+    # export_to_json(globalz.PROJECT_DATA, debug_json_path)

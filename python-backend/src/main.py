@@ -121,7 +121,7 @@ class ProgressTracker:
             }
             self._total_weight = 100.0
         self._task_progress = {task: 0.0 for task in self._tasks}
-        self._report_progress("Initialized")
+        # self._report_progress("Initialized")
 
     def _report_progress(self, message: str):
         """
@@ -130,11 +130,11 @@ class ProgressTracker:
         """
         # 3. Instead of calling the function directly, submit it to the executor.
         #    The main thread will not wait for this to complete.
-        if time() - self._last_report > 5:
+        if time() - self._last_report > 0.25:
             self._executor.submit(
                 send_progress_update, self.task_id, self.get_percentage(), message
             )
-            self.last_report = time()
+            self._last_report = time()
 
     # --- No changes needed for the methods below ---
 
@@ -570,7 +570,7 @@ def _verify_timeline_state(
         True if the timeline state is correct, False otherwise.
     """
     print("Verifying timeline state...")
-    TRACKER.update_task_progress("append", 50.0, message="Verifying")
+    TRACKER.update_task_progress("verify", 1.0, message="Verifying")
     # 1. Build the "checklist" of expected cuts.
     # We use a Counter to handle multiple clips starting at the same frame on the same track.
     expected_cuts = Counter()
@@ -1284,7 +1284,7 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     success = False
     num_retries = 4
     sleep_time_between = 2.5
-    TRACKER.update_task_progress("append", 2.0, message="Adding Clips to Timeline")
+    TRACKER.update_task_progress("append", 1.0, message="Adding Clips to Timeline")
     for attempt in range(1, num_retries + 1):
         print("-" * 20)
 
@@ -1302,8 +1302,6 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
         if _verify_timeline_state(timeline, expected_clip_infos, attempt):
             TRACKER.complete_task("verify")
             print("Verification successful. Proceeding to link.")
-
-            # === THE CORRECTED LINKING LOGIC ===
 
             # 1. Build a lookup map from the verified "source of truth"
             link_key_lookup: Dict[Tuple[int, int, int], Tuple[int, int]] = {}
@@ -1349,10 +1347,10 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
                     )
 
                     timeline.SetClipsLinked(clips_to_link, True)
-                if index % 50 == 1:
+                if index % 10 == 1:
                     percentage = (index / length_link_groups) * 100
                     TRACKER.update_task_progress("link", percentage, "Linking clips...")
-                    index += 50
+                index += 1
             TRACKER.complete_task("link")
 
             print("✅ Operation completed successfully.")
