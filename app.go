@@ -35,6 +35,7 @@ type App struct {
 	pendingMu                sync.Mutex
 	pendingTasks             map[string]chan PythonCommandResponse
 	ffmpegBinaryPath         string
+	waveformSemaphore chan struct{}
 }
 
 // NewApp creates a new App application struct
@@ -49,6 +50,7 @@ func NewApp() *App {
 		pythonReady:              false,
 		effectiveAudioFolderPath: "", // FIXME: This needs to be initialized properly!
 		pendingTasks:             make(map[string]chan PythonCommandResponse),
+		waveformSemaphore: make(chan struct{}, 5), // Limit to 5 concurrent jobs
 	}
 }
 
@@ -587,18 +589,21 @@ func (a *App) GetOrGenerateWaveformWithCache(
     }
 
     // --- CACHE MISS: Decide which processor to call ---
-    var waveformData *PrecomputedWaveformData
-
-    switch peakType {
-    case "linear":
-        // Call the (to-be-implemented) linear processor
-        waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel, clipStartSeconds, clipEndSeconds)
-    case "logarithmic":
-        // Call the existing logarithmic processor
-        waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
-    default:
-        err = fmt.Errorf("unknown peakType: '%s'", peakType)
-    }
+	a.waveformSemaphore <- struct{}{}
+	defer func() {
+		<-a.waveformSemaphore // Release semaphore
+	}()
+	
+	var waveformData *PrecomputedWaveformData
+	
+	switch peakType {
+	case "linear":
+		waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel, clipStartSeconds, clipEndSeconds)
+	case "logarithmic":
+		waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
+	default:
+		err = fmt.Errorf("unknown peakType: '%s'", peakType)
+	}
 
     if err != nil {
         return nil, fmt.Errorf("error during waveform processing for '%s': %w", webInputPath, err)

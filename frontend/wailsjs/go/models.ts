@@ -36,20 +36,70 @@ export namespace main {
 	        this.uuid = source["uuid"];
 	    }
 	}
-	export class TimelineItem {
-	    bmd_item: any;
-	    name: string;
-	    id: string;
-	    track_type: string;
-	    track_index: number;
+	export class NestedAudioTimelineItem {
 	    source_file_path: string;
-	    processed_file_name: string;
+	    processed_file_name?: string;
 	    start_frame: number;
 	    end_frame: number;
 	    source_start_frame: number;
 	    source_end_frame: number;
 	    duration: number;
 	    edit_instructions: EditInstruction[];
+	    nested_items?: NestedAudioTimelineItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NestedAudioTimelineItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source_file_path = source["source_file_path"];
+	        this.processed_file_name = source["processed_file_name"];
+	        this.start_frame = source["start_frame"];
+	        this.end_frame = source["end_frame"];
+	        this.source_start_frame = source["source_start_frame"];
+	        this.source_end_frame = source["source_end_frame"];
+	        this.duration = source["duration"];
+	        this.edit_instructions = this.convertValues(source["edit_instructions"], EditInstruction);
+	        this.nested_items = this.convertValues(source["nested_items"], NestedAudioTimelineItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TimelineItem {
+	    bmd_item: any;
+	    bmd_mpi: any;
+	    name: string;
+	    id: string;
+	    track_type: string;
+	    track_index: number;
+	    source_file_path: string;
+	    processed_file_name?: string;
+	    start_frame: number;
+	    end_frame: number;
+	    source_start_frame: number;
+	    source_end_frame: number;
+	    duration: number;
+	    edit_instructions: EditInstruction[];
+	    link_group_id?: number;
+	    type?: string;
+	    nested_clips?: NestedAudioTimelineItem[];
 	
 	    static createFrom(source: any = {}) {
 	        return new TimelineItem(source);
@@ -58,6 +108,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.bmd_item = source["bmd_item"];
+	        this.bmd_mpi = source["bmd_mpi"];
 	        this.name = source["name"];
 	        this.id = source["id"];
 	        this.track_type = source["track_type"];
@@ -70,6 +121,9 @@ export namespace main {
 	        this.source_end_frame = source["source_end_frame"];
 	        this.duration = source["duration"];
 	        this.edit_instructions = this.convertValues(source["edit_instructions"], EditInstruction);
+	        this.link_group_id = source["link_group_id"];
+	        this.type = source["type"];
+	        this.nested_clips = this.convertValues(source["nested_clips"], NestedAudioTimelineItem);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -154,6 +208,7 @@ export namespace main {
 	}
 	
 	
+	
 	export class PrecomputedWaveformData {
 	    duration: number;
 	    peaks: number[];
@@ -171,6 +226,8 @@ export namespace main {
 	export class Timeline {
 	    name: string;
 	    fps: number;
+	    start_timecode: string;
+	    curr_timecode: string;
 	    video_track_items: TimelineItem[];
 	    audio_track_items: TimelineItem[];
 	
@@ -182,6 +239,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.fps = source["fps"];
+	        this.start_timecode = source["start_timecode"];
+	        this.curr_timecode = source["curr_timecode"];
 	        this.video_track_items = this.convertValues(source["video_track_items"], TimelineItem);
 	        this.audio_track_items = this.convertValues(source["audio_track_items"], TimelineItem);
 	    }
