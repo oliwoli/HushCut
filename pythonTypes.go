@@ -50,7 +50,7 @@ type TimelineItem struct {
 	TrackType         string                   `json:"track_type"` // Expected: "video", "audio", "subtitle"
 	TrackIndex        int                      `json:"track_index"`
 	SourceFilePath    string                   `json:"source_file_path"`
-	ProcessedFileName string                   `json:"processed_file_name,omitempty"`
+	ProcessedFileName *string                   `json:"processed_file_name,omitempty"`
 	StartFrame        float64                  `json:"start_frame"`
 	EndFrame          float64                  `json:"end_frame"`
 	SourceStartFrame  float64                  `json:"source_start_frame"`

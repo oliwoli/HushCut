@@ -21,7 +21,7 @@ function Progress({
       <ProgressPrimitive.Indicator
         data-slot="progress-indicator"
         className={cn(
-          "bg-primary h-full w-full flex-1 transition-all",
+          "bg-primary h-full w-full flex-1 transition-transform, duration-200",
           "shadow-[0_0_0px_1px_theme('colors.neon.hot.DEFAULT'),_0_0_16px_3px_theme('colors.neon.DEFAULT')]",
           "will-change-transform"
         )}

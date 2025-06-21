@@ -105,7 +105,7 @@ def export_to_json(data: Any, output_path: str) -> None:
     # make output dir if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    with open(output_path, "w") as json_file:
+    with open(output_path, "w", encoding="utf-8") as json_file:
         json.dump(data, json_file, indent=4, default=fallback_serializer)
 
 

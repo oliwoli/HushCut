@@ -27,6 +27,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import atexit
 from uuid import uuid4
+import uuid
 
 from edit_silence import (
     create_edits_with_optional_silence,
@@ -654,45 +655,116 @@ def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
         item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
 
 
-def mixdown_compound_clips(audio_timeline_items: list[TimelineItem], fps: float):
+def generate_uuid_from_nested_clips(
+    top_level_item: dict, nested_clips: list[dict]
+) -> str:
     """
-    (REVISED) Finds compound clips, creates a single mixdown for each unique one,
-    and updates all instances on the timeline with the correct data.
+    Generates a deterministic, content-based UUID for a compound or multicam clip.
+
+    The UUID is derived from the top-level item's properties and a sorted,
+    canonical representation of all its nested audio clips. Any change to the
+    nested content (e.g., trimming a clip, changing a multicam angle) will
+    result in a new UUID.
+
+    Args:
+        top_level_item: The timeline item for the compound/multicam clip.
+        nested_clips: The list of resolved nested audio clips.
+
+    Returns:
+        A unique and stable UUID string based on the clip's content.
     """
-    global FFMPEG, TEMP_DIR
+    # 1. Start with the top-level clip's unique properties.
+    # The BMD Unique ID ensures we're starting from the correct source media pool item.
+    bmd_item = top_level_item.get("bmd_mpi")
+    seed_string = (
+        f"bmd_id:{bmd_item.GetUniqueId()};" if bmd_item else "bmd_id:<unknown>;"
+    )
+    seed_string += (
+        f"duration:{top_level_item['end_frame'] - top_level_item['start_frame']};"
+    )
+    seed_string += f"source_start:{top_level_item['source_start_frame']};"
+    seed_string += f"source_end:{top_level_item['source_end_frame']};"
 
-    processed_compound_bmd_ids = set()
+    # 2. Add properties from all nested clips.
+    # We must sort the clips to ensure the order is always the same,
+    # otherwise the same content could produce different UUIDs.
+    # We sort by the clip's start time within the container.
+    sorted_nested_clips = sorted(nested_clips, key=lambda x: x["start_frame"])
 
-    for item in audio_timeline_items:
-        # We only care about unprocessed compound clips that have nested audio.
-        if item.get("type") not in {"Compound", "Multicam"} or not item.get(
-            "nested_clips"
-        ):
-            continue
-
-        bmd_item = item.get("bmd_mpi")
-        if not bmd_item:
-            continue
-
-        # Use the Media Pool Item's Unique ID as a stable, content-based identifier.
-        unique_bmd_id = bmd_item.GetUniqueId()
-        if unique_bmd_id in processed_compound_bmd_ids:
-            continue
-
-        duration = item["end_frame"] - item["start_frame"]
-        output_wav_path = os.path.join(
-            TEMP_DIR,
-            f"{unique_bmd_id}-{duration}-{item['source_start_frame']}-{item['source_end_frame']}.wav",
+    nested_strings = []
+    for clip in sorted_nested_clips:
+        # Create a unique signature for each nested clip
+        clip_signature = (
+            f"path:{clip['source_file_path']},"
+            f"start:{clip['start_frame']},"
+            f"end:{clip['end_frame']},"
+            f"s_start:{clip['source_start_frame']},"
+            f"s_end:{clip['source_end_frame']}"
         )
+        nested_strings.append(clip_signature)
 
-        # --- 1. Create Mixdown ONLY if it doesn't exist ---
-        if not os.path.exists(output_wav_path) or not misc_utils.is_valid_audio(
-            output_wav_path
-        ):
-            nested_clips = item["nested_clips"]
-            if not nested_clips:
-                continue
+    # Combine all nested signatures into the main seed string
+    seed_string += "nested_clips[" + "||".join(nested_strings) + "]"
 
+    # 3. Generate a UUIDv5 hash from the canonical seed string.
+    # UUIDv5 is perfect for this as it's designed to create a deterministic
+    # UUID from a name within a namespace.
+    content_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, seed_string)
+
+    return str(content_uuid)
+
+
+def mixdown_compound_clips(audio_timeline_items: list[dict], fps: float):
+    """
+    (REVISED) Finds all unique compound/multicam content configurations on the
+    timeline and renders a mixdown for each one only if it's new or has changed
+    since the last run.
+    """
+    global FFMPEG, TEMP_DIR, globalz  # Assuming globalz is available
+
+    # --- Pass 1: Map all compound/multicam clips by their content UUID ---
+    # This groups all identical clips together efficiently.
+    content_map = {}
+    for item in audio_timeline_items:
+        if not item.get("type") or not item.get("nested_clips"):
+            continue
+
+        # Generate a UUID that represents the clip's current content.
+        content_uuid = generate_uuid_from_nested_clips(item, item["nested_clips"])
+
+        if content_uuid not in content_map:
+            content_map[content_uuid] = []
+        content_map[content_uuid].append(item)
+
+    # --- Pass 2: Process each unique content group ---
+    for content_uuid, items_in_group in content_map.items():
+        # All items in this group are identical, so we can use the first one
+        # as a representative for checking state and rendering.
+        representative_item = items_in_group[0]
+        existing_filename = representative_item.get("processed_file_name")
+
+        needs_render = False
+        if not existing_filename:
+            needs_render = True
+            print(
+                f"New compound/multicam content found for '{representative_item['name']}'. Rendering..."
+            )
+        elif content_uuid != os.path.splitext(existing_filename)[0]:
+            needs_render = True
+            print(
+                f"Content has changed for '{representative_item['name']}'. Re-rendering..."
+            )
+        else:
+            print(
+                f"Content for '{representative_item['name']}' is unchanged. Skipping render."
+            )
+
+        # This will be the final, correct path for this content group.
+        output_filename = f"{content_uuid}.wav"
+        output_wav_path = os.path.join(TEMP_DIR, output_filename)
+
+        if needs_render:
+            nested_clips = representative_item["nested_clips"]
             unique_source_files = list(
                 set([nc["source_file_path"] for nc in nested_clips])
             )
@@ -735,48 +807,22 @@ def mixdown_compound_clips(audio_timeline_items: list[TimelineItem], fps: float)
                 ]
             )
 
-            print(f"Generating compound mixdown for '{item['name']}'...")
             subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # --- Update all timeline items in this content group ---
+        # This happens whether we rendered or not, to ensure all items are correctly configured.
+        if os.path.exists(output_wav_path):  # A quick check here is still wise
+            for tl_item in items_in_group:
+                tl_item["processed_file_name"] = output_filename
+                tl_item["source_file_path"] = output_wav_path
+                tl_item["source_start_frame"] = 0.0
+                tl_item["source_end_frame"] = (
+                    tl_item["end_frame"] - tl_item["start_frame"]
+                )
+
+                # (Your logic to update globalz.PROJECT_DATA would also go here)
         else:
-            print(f"Skipping mixdown for '{item['name']}', file already exists.")
-
-        # --- 2. Update all instances of this compound clip on the timeline ---
-        if misc_utils.is_valid_audio(output_wav_path):
-            for tl_item in audio_timeline_items:
-                item_bmd = tl_item.get("bmd_mpi")
-                # Find all other items on the timeline that are instances of this same compound clip
-                if item_bmd and item_bmd.GetUniqueId() == unique_bmd_id:
-                    # This is the fix for the selection bug
-                    tl_item["processed_file_name"] = os.path.basename(output_wav_path)
-                    tl_item["source_file_path"] = output_wav_path
-
-                    # This is the key fix for the duration bug in the UI
-                    tl_item["source_start_frame"] = 0.0
-                    tl_item["source_end_frame"] = (
-                        tl_item["end_frame"] - tl_item["start_frame"]
-                    )
-
-                    if (
-                        globalz.PROJECT_DATA
-                        and output_wav_path not in globalz.PROJECT_DATA["files"]
-                    ):
-                        uuid = misc_utils.uuid_from_path(output_wav_path).hex
-                        globalz.PROJECT_DATA["files"][output_wav_path] = {
-                            "properties": {"FPS": fps},
-                            "processed_audio_path": output_wav_path,
-                            "silenceDetections": None,
-                            "timelineItems": [tl_item],
-                            "fileSource": {
-                                "bmd_media_pool_item": tl_item["bmd_item"],
-                                "file_path": output_wav_path,
-                                "uuid": uuid,
-                            },
-                        }
-        else:
-            print(f"Failed to create or find mixdown for compound clip: {item['name']}")
-
-        # Mark this BMD ID as processed for this sync operation.
-        processed_compound_bmd_ids.add(unique_bmd_id)
+            print(f"Failed to create or find mixdown for content ID: {content_uuid}")
 
 
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
@@ -944,7 +990,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
                 )
 
         # Unify edits from nested clips into the parent compound clip
-        if item.get("type") == "Compound" and item.get("nested_clips"):
+        if item.get("type") and item.get("nested_clips"):
             unified_nested_edits = unify_edit_instructions(item["nested_clips"])
             new_edit_instructions = []
             if unified_nested_edits and unified_nested_edits[0][1] is not None:

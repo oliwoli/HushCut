@@ -322,7 +322,7 @@ function AppContent() {
       >
         <header className="flex items-center justify-between"></header>
         <main className="flex-1 gap-8 max-w-screen select-none space-y-4">
-          {projectData?.files && currentActiveClip?.id && (
+          {currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
               currentFileId={currentClipId}

@@ -1,6 +1,5 @@
 import math
 from local_types import SilenceInterval, EditInstruction, ClipData
-from functools import lru_cache
 
 
 # --- Helper functions (merge_intervals, map_source_to_timeline) ---
@@ -229,9 +228,9 @@ def create_edits_with_optional_silence(
             clip1_end = edited_clips[i]["end_frame"]
             clip2_start = edited_clips[i + 1]["start_frame"]
             if clip2_start != clip1_end + 1:
-                print(f"PROBLEM DETECTED between segment {i} and {i+1}:")
+                print(f"PROBLEM DETECTED between segment {i} and {i + 1}:")
                 print(f"  Seg {i} ends: {clip1_end}")
-                print(f"  Seg {i+1} starts: {clip2_start}")
+                print(f"  Seg {i + 1} starts: {clip2_start}")
                 if clip2_start <= clip1_end:
                     print(
                         f"  ISSUE TYPE: Overlap ({clip1_end - clip2_start + 1} frame(s))"

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from typing import List, Dict, Tuple, Optional, cast
 
 # Assuming these are correctly defined in your project
@@ -79,12 +80,25 @@ def _create_nested_audio_item_from_otio(
     return nested_item
 
 
-def _recursive_otio_parser(otio_composable: Dict) -> List[NestedAudioTimelineItem]:
+def _recursive_otio_parser(
+    otio_composable: Dict, active_angle_name: Optional[str] = None
+) -> List[Dict]:  # Using Dict as a stand-in for NestedAudioTimelineItem
     """
     (REVISED) Recursively traverses an OTIO composable (like a Stack) and returns a list
     of all audio clips found within its audio tracks.
+
+    For Multicam clips, it will only parse the track corresponding to the `active_angle_name`.
+    For Compound clips, it will parse all audio tracks.
+
+    Args:
+        otio_composable: The OTIO Stack to parse.
+        active_angle_name: The name of the track to isolate (e.g., "Angle 1").
+                           If None, all audio tracks are processed.
+
+    Returns:
+        A list of NestedAudioTimelineItem dictionaries.
     """
-    found_clips: List[NestedAudioTimelineItem] = []
+    found_clips: List[Dict] = []  # Using Dict as a stand-in for NestedAudioTimelineItem
 
     # The children of a Stack are Tracks. We iterate through them.
     for track in otio_composable.get("children", []):
@@ -92,7 +106,11 @@ def _recursive_otio_parser(otio_composable: Dict) -> List[NestedAudioTimelineIte
         if track.get("kind", "").lower() != "audio":
             continue
 
-        # Now we are inside an audio track, look for clips.
+        # MODIFIED: For Multicam clips, only process the single active audio track.
+        if active_angle_name and track.get("name") != active_angle_name:
+            continue
+
+        # Now we are inside a valid audio track, look for clips.
         playhead = 0.0
         for item_in_track in track.get("children", []):
             schema = str(item_in_track.get("OTIO_SCHEMA", "")).lower()
@@ -111,22 +129,30 @@ def _recursive_otio_parser(otio_composable: Dict) -> List[NestedAudioTimelineIte
                 if item:
                     found_clips.append(item)
 
-            # This handles cases where there are stacks inside tracks inside stacks...
             elif "stack" in schema:
+                # Recurse on the nested stack. We pass the active_angle_name down,
+                # though this is an edge case (stacks in multicam tracks).
                 found_clips.extend(
-                    _recursive_otio_parser(item_in_track)
-                )  # Recurse on the nested stack
+                    _recursive_otio_parser(item_in_track, active_angle_name)
+                )
 
             playhead += duration
 
     return found_clips
 
 
+# --- MAIN FUNCTION (MODIFIED) ---
+
+
 def populate_nested_clips(input_otio_path: str) -> None:
     """
-    Reads an OTIO file to find container clips (like Compounds), finds all nested
-    audio, and populates the `nested_clips` list for ALL corresponding items
-    (video and audio) in the global project data.
+    (REVISED) Reads an OTIO file to find container clips (Compounds and Multicams),
+    finds the correct nested audio, and populates the `nested_clips` list for all
+    corresponding items in the global project data.
+
+    - For Compound Clips, it processes all nested audio tracks.
+    - For Multicam Clips, it now correctly uses the AUDIO track's selected angle,
+      ignoring the video track's selection.
     """
     project_data = globalz.PROJECT_DATA
     if not project_data or "timeline" not in project_data:
@@ -136,30 +162,55 @@ def populate_nested_clips(input_otio_path: str) -> None:
         return
 
     try:
-        with open(input_otio_path, "r") as f:
+        with open(input_otio_path, "r", encoding="utf-8") as f:
             otio_data = json.load(f)
     except (IOError, json.JSONDecodeError) as e:
         logging.error(f"Failed to read or parse OTIO file at {input_otio_path}: {e}")
         return
 
-    # --- 1. First Pass: Parse all unique compound clips and map their contents ---
-    nested_audio_by_sequence_id: Dict[str, List[NestedAudioTimelineItem]] = {}
+    # --- 1. First Pass: Parse all unique container clips and map their contents ---
+    nested_audio_by_sequence_id: Dict[str, List[Dict]] = {}
 
     for track in otio_data.get("tracks", {}).get("children", []):
+        # --- MODIFIED LOGIC ---
+        # Only inspect AUDIO tracks to determine the correct nested audio source.
+        # This correctly handles cases where a multicam clip has different
+        # audio and video angles selected by simply ignoring the video track's angle.
+        if track.get("kind", "").lower() != "audio":
+            continue
+        # --- END MODIFIED LOGIC ---
+
         for item in track.get("children", []):
             item_schema = str(item.get("OTIO_SCHEMA", "")).lower()
             if "stack" in item_schema:
-                sequence_id = (
-                    item.get("metadata", {}).get("Resolve_OTIO", {}).get("Sequence ID")
-                )
+                resolve_meta = item.get("metadata", {}).get("Resolve_OTIO", {})
+                sequence_id = resolve_meta.get("Sequence ID")
+
                 if sequence_id and sequence_id not in nested_audio_by_sequence_id:
-                    # Parse this unique compound clip once and store its nested audio.
+                    sequence_type = resolve_meta.get("Sequence Type")
+                    active_angle_name = None
+
+                    if sequence_type == "Multicam Clip":
+                        item_name = item.get("name", "")
+                        match = re.search(r"Angle \d+", item_name)
+                        if match:
+                            active_angle_name = match.group(0)
+                            logging.info(
+                                f"Detected Multicam clip. Active audio angle: '{active_angle_name}'"
+                            )
+                        else:
+                            logging.warning(
+                                f"Could not parse active angle from Multicam name: '{item_name}'. "
+                                "This may result in incorrect audio processing."
+                            )
+
                     nested_audio_by_sequence_id[sequence_id] = _recursive_otio_parser(
-                        item
+                        item, active_angle_name=active_angle_name
                     )
 
-    pd_timeline = project_data["timeline"]
     # --- 2. Second Pass: Apply the found nested clips to our project data items ---
+    # This part of the function remains unchanged and will now work correctly.
+    pd_timeline = project_data["timeline"]
     all_pd_items = pd_timeline.get("video_track_items", []) + pd_timeline.get(
         "audio_track_items", []
     )
@@ -189,20 +240,17 @@ def populate_nested_clips(input_otio_path: str) -> None:
                     sequence_id
                 )
 
-                # If we found nested audio for this compound clip...
                 if nested_clips_for_this_sequence:
                     record_frame_float = playhead_frames + timeline_start_frame
 
-                    # ...find all project data items that correspond to it...
                     corresponding_pd_items = [
                         pd_item
                         for pd_item in all_pd_items
-                        if pd_item.get("type") in {"Compound", "Multicam"}
+                        if pd_item.get("type")
                         and abs(pd_item.get("start_frame", -1) - record_frame_float)
                         < FRAME_MATCH_TOLERANCE
                     ]
 
-                    # ...and apply the same list of nested clips to all of them.
                     for pd_item in corresponding_pd_items:
                         pd_item["nested_clips"] = nested_clips_for_this_sequence
 
@@ -343,7 +391,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     pd_timeline = project_data["timeline"]
 
     try:
-        with open(input_otio_path, "r") as f:
+        with open(input_otio_path, "r", encoding="utf-8") as f:
             otio_data = json.load(f)
     except (IOError, json.JSONDecodeError) as e:
         logging.error(f"Failed to read or parse OTIO file at {input_otio_path}: {e}")
