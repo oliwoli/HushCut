@@ -216,81 +216,58 @@ func CreateEditsWithOptionalSilence(
 }
 
 func (a *App) CalculateAndStoreEditsForTimeline(
-	projectData ProjectDataPayload, // projectData itself is a struct, not a pointer.
+	projectData ProjectDataPayload,
 	keepSilenceSegments bool,
-	allClipSilencesMap map[string][]SilencePeriod, // map[clipId] -> []SilencePeriod (seconds-based, absolute to source)
+	allClipSilencesMap map[string][]SilencePeriod,
 ) (ProjectDataPayload, error) {
 
-	// Check if Timeline.AudioTrackItems slice is empty or if Timeline.FPS is invalid.
-	// projectData.Timeline is a struct, so it won't be nil.
 	if len(projectData.Timeline.AudioTrackItems) == 0 {
 		log.Println("CalculateAndStoreEditsForTimeline: No audio track items to process.")
 		return projectData, nil
 	}
-	if projectData.Timeline.FPS <= floatEpsilon {
-		log.Printf("CalculateAndStoreEditsForTimeline: Invalid timeline FPS (%.2f). Cannot process.", projectData.Timeline.FPS)
-		// Return projectData as is, but perhaps signal an error or handle more gracefully.
-		// For now, just log and return. Depending on requirements, might be an error.
-		return projectData, fmt.Errorf("invalid timeline FPS: %.2f", projectData.Timeline.FPS)
+
+	timelineFPS := projectData.Timeline.FPS
+	if timelineFPS <= floatEpsilon {
+		return projectData, fmt.Errorf("invalid timeline FPS: %.2f", timelineFPS)
 	}
 
 	for i := range projectData.Timeline.AudioTrackItems {
-		item := &projectData.Timeline.AudioTrackItems[i] // Get pointer to modify item in the slice
+		item := &projectData.Timeline.AudioTrackItems[i]
 
 		itemSpecificSilencesInSeconds, silencesFound := allClipSilencesMap[item.ID]
 		if !silencesFound {
-			log.Printf("Info: No silence data provided in map for audio item '%s' (ID: %s). Applying default uncut edit instruction.\n", item.Name, item.ID)
+			log.Printf("Info: No silence data provided for item '%s'. Applying default uncut edit.", item.Name)
 			if len(item.EditInstructions) == 0 {
 				item.EditInstructions = defaultUncutEditInstruction(item)
 			}
 			continue
 		}
 
-		if item.SourceFilePath == "" {
-			log.Printf("Info: Audio item '%s' (ID: %s) has no source file path. Cannot determine source FPS. Applying default uncut edit instruction.\n", item.Name, item.ID)
-			if len(item.EditInstructions) == 0 {
-				item.EditInstructions = defaultUncutEditInstruction(item)
-			}
-			continue
-		}
-
-		fileData, fileDataFound := projectData.Files[item.SourceFilePath]
-		if !fileDataFound { // No need to check if fileData is nil here
-			log.Printf("Warning: No FileData found for source path '%s' (audio item '%s'). Cannot determine source FPS. Applying default uncut edit instruction.\n", item.SourceFilePath, item.Name)
-			if len(item.EditInstructions) == 0 {
-				item.EditInstructions = defaultUncutEditInstruction(item)
-			}
-			continue
-		}
-
-		sourceFileFPS := fileData.Properties.FPS
-		if sourceFileFPS <= floatEpsilon {
-			log.Printf("Warning: Invalid source FPS (%.2f) for file '%s' (item '%s'). Cannot convert silences. Applying default uncut edit instruction.\n", sourceFileFPS, item.SourceFilePath, item.Name)
-			if len(item.EditInstructions) == 0 {
-				item.EditInstructions = defaultUncutEditInstruction(item)
-			}
-			continue
-		}
-
+		// --- CORE FIX: Use Timeline FPS for all conversions ---
+		// We no longer need to look up the file's individual FPS. This makes the
+		// logic consistent for both regular clips and compound clips.
 		var frameBasedSilences []SilenceInterval
 		if len(itemSpecificSilencesInSeconds) > 0 {
 			for _, silenceInSec := range itemSpecificSilencesInSeconds {
-				startFrame := silenceInSec.Start * sourceFileFPS
-				endFrame := silenceInSec.End * sourceFileFPS
+				startFrame := silenceInSec.Start * timelineFPS
+				endFrame := silenceInSec.End * timelineFPS
 				if endFrame > startFrame+floatEpsilon {
 					frameBasedSilences = append(frameBasedSilences, SilenceInterval{
-						Start: startFrame, // Inclusive frame
-						End:   endFrame,   // Exclusive frame
+						Start: startFrame,
+						End:   endFrame,
 					})
 				}
 			}
 		}
 
+		// The ClipData now correctly uses the item's own source frames.
+		// For compound clips, Python has already adjusted these to be 0-based relative
+		// to the start of the mixdown file.
 		clipDataItem := ClipData{
 			SourceStartFrame: item.SourceStartFrame,
-			SourceEndFrame:   item.SourceEndFrame, // Inclusive
+			SourceEndFrame:   item.SourceEndFrame,
 			StartFrame:       item.StartFrame,
-			EndFrame:         item.EndFrame, // Inclusive
+			EndFrame:         item.EndFrame,
 		}
 
 		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, keepSilenceSegments)

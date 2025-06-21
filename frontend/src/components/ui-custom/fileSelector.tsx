@@ -71,15 +71,20 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
   const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const isCompound = item.type === 'Compound';
+
   const { startSeconds, endSeconds } = useMemo(() => {
     if (!fps || typeof item.source_start_frame !== 'number' || typeof item.source_end_frame !== 'number' || fps <= 0) {
       return { startSeconds: 0, endSeconds: 0 };
     }
+    // For compounds, source start/end is relative to its own beginning.
+    const start = isCompound ? 0 : item.source_start_frame;
+    const end = isCompound ? (item.end_frame - item.start_frame) : item.source_end_frame;
     return {
-      startSeconds: item.source_start_frame / fps,
-      endSeconds: item.source_end_frame / fps,
+      startSeconds: start / fps,
+      endSeconds: end / fps,
     };
-  }, [item.source_start_frame, item.source_end_frame, fps]);
+  }, [item, fps, isCompound]);
 
   const clipDuration = endSeconds - startSeconds;
 
@@ -88,6 +93,7 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
     const delayMs = isSelected ? 5 : 15;
 
     const fetchWaveform = async () => {
+      // The logic is now correct: it relies on processed_file_name, which compounds have.
       if (!item.processed_file_name || clipDuration <= 0) {
         setIsLoading(false);
         return;
@@ -100,7 +106,7 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
       dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, dynamicSamplesPerPixel);
 
       try {
-        await new Promise((res) => setTimeout(res, delayMs)); // ✅ delay before fetching
+        await new Promise((res) => setTimeout(res, delayMs));
 
         if (isCancelled) return;
 
@@ -193,7 +199,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     if (!audioItems || audioItems.length === 0) return [];
     // QUICK FIX: Filter out compound clips as they are not yet supported and break the UI.
     return [...audioItems]
-      .filter(item => item.type !== 'Compound')
+      // .filter(item => item.type !== 'Compound')
       .sort((a, b) => {
         if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
         if (a.track_index !== b.track_index) return a.track_index - b.track_index;

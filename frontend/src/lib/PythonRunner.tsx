@@ -13,7 +13,6 @@ import { main } from "@wails/go/models";
 import type { DetectionParams, SilencePeriod } from "../types";
 
 import { ClipStore, useClipStore, useGlobalStore } from '@/stores/clipStore';
-import { ClipParameters, defaultParameters } from "@/stores/clipStore";
 import { useSyncBusyState } from "@/stores/appSync";
 
 
@@ -153,7 +152,7 @@ async function prepareProjectDataWithEdits(
     keepSilenceSegments,
     allClipSilencesMapForGo
   );
-  console.log("prepareProjectDataWithEdits: Edit instructions calculated.");
+  console.log("prepareProjectDataWithEdits: Edit instructions calculated.", projectDataWithEdits);
   return projectDataWithEdits;
 }
 
@@ -260,9 +259,6 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
         currentDefaultParams // This prop can now be removed
       );
 
-      // --- FIX APPLIED HERE ---
-      // Re-fetch the latest state and call the corrected helper function
-      // to get the most up-to-date parameters for comparison.
       const finalClipStoreState = useClipStore.getState();
       const finalTimelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
       const finalAllClipParams = deriveAllClipDetectionParams(finalTimelineItems, finalClipStoreState);

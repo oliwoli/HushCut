@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Mapping
 import json
 
+import pprint
 import threading
 from time import time, sleep
 import traceback
@@ -37,6 +38,7 @@ from edit_silence import (
 import misc_utils
 
 from local_types import (
+    NestedAudioTimelineItem,
     Timeline,
     TimelineItem,
     FileSource,
@@ -46,7 +48,11 @@ from local_types import (
 
 import globalz
 
-from otio_as_bridge import unify_linked_items_in_project_data
+from otio_as_bridge import (
+    unify_linked_items_in_project_data,
+    populate_nested_clips,
+    unify_edit_instructions,
+)
 
 # from project_orga import (
 #     map_media_pool_items_to_folders,
@@ -221,23 +227,26 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
 
 
 def resolve_import_error_msg(e: Exception, task_id: str = "") -> None:
+    global STANDALONE_MODE
+
     print(f"Failed to import GetResolve: {e}")
     print("Check and ensure DaVinci Resolve installation is correct.")
-    send_message_to_go(
-        "showAlert",
-        {
-            "title": "DaVinci Resolve Error",
-            "message": "Failed to import DaVinci Resolve Python API.",
-            "severity": "error",
-        },
-        task_id=task_id,
-    )
+
+    if not STANDALONE_MODE:
+        send_message_to_go(
+            "showAlert",
+            {
+                "title": "DaVinci Resolve Error",
+                "message": "Failed to import DaVinci Resolve Python API.",
+                "severity": "error",
+            },
+            task_id=task_id,
+        )
     return None
 
 
 def get_resolve(task_id: str = "") -> None:
     global RESOLVE
-
     script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
     if script_api_dir:
         resolve_modules_path = os.path.join(script_api_dir, "Modules")
@@ -645,39 +654,158 @@ def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
         item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
 
 
+def mixdown_compound_clips(audio_timeline_items: list[TimelineItem], fps: float):
+    """
+    (REVISED) Finds compound clips, creates a single mixdown for each unique one,
+    and updates all instances on the timeline with the correct data.
+    """
+    global FFMPEG, TEMP_DIR
+
+    processed_compound_bmd_ids = set()
+
+    for item in audio_timeline_items:
+        # We only care about unprocessed compound clips that have nested audio.
+        if item.get("type") not in {"Compound", "Multicam"} or not item.get(
+            "nested_clips"
+        ):
+            continue
+
+        bmd_item = item.get("bmd_mpi")
+        if not bmd_item:
+            continue
+
+        # Use the Media Pool Item's Unique ID as a stable, content-based identifier.
+        unique_bmd_id = bmd_item.GetUniqueId()
+        if unique_bmd_id in processed_compound_bmd_ids:
+            continue
+
+        duration = item["end_frame"] - item["start_frame"]
+        output_wav_path = os.path.join(
+            TEMP_DIR,
+            f"{unique_bmd_id}-{duration}-{item['source_start_frame']}-{item['source_end_frame']}.wav",
+        )
+
+        # --- 1. Create Mixdown ONLY if it doesn't exist ---
+        if not os.path.exists(output_wav_path) or not misc_utils.is_valid_audio(
+            output_wav_path
+        ):
+            nested_clips = item["nested_clips"]
+            if not nested_clips:
+                continue
+
+            unique_source_files = list(
+                set([nc["source_file_path"] for nc in nested_clips])
+            )
+            source_map = {path: i for i, path in enumerate(unique_source_files)}
+
+            filter_complex_parts = []
+            delayed_streams = []
+
+            for i, nested_clip in enumerate(nested_clips):
+                source_index = source_map[nested_clip["source_file_path"]]
+                start_sec = nested_clip["source_start_frame"] / fps
+                duration_sec = nested_clip["duration"] / fps
+                trim_filter = f"[{source_index}:a]atrim=start={start_sec}:duration={duration_sec},asetpts=PTS-STARTPTS[t{i}];"
+                filter_complex_parts.append(trim_filter)
+
+                delay_ms = (nested_clip["start_frame"] / fps) * 1000
+                delay_filter = f"[t{i}]adelay={int(delay_ms)}|{int(delay_ms)}[d{i}];"
+                filter_complex_parts.append(delay_filter)
+                delayed_streams.append(f"[d{i}]")
+
+            mix_inputs = "".join(delayed_streams)
+            amix_filter = (
+                f"{mix_inputs}amix=inputs={len(nested_clips)}:dropout_transition=0[out]"
+            )
+            filter_complex_parts.append(amix_filter)
+
+            ffmpeg_cmd = [FFMPEG, "-y"]
+            for source_file in unique_source_files:
+                ffmpeg_cmd.extend(["-i", source_file])
+
+            ffmpeg_cmd.extend(
+                [
+                    "-filter_complex",
+                    "".join(filter_complex_parts),
+                    "-map",
+                    "[out]",
+                    "-ac",
+                    "1",
+                    output_wav_path,
+                ]
+            )
+
+            print(f"Generating compound mixdown for '{item['name']}'...")
+            subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            print(f"Skipping mixdown for '{item['name']}', file already exists.")
+
+        # --- 2. Update all instances of this compound clip on the timeline ---
+        if misc_utils.is_valid_audio(output_wav_path):
+            for tl_item in audio_timeline_items:
+                item_bmd = tl_item.get("bmd_mpi")
+                # Find all other items on the timeline that are instances of this same compound clip
+                if item_bmd and item_bmd.GetUniqueId() == unique_bmd_id:
+                    # This is the fix for the selection bug
+                    tl_item["processed_file_name"] = os.path.basename(output_wav_path)
+                    tl_item["source_file_path"] = output_wav_path
+
+                    # This is the key fix for the duration bug in the UI
+                    tl_item["source_start_frame"] = 0.0
+                    tl_item["source_end_frame"] = (
+                        tl_item["end_frame"] - tl_item["start_frame"]
+                    )
+
+                    if (
+                        globalz.PROJECT_DATA
+                        and output_wav_path not in globalz.PROJECT_DATA["files"]
+                    ):
+                        uuid = misc_utils.uuid_from_path(output_wav_path).hex
+                        globalz.PROJECT_DATA["files"][output_wav_path] = {
+                            "properties": {"FPS": fps},
+                            "processed_audio_path": output_wav_path,
+                            "silenceDetections": None,
+                            "timelineItems": [tl_item],
+                            "fileSource": {
+                                "bmd_media_pool_item": tl_item["bmd_item"],
+                                "file_path": output_wav_path,
+                                "uuid": uuid,
+                            },
+                        }
+        else:
+            print(f"Failed to create or find mixdown for compound clip: {item['name']}")
+
+        # Mark this BMD ID as processed for this sync operation.
+        processed_compound_bmd_ids.add(unique_bmd_id)
+
+
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
-    global PROJECT
-    # switch_to_page("edit")
+    """
+    (REVISED) Analyzes the timeline, processes all audio from regular and compound clips,
+    and builds the complete project data structure.
+    """
+    global PROJECT, MEDIA_POOL
+
+    # --- 1. Initial Data Gathering from Resolve API ---
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
-
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
-
-    curr_timecode = timeline.GetCurrentTimecode()
-    start_tc = timeline.GetStartTimecode()
+    all_timeline_items = video_track_items + audio_track_items
 
     if not PROJECT:
         return False, None
 
-    # start_time_gather = time()
-    # tl_count = PROJECT.GetTimelineCount()
-    # for i in range(tl_count):
-    #     print(PROJECT.GetTimelineByIndex(i + 1).GetName())
-    # print(
-    #     f"it took {time() - start_time_gather} seconds to get all {tl_count} timeline names."
-    # )
-
+    # Build the basic project data structure
     tl_dict: Timeline = {
         "name": timeline_name,
         "fps": timeline_fps,
-        "start_timecode": start_tc,
-        "curr_timecode": curr_timecode,
+        "start_timecode": timeline.GetStartTimecode(),
+        "curr_timecode": timeline.GetCurrentTimecode(),
         "video_track_items": video_track_items,
         "audio_track_items": audio_track_items,
     }
 
-    # Final structure:
     if not globalz.PROJECT_DATA:
         globalz.PROJECT_DATA = {
             "project_name": project.GetName(),
@@ -685,54 +813,32 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
             "files": {},
         }
     else:
-        # Preserve existing files, update timeline specific data
         globalz.PROJECT_DATA["project_name"] = project.GetName()
         globalz.PROJECT_DATA["timeline"] = tl_dict
 
+    # --- 2. Handle Compound Clips (if any exist) ---
+    if any(item.get("type") for item in all_timeline_items):
+        print("Complex clips detected. Analyzing timeline structure with OTIO...")
+        input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
+        export_timeline_to_otio(timeline, file_path=input_otio_path)
+        populate_nested_clips(input_otio_path)
+        mixdown_compound_clips(audio_track_items, timeline_fps)
+        print("Compound clip processing complete.")
+
+    # --- 3. Gather all unique audio sources that need processing ---
+    audio_sources_to_process: list[FileSource] = []
     seen_uuids: set[str] = set()
-    audio_source_files: list[FileSource] = []  # includes duplicates (true to timeline)
-    audio_sources_set: list[FileSource] = []  # no duplicates
 
     for item in audio_track_items:
-        source_media_item = get_source_media_from_timeline_item(item)
-        if not source_media_item:
-            continue
-        item["bmd_mpi"] = source_media_item["bmd_media_pool_item"]
-        audio_source_files.append(source_media_item)
-        if source_media_item["uuid"] not in seen_uuids:
-            seen_uuids.add(source_media_item["uuid"])
-            audio_sources_set.append(source_media_item)
+        # We only need to process regular clips here, as compounds are already done.
+        if not item.get("type"):
+            source_media_item = get_source_media_from_timeline_item(item)
+            if source_media_item and source_media_item["uuid"] not in seen_uuids:
+                seen_uuids.add(source_media_item["uuid"])
+                audio_sources_to_process.append(source_media_item)
 
-    has_any_processable_items = False
-    for item in video_track_items + audio_track_items:
-        # If it's a direct media file, it's processable
-        if item.get("source_file_path"):
-            has_any_processable_items = True
-            break
-        # If it's a compound clip or timeline, we assume it *might* have audio inside,
-        # so we won't stop here. The OTIO processing will clarify its contents.
-        if item.get("type") in [
-            "Compound",
-            "Timeline",
-        ]:  # Assuming these are the types returned
-            has_any_processable_items = True
-            break
-
-    if not has_any_processable_items:
-        print(f"Video track items: {video_track_items}")
-        print(f"Audio track items: {audio_track_items}")
-        return (
-            False,
-            "No direct audio/video files or compound/nested clips found on the timeline to process.",
-        )
-
-    print(
-        f"Found {len(audio_source_files)} audio clips from {len(audio_sources_set)} unique source files."
-    )
-    # assign_bmd_mpi_to_items(video_track_items)
-
-    # 1. Ensure FileData entries exist for all unique sources.
-    for source in audio_sources_set:
+    # --- 4. Process Regular Clips (Extract WAVs) ---
+    for source in audio_sources_to_process:
         if source["file_path"] not in globalz.PROJECT_DATA["files"]:
             globalz.PROJECT_DATA["files"][source["file_path"]] = {
                 "properties": {"FPS": timeline_fps},
@@ -741,113 +847,148 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
                 "silenceDetections": None,
             }
 
-    # 2. Identify files needing extraction vs. those already processed.
-    sources_to_extract: list[FileSource] = []
-    all_processed_audio: list[AudioFromVideo] = []
-
-    for source in audio_sources_set:
-        file_path = source["file_path"]
-        file_data = globalz.PROJECT_DATA["files"].get(file_path)
-
-        # Add a guard clause to satisfy the IDE and make the code more robust.
-        if not file_data:
-            print(f"Warning: Could not find file data for '{file_path}'. Skipping.")
-            continue
-
-        processed_path = file_data.get("processed_audio_path")
-
-        if processed_path and misc_utils.is_valid_audio(processed_path):
-            print(
-                f"Skipping extraction for '{os.path.basename(file_path)}', already processed."
-            )
-            all_processed_audio.append(
-                {
-                    "audio_file_name": os.path.basename(processed_path),
-                    "audio_file_path": processed_path,
-                    "audio_file_uuid": source["uuid"],
-                    "video_file_path": file_path,
-                    "video_bmd_media_pool_item": source["bmd_media_pool_item"],
-                    # This line is also now safe because of the guard clause
-                    "silence_intervals": file_data.get("silenceDetections") or [],
-                }
-            )
-        else:
-            sources_to_extract.append(source)
-
-    # 3. Process only the files that need it.
+    sources_to_extract = [
+        s for s in audio_sources_to_process if not s["file_path"].endswith(".wav")
+    ]
     newly_processed_audio = process_audio_files(sources_to_extract, TEMP_DIR)
 
-    # 4. Update state for newly processed files and add them to the main list.
-    for processed_info in newly_processed_audio:
-        source_path = processed_info["video_file_path"]
+    # Update the project data with paths to the newly extracted WAVs
+    for p_info in newly_processed_audio:
+        source_path = p_info["video_file_path"]
         if source_path in globalz.PROJECT_DATA["files"]:
-            globalz.PROJECT_DATA["files"][source_path]["processed_audio_path"] = (
-                processed_info["audio_file_path"]
-            )
-        all_processed_audio.append(processed_info)
+            globalz.PROJECT_DATA["files"][source_path]["processed_audio_path"] = p_info[
+                "audio_file_path"
+            ]
 
-    # 5. Run silence detection on all available audio files (new and old).
-    if STANDALONE_MODE:
-        silence_results = detect_silence_parallel(all_processed_audio, timeline_fps)
-        # Update the main data structure with new silence detections
-        for file_path, result_data in silence_results.items():
-            if file_path in globalz.PROJECT_DATA["files"]:
-                globalz.PROJECT_DATA["files"][file_path]["silenceDetections"] = (
-                    result_data["silence_intervals"]
-                )
-                print(
-                    f"Detected {len(result_data['silence_intervals'])} silence segments in {file_path}"
-                )
-
-    # -- END REFACTORED BLOCK --
-
-    # 6. Populate `processed_file_name` on each timeline item for frontend compatibility
+    # --- 5. Silence Detection on ALL Processed Audio ---
+    all_wavs_for_silence_detection: list[AudioFromVideo] = []
     for item in audio_track_items:
-        source_path = item.get("source_file_path")
-        if source_path and source_path in globalz.PROJECT_DATA["files"]:
-            file_data = globalz.PROJECT_DATA["files"][source_path]
-            processed_path = file_data.get("processed_audio_path")
-            if processed_path:
-                item["processed_file_name"] = os.path.basename(processed_path)
+        path_to_wav, uuid, original_source_path = "", "", ""
+        if item.get("processed_file_name"):  # Compound clips
+            path_to_wav = os.path.join(TEMP_DIR, item["processed_file_name"])
+            uuid = misc_utils.uuid_from_path(path_to_wav).hex
+            original_source_path = path_to_wav
+        elif item.get("source_file_path"):  # Regular clips
+            original_path = item["source_file_path"]
+            if original_path in globalz.PROJECT_DATA["files"]:
+                path_to_wav = globalz.PROJECT_DATA["files"][original_path].get(
+                    "processed_audio_path", ""
+                )
+                uuid = globalz.PROJECT_DATA["files"][original_path]["fileSource"][
+                    "uuid"
+                ]
+                original_source_path = original_path
 
-    start_calc_edits = time()
-    for item in globalz.PROJECT_DATA["timeline"]["audio_track_items"]:
-        clip_file_path = item["source_file_path"]
-        if not clip_file_path or clip_file_path not in globalz.PROJECT_DATA["files"]:
-            continue
-
-        main_clip_data: ClipData = {
-            "start_frame": item["start_frame"],
-            "end_frame": item["end_frame"],
-            "source_start_frame": item["source_start_frame"],
-            "source_end_frame": item["source_end_frame"],
-        }
-
-        file_data = globalz.PROJECT_DATA["files"][clip_file_path]
-        if item not in file_data["timelineItems"]:
-            file_data["timelineItems"].append(item)
-
-        silence_detections = file_data.get("silenceDetections")
-
-        if silence_detections:
-            edit_instructions: List[EditInstruction] = (
-                create_edits_with_optional_silence(main_clip_data, silence_detections)
+        if (
+            path_to_wav
+            and misc_utils.is_valid_audio(path_to_wav)
+            and not any(
+                d["audio_file_path"] == path_to_wav
+                for d in all_wavs_for_silence_detection
             )
-            item["edit_instructions"] = edit_instructions
+        ):
+            all_wavs_for_silence_detection.append(
+                {
+                    "video_bmd_media_pool_item": item["bmd_item"],
+                    "video_file_path": original_source_path,
+                    "audio_file_path": path_to_wav,
+                    "audio_file_uuid": uuid,
+                    "audio_file_name": os.path.basename(path_to_wav),
+                    "silence_intervals": [],
+                }
+            )
 
-    print(f"It took {time() - start_calc_edits:.2f} seconds to calculate edits")
+    if STANDALONE_MODE:
+        silence_results = detect_silence_parallel(
+            all_wavs_for_silence_detection, timeline_fps
+        )
+        for _, result_data in silence_results.items():
+            original_source_for_wav = result_data["video_file_path"]
+            if original_source_for_wav in globalz.PROJECT_DATA["files"]:
+                globalz.PROJECT_DATA["files"][original_source_for_wav][
+                    "silenceDetections"
+                ] = result_data["silence_intervals"]
+
+    # --- 6. Calculate Edits for ALL Source Clips (Including Nested) ---
+    q_edits: list[Union[TimelineItem, NestedAudioTimelineItem]] = list(
+        all_timeline_items
+    )
+    while q_edits:
+        item = q_edits.pop(0)
+        if item.get("source_file_path"):  # This applies to regular and nested clips
+            file_data = globalz.PROJECT_DATA["files"].get(item["source_file_path"])
+            if file_data and file_data.get("silenceDetections"):
+                clip_data: ClipData = {
+                    "start_frame": item["start_frame"],
+                    "end_frame": item["end_frame"],
+                    "source_start_frame": item["source_start_frame"],
+                    "source_end_frame": item["source_end_frame"],
+                }
+                item["edit_instructions"] = create_edits_with_optional_silence(
+                    clip_data, file_data["silenceDetections"]
+                )
+
+        if item.get("nested_clips"):
+            q_edits.extend(item["nested_clips"])
+
+    # --- 7. Finalize Timeline Items ---
+    for item in audio_track_items:
+        # Set processed_file_name for regular clips now
+        if not item.get("type") and item.get("source_file_path"):
+            original_path = item["source_file_path"]
+            if original_path in globalz.PROJECT_DATA["files"] and globalz.PROJECT_DATA[
+                "files"
+            ][original_path].get("processed_audio_path"):
+                item["processed_file_name"] = os.path.basename(
+                    globalz.PROJECT_DATA["files"][original_path]["processed_audio_path"]
+                )
+
+        # Unify edits from nested clips into the parent compound clip
+        if item.get("type") == "Compound" and item.get("nested_clips"):
+            unified_nested_edits = unify_edit_instructions(item["nested_clips"])
+            new_edit_instructions = []
+            if unified_nested_edits and unified_nested_edits[0][1] is not None:
+                for rel_start, rel_end in unified_nested_edits:
+                    duration = rel_end - rel_start
+                    if duration < 1:
+                        continue
+                    new_edit_instructions.append(
+                        {
+                            "source_start_frame": rel_start,
+                            "source_end_frame": rel_end,
+                            "start_frame": 0,
+                            "end_frame": 0,
+                            "enabled": True,
+                        }
+                    )
+            # else:  # Handle uncut case
+            #     new_edit_instructions.append(
+            #         {
+            #             "source_start_frame": item["source_start_frame"],
+            #             "source_end_frame": item["source_end_frame"],
+            #             "start_frame": item["start_frame"],
+            #             "end_frame": item["end_frame"],
+            #             "enabled": True,
+            #         }
+            #     )
+            item["edit_instructions"] = new_edit_instructions
 
     return True, None
 
 
 def merge_project_data(project_data_from_go: ProjectData) -> None:
     """Use everything from go except keys which values are <BMDObject> (string)"""
+    global TEMP_DIR
+
     if not globalz.PROJECT_DATA:
         globalz.PROJECT_DATA = {}
     for key, value in project_data_from_go.items():
         if value == "<BMDObject>":
             continue
         globalz.PROJECT_DATA[key] = value
+
+    debug_output = os.path.join(TEMP_DIR, "debug_project_data_from_go.json")
+    misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output)
 
     return
 
@@ -911,6 +1052,7 @@ def apply_edits_from_go(
     the essential data from the frontend without side effects.
     """
     print("Applying edit instructions from Go...")
+    pprint.pprint(source_project)
 
     # Create an efficient lookup map of the audio items sent from Go.
     source_audio_items = source_project.get("timeline", {}).get("audio_track_items", [])
@@ -980,6 +1122,26 @@ def send_progress_update(
     )
 
 
+def tl_has_nested_item() -> bool:
+    print("checking if tl has nested item")
+    project_data = globalz.PROJECT_DATA
+    if not project_data:
+        return False
+
+    all_tl_items = (
+        project_data["timeline"]["audio_track_items"]
+        + project_data["timeline"]["video_track_items"]
+    )
+
+    for item in all_tl_items:
+        item_type = item.get("type")
+        if not item_type:
+            continue
+        return True
+
+    return False
+
+
 def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global RESOLVE
     global TEMP_DIR
@@ -987,6 +1149,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global TIMELINE
     global MEDIA_POOL
     global TRACKER
+
     script_start_time: float = time()
 
     if not sync:
@@ -996,7 +1159,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     if not RESOLVE:
         task_id = task_id or ""
         get_resolve(task_id)
-
+    print("hello?")
     if not RESOLVE:
         globalz.PROJECT_DATA = {}
         alert_title = "DaVinci Resolve Error"
@@ -1059,6 +1222,10 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
         send_message_to_go("taskResult", response_payload, task_id=task_id)
         return False
+
+    # export state of current timeline to otio, EXPENSIVE
+    input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
+
     if sync or not globalz.PROJECT_DATA:
         success, alert_title = get_project_data(PROJECT, TIMELINE)
         if not alert_title:
@@ -1072,11 +1239,19 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
                 "alertMessage": "",  # Specific message for the alert
                 "alertSeverity": "error",
             }
+            print(response_payload)
+            output_dir = os.path.join(TEMP_DIR, "debug_project_data.json")
+
+            print(f"exporting debug json to {output_dir}")
+            misc_utils.export_to_json(globalz.PROJECT_DATA, output_dir)
             send_message_to_go("taskResult", response_payload, task_id=task_id)
             return
-        # print(f"Timeline Name: {globalz.PROJECT_DATA['timeline']['name']}")
 
-    if sync:
+    if sync or STANDALONE_MODE:
+        output_dir = os.path.join(TEMP_DIR, "debug_project_data.json")
+        print(f"exporting debug json to {output_dir}")
+        misc_utils.export_to_json(globalz.PROJECT_DATA, output_dir)
+
         print("just syncing, exiting")
         print(f"it took {time() - script_start_time:.2f} seconds for script to finish")
 
@@ -1089,7 +1264,10 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         send_message_to_go(
             message_type="taskResult", payload=response_payload, task_id=task_id
         )
-        return
+        export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
+        print(f"Exported timeline to OTIO in {input_otio_path}")
+        if not STANDALONE_MODE:
+            return
 
     if not globalz.PROJECT_DATA:
         alert_message = "An unexpected error happened during sync. Could not get project data from Davinci."
@@ -1112,12 +1290,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     if not some_bmd_item or isinstance(some_bmd_item, str):
         print("critical error, can't continue")
         return
-
-    # export state of current timeline to otio, EXPENSIVE
-    input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
-
-    export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
-    print(f"Exported timeline to OTIO in {input_otio_path}")
 
     unify_linked_items_in_project_data(input_otio_path)
 
@@ -1286,8 +1458,6 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     sleep_time_between = 2.5
     TRACKER.update_task_progress("append", 1.0, message="Adding Clips to Timeline")
     for attempt in range(1, num_retries + 1):
-        print("-" * 20)
-
         # The internal function returns our "source of truth" and the API's response
         processed_clips, bmd_items_from_api = _append_clips_to_timeline(
             timeline, media_pool, timeline_items
