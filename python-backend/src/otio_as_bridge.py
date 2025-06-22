@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from typing import List, Dict, Tuple, Optional, cast
+from typing import Any, List, Dict, Tuple, Optional, cast
 
 # Assuming these are correctly defined in your project
 from local_types import TimelineItem, NestedAudioTimelineItem
@@ -13,18 +13,12 @@ from misc_utils import export_to_json
 
 
 def _create_nested_audio_item_from_otio(
-    otio_clip: dict, clip_start_in_container: float
+    otio_clip: Dict[str, Any],
+    clip_start_in_container: float,
+    max_duration: Optional[float] = None,
 ) -> Optional[NestedAudioTimelineItem]:
     """
-    Parses an OTIO clip from within a nested timeline (like a compound clip)
-    and converts it into a NestedAudioTimelineItem dictionary.
-
-    Args:
-        otio_clip: The dictionary representing the OTIO clip.
-        clip_start_in_container: The frame number where this clip starts inside its container.
-
-    Returns:
-        A NestedAudioTimelineItem dictionary or None if the item is not a valid audio source.
+    Parses an OTIO clip, respecting a maximum duration constraint.
     """
     media_refs = otio_clip.get("media_references", {})
     if not media_refs:
@@ -53,17 +47,17 @@ def _create_nested_audio_item_from_otio(
     if not source_range or not available_range:
         return None
 
-    # FIXED: Normalize the source start frame. The OTIO source_range is absolute to the
-    # original source media's timeline. We subtract the available_range's start time
-    # to get a value relative to the beginning of the media file, which is what the
-    # silence detection process expects.
     clip_source_start_val = source_range.get("start_time", {}).get("value", 0.0)
     media_available_start_val = available_range.get("start_time", {}).get("value", 0.0)
 
     normalized_source_start_frame = clip_source_start_val - media_available_start_val
     duration = source_range.get("duration", {}).get("value", 0.0)
-    normalized_source_end_frame = normalized_source_start_frame + duration
 
+    # FIX 1: Respect the maximum duration constraint passed from the container.
+    if max_duration is not None and duration > max_duration:
+        duration = max_duration
+
+    normalized_source_end_frame = normalized_source_start_frame + duration
     start_frame_in_container = clip_start_in_container
     end_frame_in_container = start_frame_in_container + duration
 
@@ -81,78 +75,78 @@ def _create_nested_audio_item_from_otio(
 
 
 def _recursive_otio_parser(
-    otio_composable: Dict, active_angle_name: Optional[str] = None
-) -> List[Dict]:  # Using Dict as a stand-in for NestedAudioTimelineItem
+    otio_composable: Dict[str, Any],
+    active_angle_name: Optional[str] = None,
+    container_duration: Optional[float] = None,
+) -> List[NestedAudioTimelineItem]:
     """
-    (REVISED) Recursively traverses an OTIO composable (like a Stack) and returns a list
-    of all audio clips found within its audio tracks.
-
-    For Multicam clips, it will only parse the track corresponding to the `active_angle_name`.
-    For Compound clips, it will parse all audio tracks.
-
-    Args:
-        otio_composable: The OTIO Stack to parse.
-        active_angle_name: The name of the track to isolate (e.g., "Angle 1").
-                           If None, all audio tracks are processed.
-
-    Returns:
-        A list of NestedAudioTimelineItem dictionaries.
+    Recursively traverses an OTIO composable, respecting both Multicam
+    active angles and container duration constraints.
     """
-    found_clips: List[Dict] = []  # Using Dict as a stand-in for NestedAudioTimelineItem
+    found_clips: List[NestedAudioTimelineItem] = []
 
-    # The children of a Stack are Tracks. We iterate through them.
     for track in otio_composable.get("children", []):
-        # We only care about audio tracks.
         if track.get("kind", "").lower() != "audio":
             continue
 
-        # MODIFIED: For Multicam clips, only process the single active audio track.
+        # FIX 2: For Multicam clips, only process the single active audio track.
         if active_angle_name and track.get("name") != active_angle_name:
             continue
 
-        # Now we are inside a valid audio track, look for clips.
         playhead = 0.0
         for item_in_track in track.get("children", []):
+            if container_duration is not None and playhead >= container_duration:
+                break
+
             schema = str(item_in_track.get("OTIO_SCHEMA", "")).lower()
-            duration = (
+            item_duration = (
                 (item_in_track.get("source_range") or {})
                 .get("duration", {})
                 .get("value", 0.0)
             )
 
+            effective_duration = item_duration
+            if container_duration is not None:
+                remaining_time = container_duration - playhead
+                if item_duration > remaining_time:
+                    effective_duration = max(0, remaining_time)
+
             if "gap" in schema:
-                playhead += duration
+                playhead += item_duration
+                continue
+
+            if effective_duration <= 0:
+                playhead += item_duration
                 continue
 
             if "clip" in schema:
-                item = _create_nested_audio_item_from_otio(item_in_track, playhead)
+                item = _create_nested_audio_item_from_otio(
+                    item_in_track, playhead, max_duration=effective_duration
+                )
                 if item:
                     found_clips.append(item)
 
             elif "stack" in schema:
-                # Recurse on the nested stack. We pass the active_angle_name down,
-                # though this is an edge case (stacks in multicam tracks).
-                found_clips.extend(
-                    _recursive_otio_parser(item_in_track, active_angle_name)
+                # Pass both constraints down in the recursion.
+                nested_clips = _recursive_otio_parser(
+                    item_in_track,
+                    active_angle_name=active_angle_name,
+                    container_duration=effective_duration,
                 )
+                for nested_clip in nested_clips:
+                    nested_clip["start_frame"] += playhead
+                    nested_clip["end_frame"] += playhead
+                    found_clips.append(nested_clip)
 
-            playhead += duration
+            playhead += item_duration
 
     return found_clips
 
 
-# --- MAIN FUNCTION (MODIFIED) ---
-
-
 def populate_nested_clips(input_otio_path: str) -> None:
     """
-    (REVISED) Reads an OTIO file to find container clips (Compounds and Multicams),
-    finds the correct nested audio, and populates the `nested_clips` list for all
-    corresponding items in the global project data.
-
-    - For Compound Clips, it processes all nested audio tracks.
-    - For Multicam Clips, it now correctly uses the AUDIO track's selected angle,
-      ignoring the video track's selection.
+    Reads an OTIO file and populates nested clip data. This version combines
+    all fixes: single-pass processing, specific item matching, and multicam angle detection.
     """
     project_data = globalz.PROJECT_DATA
     if not project_data or "timeline" not in project_data:
@@ -168,59 +162,23 @@ def populate_nested_clips(input_otio_path: str) -> None:
         logging.error(f"Failed to read or parse OTIO file at {input_otio_path}: {e}")
         return
 
-    # --- 1. First Pass: Parse all unique container clips and map their contents ---
-    nested_audio_by_sequence_id: Dict[str, List[Dict]] = {}
-
-    for track in otio_data.get("tracks", {}).get("children", []):
-        # --- MODIFIED LOGIC ---
-        # Only inspect AUDIO tracks to determine the correct nested audio source.
-        # This correctly handles cases where a multicam clip has different
-        # audio and video angles selected by simply ignoring the video track's angle.
-        if track.get("kind", "").lower() != "audio":
-            continue
-        # --- END MODIFIED LOGIC ---
-
-        for item in track.get("children", []):
-            item_schema = str(item.get("OTIO_SCHEMA", "")).lower()
-            if "stack" in item_schema:
-                resolve_meta = item.get("metadata", {}).get("Resolve_OTIO", {})
-                sequence_id = resolve_meta.get("Sequence ID")
-
-                if sequence_id and sequence_id not in nested_audio_by_sequence_id:
-                    sequence_type = resolve_meta.get("Sequence Type")
-                    active_angle_name = None
-
-                    if sequence_type == "Multicam Clip":
-                        item_name = item.get("name", "")
-                        match = re.search(r"Angle \d+", item_name)
-                        if match:
-                            active_angle_name = match.group(0)
-                            logging.info(
-                                f"Detected Multicam clip. Active audio angle: '{active_angle_name}'"
-                            )
-                        else:
-                            logging.warning(
-                                f"Could not parse active angle from Multicam name: '{item_name}'. "
-                                "This may result in incorrect audio processing."
-                            )
-
-                    nested_audio_by_sequence_id[sequence_id] = _recursive_otio_parser(
-                        item, active_angle_name=active_angle_name
-                    )
-
-    # --- 2. Second Pass: Apply the found nested clips to our project data items ---
-    # This part of the function remains unchanged and will now work correctly.
     pd_timeline = project_data["timeline"]
     all_pd_items = pd_timeline.get("video_track_items", []) + pd_timeline.get(
         "audio_track_items", []
     )
-
     timeline_start_frame = float(
         otio_data.get("global_start_time", {}).get("value", 0.0)
     )
     FRAME_MATCH_TOLERANCE = 0.5
+    audio_track_counter = 0
 
     for track in otio_data.get("tracks", {}).get("children", []):
+        if track.get("kind", "").lower() != "audio":
+            continue
+
+        audio_track_counter += 1
+        current_track_index = audio_track_counter
+
         playhead_frames = 0
         for item in track.get("children", []):
             duration_val = (
@@ -233,26 +191,55 @@ def populate_nested_clips(input_otio_path: str) -> None:
                 continue
 
             if "stack" in item_schema:
-                sequence_id = (
-                    item.get("metadata", {}).get("Resolve_OTIO", {}).get("Sequence ID")
-                )
-                nested_clips_for_this_sequence = nested_audio_by_sequence_id.get(
-                    sequence_id
+                container_duration = duration_val
+
+                # FIX 2 (RESTORED): Check for multicam clips and get active angle.
+                resolve_meta = item.get("metadata", {}).get("Resolve_OTIO", {})
+                sequence_type = resolve_meta.get("Sequence Type")
+                active_angle_name = None
+                if sequence_type == "Multicam Clip":
+                    item_name = item.get("name", "")
+                    match = re.search(r"Angle \d+", item_name)
+                    if match:
+                        active_angle_name = match.group(0)
+                        logging.info(
+                            f"Detected Multicam clip. Active audio angle: '{active_angle_name}'"
+                        )
+                    else:
+                        logging.warning(
+                            f"Could not parse active angle from Multicam name: '{item_name}'."
+                        )
+
+                nested_clips_for_this_instance = _recursive_otio_parser(
+                    item,
+                    active_angle_name=active_angle_name,
+                    container_duration=container_duration,
                 )
 
-                if nested_clips_for_this_sequence:
+                if nested_clips_for_this_instance:
                     record_frame_float = playhead_frames + timeline_start_frame
+                    otio_item_name = item.get("name")
 
+                    # FIX 3: Use high-specificity matching to prevent data collision.
                     corresponding_pd_items = [
                         pd_item
                         for pd_item in all_pd_items
-                        if pd_item.get("type")
-                        and abs(pd_item.get("start_frame", -1) - record_frame_float)
-                        < FRAME_MATCH_TOLERANCE
+                        if (
+                            pd_item.get("type")
+                            and pd_item.get("track_index") == current_track_index
+                            and abs(pd_item.get("start_frame", -1) - record_frame_float)
+                            < FRAME_MATCH_TOLERANCE
+                            and pd_item.get("name") == otio_item_name
+                        )
                     ]
 
+                    if not corresponding_pd_items:
+                        logging.warning(
+                            f"Could not find corresponding project item for OTIO stack '{otio_item_name}' on track {current_track_index}"
+                        )
+
                     for pd_item in corresponding_pd_items:
-                        pd_item["nested_clips"] = nested_clips_for_this_sequence
+                        pd_item["nested_clips"] = nested_clips_for_this_instance
 
             playhead_frames += duration_val
 

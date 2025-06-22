@@ -76,8 +76,8 @@ export function useSilenceData(
         detectionParams.minSilenceDurationSeconds,
         detectionParams.paddingLeftSeconds,
         detectionParams.paddingRightSeconds,
-        clipStartSeconds,  // CORRECT: Pass calculated seconds
-        clipEndSeconds     // CORRECT: Pass calculated seconds
+        clipStartSeconds,
+        clipEndSeconds
       );
       if (isMounted.current) {
         setSilenceData(result);

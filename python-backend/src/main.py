@@ -656,7 +656,7 @@ def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
 
 
 def generate_uuid_from_nested_clips(
-    top_level_item: dict, nested_clips: list[dict]
+    top_level_item: TimelineItem, nested_clips: list[NestedAudioTimelineItem]
 ) -> str:
     """
     Generates a deterministic, content-based UUID for a compound or multicam clip.
@@ -714,9 +714,13 @@ def generate_uuid_from_nested_clips(
     return str(content_uuid)
 
 
-def mixdown_compound_clips(audio_timeline_items: list[dict], fps: float):
+def mixdown_compound_clips(
+    audio_timeline_items: list[TimelineItem],
+    fps: float,
+    curr_processed_file_names: list[str],
+):
     """
-    (REVISED) Finds all unique compound/multicam content configurations on the
+    Finds all unique compound/multicam content configurations on the
     timeline and renders a mixdown for each one only if it's new or has changed
     since the last run.
     """
@@ -744,15 +748,13 @@ def mixdown_compound_clips(audio_timeline_items: list[dict], fps: float):
         existing_filename = representative_item.get("processed_file_name")
 
         needs_render = False
-        if not existing_filename:
+        if (
+            not existing_filename
+            and f"{content_uuid}.wav" not in curr_processed_file_names
+        ):
             needs_render = True
             print(
-                f"New compound/multicam content found for '{representative_item['name']}'. Rendering..."
-            )
-        elif content_uuid != os.path.splitext(existing_filename)[0]:
-            needs_render = True
-            print(
-                f"Content has changed for '{representative_item['name']}'. Re-rendering..."
+                f"New compound/multicam content found for '{representative_item['name']}'. Rendering {content_uuid}..."
             )
         else:
             print(
@@ -852,6 +854,19 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         "audio_track_items": audio_track_items,
     }
 
+    previous_project_data = (
+        globalz.PROJECT_DATA.copy() if globalz.PROJECT_DATA else None
+    )
+
+    curr_processed_file_names = []
+
+    if previous_project_data:
+        for item in previous_project_data["timeline"]["audio_track_items"]:
+            if not item.get("processed_file_name"):
+                continue
+            curr_processed_file_names.append(item["processed_file_name"])
+    print(f"all current processed file names: {curr_processed_file_names}")
+
     if not globalz.PROJECT_DATA:
         globalz.PROJECT_DATA = {
             "project_name": project.GetName(),
@@ -863,12 +878,14 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         globalz.PROJECT_DATA["timeline"] = tl_dict
 
     # --- 2. Handle Compound Clips (if any exist) ---
-    if any(item.get("type") for item in all_timeline_items):
+    if any(item.get("type") for item in audio_track_items):
         print("Complex clips detected. Analyzing timeline structure with OTIO...")
         input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
         export_timeline_to_otio(timeline, file_path=input_otio_path)
         populate_nested_clips(input_otio_path)
-        mixdown_compound_clips(audio_track_items, timeline_fps)
+        mixdown_compound_clips(
+            audio_track_items, timeline_fps, curr_processed_file_names
+        )
         print("Compound clip processing complete.")
 
     # --- 3. Gather all unique audio sources that need processing ---
