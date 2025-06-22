@@ -22,7 +22,7 @@ class EditInstruction(TypedDict):
     source_end_frame: float  # Precise source end point/time (inclusive)
     start_frame: float  # Calculated timeline start frame (inclusive)
     end_frame: float  # Calculated timeline end frame (inclusive)
-    enabled: bool  # TODO: move this into TimelineItem instead, maybe rename to "enabled_in_edit"
+    enabled: bool
 
 
 class NestedAudioTimelineItem(TypedDict):
@@ -34,6 +34,7 @@ class NestedAudioTimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
+    source_channel: int
     nested_items: NotRequired[list["NestedAudioTimelineItem"]]
 
 
@@ -52,6 +53,7 @@ class TimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
+    source_channel: NotRequired[int]
     link_group_id: NotRequired[int]
     type: NotRequired[Literal["Compound", "Timeline"]]
     nested_clips: NotRequired[list[NestedAudioTimelineItem]]

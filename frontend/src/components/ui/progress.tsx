@@ -3,11 +3,12 @@ import * as ProgressPrimitive from "@radix-ui/react-progress"
 
 import { cn } from "@/lib/utils"
 
-function Progress({
-  className,
-  value,
-  ...props
-}: React.ComponentProps<typeof ProgressPrimitive.Root>) {
+
+interface ProgressProps extends React.ComponentProps<typeof ProgressPrimitive.Root> {
+  indicatorClassName?: string;
+}
+
+function Progress({ className, value, indicatorClassName, ...props }: ProgressProps) {
   return (
     <ProgressPrimitive.Root
       data-slot="progress"
@@ -23,7 +24,8 @@ function Progress({
         className={cn(
           "bg-primary h-full w-full flex-1 transition-transform, duration-200",
           "shadow-[0_0_0px_1px_theme('colors.neon.hot.DEFAULT'),_0_0_16px_3px_theme('colors.neon.DEFAULT')]",
-          "will-change-transform"
+          "will-change-transform",
+          indicatorClassName
         )}
         style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
       />

@@ -1,4 +1,4 @@
-import { PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react";
+import { LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
@@ -8,8 +8,7 @@ import ZoomPlugin from "wavesurfer.js/dist/plugins/zoom.esm.js";
 
 import { useClipParameter } from "@/stores/clipStore";
 
-import { GetOrDetectSilencesWithCache } from "@wails/go/main/App";
-import { useClipStore, defaultParameters, ClipStore } from "@/stores/clipStore";
+import { useClipStore } from "@/stores/clipStore";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { shallow } from "zustand/shallow";
 import { ActiveClip, DetectionParams } from "@/types";
@@ -583,8 +582,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         />
 
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white z-10">
-            Loading waveform...
+          <div className="absolute inset-0 flex items-end justify-end p-5 bg-gray-800/20 bg-opacity-50 text-white/60 z-10">
+            <LoaderCircleIcon className="text-gray-500/40 animate-spin" />
           </div>
         )}
       </div>

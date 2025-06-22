@@ -24,10 +24,10 @@ function Switch({
         data-slot="switch-thumb"
         className={cn(
           // Thumb styles
-          "pointer-events-none block size-[0.6rem] rounded-full transition-transform duration-200",
+          "pointer-events-none block size-[0.6rem] rounded-full transition-transform duration-40",
           "transform data-[state=checked]:translate-x-[calc(100%+6px)] data-[state=unchecked]:translate-x-1",
-          "data-[state=checked]:bg-[#d30000]", // bright red when on
-          "data-[state=unchecked]:bg-[#444]" // dark gray when off
+          "data-[state=checked]:bg-[#e64b3d]", // bright red when on
+          "data-[state=unchecked]:bg-[#929292]" // dark gray when off
         )}
       />
     </SwitchPrimitive.Root>

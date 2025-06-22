@@ -8,7 +8,11 @@ export function CloseApp():Promise<void>;
 
 export function DetectSilences(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number):Promise<Array<main.SilencePeriod>>;
 
+export function ExecuteAndTrackMixdown(arg1:number,arg2:string,arg3:Array<main.NestedAudioTimelineItem>):Promise<void>;
+
 export function GetConfig():Promise<Record<string, any>>;
+
+export function GetCurrentConversionProgress():Promise<Record<string, number>>;
 
 export function GetGoServerPort():Promise<number>;
 
@@ -28,6 +32,10 @@ export function LaunchPythonBackend(arg1:number,arg2:number):Promise<void>;
 
 export function MakeFinalTimeline(arg1:main.ProjectDataPayload,arg2:boolean):Promise<main.PythonCommandResponse>;
 
+export function MixdownCompoundClips(arg1:main.ProjectDataPayload):Promise<void>;
+
+export function ProcessProjectAudio(arg1:main.ProjectDataPayload):Promise<void>;
+
 export function ProcessWavToLinearPeaks(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
 
 export function ProcessWavToLogarithmicPeaks(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
@@ -40,4 +48,8 @@ export function SaveConfig(arg1:Record<string, any>):Promise<void>;
 
 export function SendCommandToPython(arg1:string,arg2:Record<string, any>):Promise<main.PythonCommandResponse>;
 
+export function StandardizeAudioToWav(arg1:string,arg2:string,arg3:any):Promise<void>;
+
 export function SyncWithDavinci():Promise<main.PythonCommandResponse>;
+
+export function WaitForFile(arg1:string):Promise<void>;

@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
@@ -68,6 +69,10 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	absPath, err := a.resolvePublicAudioPath(webInputPath)
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
+	}
+
+	if err := a.WaitForFile(absPath); err != nil {
+		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
 
 	file, err := os.Open(absPath)
@@ -291,6 +296,10 @@ processingLoop:
 	}, nil
 }
 
+type WaveformProgress struct {
+	FilePath   string  `json:"filePath"`
+	Percentage float64 `json:"percentage"`
+}
 
 func (a *App) ProcessWavToLinearPeaks(
 	webInputPath string,
@@ -313,14 +322,22 @@ func (a *App) ProcessWavToLinearPeaks(
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}
-
+	if err := a.WaitForFile(absPath); err != nil {
+		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
+	}
 	file, err := os.Open(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open input file '%s': %w", absPath, err)
 	}
 	defer file.Close()
-
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("could not get file info for '%s': %w", absPath, err)
+	}
+	totalBytes := fileInfo.Size()
+	var lastReportedPct float64 = -10.0
 	decoder := wav.NewDecoder(file)
+
 	if !decoder.IsValidFile() {
 		return nil, fmt.Errorf("'%s' is not a valid WAV file", absPath)
 	}
@@ -393,7 +410,7 @@ func (a *App) ProcessWavToLinearPeaks(
 		Data:   make([]int, chunkSize),
 	}
 
-	processingLoop:
+processingLoop:
 	for {
 		if currentFrameInFile >= endFrameOffset {
 			break
@@ -402,10 +419,28 @@ func (a *App) ProcessWavToLinearPeaks(
 		numSamplesRead, readErr := decoder.PCMBuffer(pcmBuffer)
 
 		if numSamplesRead == 0 {
-			if readErr != io.EOF && readErr != nil {
-				return nil, fmt.Errorf("error reading PCM chunk: %w", readErr)
+			break
+		}
+
+		if numSamplesRead > 0 && totalBytes > 0 {
+			// Ask the file handle for its current position (offset in bytes).
+			currentPos, seekErr := file.Seek(0, io.SeekCurrent)
+
+			// Only report progress if we can successfully get the position.
+			if seekErr == nil {
+				percentage := (float64(currentPos) / float64(totalBytes)) * 100
+				if percentage > 100 {
+					percentage = 100
+				}
+
+				if percentage-lastReportedPct >= 5.0 {
+					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
+						FilePath:   webInputPath,
+						Percentage: percentage,
+					})
+					lastReportedPct = percentage
+				}
 			}
-			break // EOF or other reason for no samples
 		}
 
 		samplesInChunk := pcmBuffer.Data[:numSamplesRead]
@@ -494,6 +529,8 @@ func (a *App) ProcessWavToLinearPeaks(
 	if len(processedPeaks) == 0 {
 		finalOutputDuration = 0
 	}
+
+	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{FilePath: webInputPath})
 
 	return &PrecomputedWaveformData{
 		Duration: finalOutputDuration,

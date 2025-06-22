@@ -720,52 +720,32 @@ def mixdown_compound_clips(
     curr_processed_file_names: list[str],
 ):
     """
-    Finds all unique compound/multicam content configurations on the
-    timeline and renders a mixdown for each one only if it's new or has changed
-    since the last run.
+    Finds unique compound/multicam content on the timeline, and for each,
+    either renders a mixdown (standalone mode) or prepares the data for Go.
     """
-    global FFMPEG, TEMP_DIR, globalz  # Assuming globalz is available
+    global FFMPEG, TEMP_DIR, STANDALONE_MODE
 
     # --- Pass 1: Map all compound/multicam clips by their content UUID ---
-    # This groups all identical clips together efficiently.
     content_map = {}
     for item in audio_timeline_items:
         if not item.get("type") or not item.get("nested_clips"):
             continue
 
-        # Generate a UUID that represents the clip's current content.
         content_uuid = generate_uuid_from_nested_clips(item, item["nested_clips"])
-
         if content_uuid not in content_map:
             content_map[content_uuid] = []
         content_map[content_uuid].append(item)
 
     # --- Pass 2: Process each unique content group ---
     for content_uuid, items_in_group in content_map.items():
-        # All items in this group are identical, so we can use the first one
-        # as a representative for checking state and rendering.
         representative_item = items_in_group[0]
-        existing_filename = representative_item.get("processed_file_name")
-
-        needs_render = False
-        if (
-            not existing_filename
-            and f"{content_uuid}.wav" not in curr_processed_file_names
-        ):
-            needs_render = True
-            print(
-                f"New compound/multicam content found for '{representative_item['name']}'. Rendering {content_uuid}..."
-            )
-        else:
-            print(
-                f"Content for '{representative_item['name']}' is unchanged. Skipping render."
-            )
-
-        # This will be the final, correct path for this content group.
         output_filename = f"{content_uuid}.wav"
         output_wav_path = os.path.join(TEMP_DIR, output_filename)
 
-        if needs_render:
+        needs_render = f"{content_uuid}.wav" not in curr_processed_file_names
+
+        if needs_render and STANDALONE_MODE:
+            print(f"Standalone Mode: Rendering mixdown for content ID {content_uuid}")
             nested_clips = representative_item["nested_clips"]
             unique_source_files = list(
                 set([nc["source_file_path"] for nc in nested_clips])
@@ -808,12 +788,29 @@ def mixdown_compound_clips(
                     output_wav_path,
                 ]
             )
-
             subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        elif needs_render:  # This implies not STANDALONE_MODE
+            print(
+                f"Go Mode: Skipping local render for new content ID {content_uuid}. Go will handle it."
+            )
+        else:
+            print(
+                f"Content for '{representative_item['name']}' is unchanged. Skipping render."
+            )
 
-        # --- Update all timeline items in this content group ---
-        # This happens whether we rendered or not, to ensure all items are correctly configured.
-        if os.path.exists(output_wav_path):  # A quick check here is still wise
+        # --- [REFACTORED] Update all timeline items in this content group ---
+        # This logic now correctly separates the I/O check from the data update.
+        should_update_datastructure = False
+        if not STANDALONE_MODE:
+            # In Go mode, we don't check the disk. We trust Go to create the file.
+            # We always proceed to update the data structure.
+            should_update_datastructure = True
+        else:
+            # In Standalone mode, we only update the data if the file was successfully created.
+            should_update_datastructure = os.path.exists(output_wav_path)
+
+        if should_update_datastructure:
+            # This block runs for all items in Go mode, or only for successful renders in Standalone mode.
             for tl_item in items_in_group:
                 tl_item["processed_file_name"] = output_filename
                 tl_item["source_file_path"] = output_wav_path
@@ -821,30 +818,82 @@ def mixdown_compound_clips(
                 tl_item["source_end_frame"] = (
                     tl_item["end_frame"] - tl_item["start_frame"]
                 )
-
-                # (Your logic to update globalz.PROJECT_DATA would also go here)
         else:
-            print(f"Failed to create or find mixdown for content ID: {content_uuid}")
+            # This 'else' branch will now only be triggered in standalone mode if a render fails.
+            print(
+                f"ERROR: Failed to create or find mixdown for content ID: {content_uuid}"
+            )
+
+
+def _standardize_audio_stream_worker(item: TimelineItem, target_dir: str):
+    """
+    Worker function that creates a single standardized WAV file, either by
+    mono-mixing or by extracting a specific channel. Skips if the file exists.
+    """
+    global FFMPEG
+
+    source_path = item["source_file_path"]
+    # Default to 0 (mixdown) if source_channel is not specified
+    channel = item.get("source_channel", 0)
+    output_filename = item["processed_file_name"]
+
+    if not output_filename:
+        return
+
+    output_path = os.path.join(target_dir, output_filename)
+
+    # Skip if a valid file already exists
+    if misc_utils.is_valid_audio(output_path):
+        return
+
+    ffmpeg_cmd = [FFMPEG, "-y", "-i", source_path]
+    if channel > 0:
+        # Channel-specific extraction. ffmpeg is 0-indexed, DaVinci API is 1-indexed.
+        print(f"Extracting channel {channel} from '{os.path.basename(source_path)}'")
+        ffmpeg_cmd.extend(["-map_channel", f"0.0.{channel - 1}", output_path])
+    else:
+        # Standard mono mixdown
+        print(f"Creating mono mixdown for '{os.path.basename(source_path)}'")
+        ffmpeg_cmd.extend(["-vn", "-acodec", "pcm_s16le", "-ac", "1", output_path])
+
+    subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def standardize_all_audio_streams(
+    items: list[TimelineItem], target_dir: str, max_workers=4
+):
+    """
+    Processes all timeline items concurrently, creating the necessary WAV files.
+    """
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a dict to de-duplicate jobs. We only need to process each unique
+        # target file once.
+        unique_jobs = {
+            item["processed_file_name"]: item
+            for item in items
+            if item.get("processed_file_name")
+        }
+
+        # Run the worker function for each unique job
+        executor.map(
+            lambda item: _standardize_audio_stream_worker(item, target_dir),
+            unique_jobs.values(),
+        )
 
 
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     """
-    (REVISED) Analyzes the timeline, processes all audio from regular and compound clips,
-    and builds the complete project data structure.
+    (REVISED) Analyzes timeline items and channel mappings, then conditionally processes
+    them if running in standalone mode.
     """
-    global PROJECT, MEDIA_POOL
+    global PROJECT, MEDIA_POOL, STANDALONE_MODE, TEMP_DIR
 
-    # --- 1. Initial Data Gathering from Resolve API ---
+    # --- 1. Initial Data Gathering ---
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
-    all_timeline_items = video_track_items + audio_track_items
 
-    if not PROJECT:
-        return False, None
-
-    # Build the basic project data structure
     tl_dict: Timeline = {
         "name": timeline_name,
         "fps": timeline_fps,
@@ -853,134 +902,118 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         "video_track_items": video_track_items,
         "audio_track_items": audio_track_items,
     }
+    globalz.PROJECT_DATA = {
+        "project_name": project.GetName(),
+        "timeline": tl_dict,
+        "files": {},
+    }
 
-    previous_project_data = (
-        globalz.PROJECT_DATA.copy() if globalz.PROJECT_DATA else None
-    )
-
-    curr_processed_file_names = []
-
-    if previous_project_data:
-        for item in previous_project_data["timeline"]["audio_track_items"]:
-            if not item.get("processed_file_name"):
-                continue
-            curr_processed_file_names.append(item["processed_file_name"])
-    print(f"all current processed file names: {curr_processed_file_names}")
-
-    if not globalz.PROJECT_DATA:
-        globalz.PROJECT_DATA = {
-            "project_name": project.GetName(),
-            "timeline": tl_dict,
-            "files": {},
-        }
-    else:
-        globalz.PROJECT_DATA["project_name"] = project.GetName()
-        globalz.PROJECT_DATA["timeline"] = tl_dict
-
-    # --- 2. Handle Compound Clips (if any exist) ---
     if any(item.get("type") for item in audio_track_items):
-        print("Complex clips detected. Analyzing timeline structure with OTIO...")
+        print("Complex clips found. Analyzing timeline structure with OTIO...")
         input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
         export_timeline_to_otio(timeline, file_path=input_otio_path)
-        populate_nested_clips(input_otio_path)
-        mixdown_compound_clips(
-            audio_track_items, timeline_fps, curr_processed_file_names
-        )
-        print("Compound clip processing complete.")
+        populate_nested_clips(
+            input_otio_path
+        )  # This populates the 'nested_clips' array
 
-    # --- 3. Gather all unique audio sources that need processing ---
-    audio_sources_to_process: list[FileSource] = []
-    seen_uuids: set[str] = set()
-
+    # --- 2. Analyze Mappings & Define Streams (Runs for BOTH modes) ---
+    print("Analyzing timeline items and audio channel mappings...")
     for item in audio_track_items:
-        # We only need to process regular clips here, as compounds are already done.
-        if not item.get("type"):
-            source_media_item = get_source_media_from_timeline_item(item)
-            if source_media_item and source_media_item["uuid"] not in seen_uuids:
-                seen_uuids.add(source_media_item["uuid"])
-                audio_sources_to_process.append(source_media_item)
+        if not item.get("source_file_path"):
+            continue
 
-    # --- 4. Process Regular Clips (Extract WAVs) ---
-    for source in audio_sources_to_process:
-        if source["file_path"] not in globalz.PROJECT_DATA["files"]:
-            globalz.PROJECT_DATA["files"][source["file_path"]] = {
+        source_path = item["source_file_path"]
+        source_uuid = misc_utils.uuid_from_path(source_path).hex
+
+        item["source_channel"] = 0  # Default to 0 (mono mixdown)
+        item["processed_file_name"] = f"{source_uuid}.wav"
+
+        try:
+            mapping_str = item["bmd_item"].GetSourceAudioChannelMapping()
+            if mapping_str:
+                mapping = json.loads(mapping_str)
+                clip_track_map = mapping.get("track_mapping", {}).get("1", {})
+                clip_type = clip_track_map.get("type")
+                channel_indices = clip_track_map.get("channel_idx", [])
+
+                # --- THIS IS THE FIX for the source_channel bug ---
+                # Check for clip_type and convert to lower for case-insensitive comparison.
+                if (
+                    clip_type
+                    and clip_type.lower() == "mono"
+                    and len(channel_indices) == 1
+                ):
+                    channel_num = channel_indices[0]
+                    print(
+                        f"Detected clip '{item['name']}' using specific source channel: {channel_num}"
+                    )
+                    item["source_channel"] = channel_num
+                    item["processed_file_name"] = f"{source_uuid}_ch{channel_num}.wav"
+        except Exception as e:
+            print(
+                f"Warning: Could not get audio mapping for '{item['name']}'. Defaulting to mono mixdown. Error: {e}"
+            )
+
+    # --- 3. [NEW] Populate the 'files' map for data consistency ---
+    # This ensures the Go backend and frontend have a complete data model, even if it's partly redundant.
+    for item in audio_track_items:
+        source_path = item.get("source_file_path")
+        if not source_path:
+            continue
+
+        # If the file is not yet in our map, add it.
+        if source_path not in globalz.PROJECT_DATA["files"]:
+            globalz.PROJECT_DATA["files"][source_path] = {
                 "properties": {"FPS": timeline_fps},
                 "timelineItems": [],
-                "fileSource": source,
+                "fileSource": {
+                    "file_path": source_path,
+                    "uuid": misc_utils.uuid_from_path(source_path).hex,
+                    "bmd_media_pool_item": item["bmd_mpi"],
+                },
                 "silenceDetections": None,
+                # Note: 'processed_audio_path' is no longer relevant in this map,
+                # as all processing is now per-timeline-item.
             }
 
-    sources_to_extract = [
-        s for s in audio_sources_to_process if not s["file_path"].endswith(".wav")
-    ]
-    newly_processed_audio = process_audio_files(sources_to_extract, TEMP_DIR)
+    # --- 4. Handle Compound Clips ---
+    if any(item.get("type") for item in audio_track_items):
+        print("Complex clips found...")
+        mixdown_compound_clips(audio_track_items, timeline_fps, [])
 
-    # Update the project data with paths to the newly extracted WAVs
-    for p_info in newly_processed_audio:
-        source_path = p_info["video_file_path"]
-        if source_path in globalz.PROJECT_DATA["files"]:
-            globalz.PROJECT_DATA["files"][source_path]["processed_audio_path"] = p_info[
-                "audio_file_path"
-            ]
-
-    # --- 5. Silence Detection on ALL Processed Audio ---
-    all_wavs_for_silence_detection: list[AudioFromVideo] = []
-    for item in audio_track_items:
-        path_to_wav, uuid, original_source_path = "", "", ""
-        if item.get("processed_file_name"):  # Compound clips
-            path_to_wav = os.path.join(TEMP_DIR, item["processed_file_name"])
-            uuid = misc_utils.uuid_from_path(path_to_wav).hex
-            original_source_path = path_to_wav
-        elif item.get("source_file_path"):  # Regular clips
-            original_path = item["source_file_path"]
-            if original_path in globalz.PROJECT_DATA["files"]:
-                path_to_wav = globalz.PROJECT_DATA["files"][original_path].get(
-                    "processed_audio_path", ""
-                )
-                uuid = globalz.PROJECT_DATA["files"][original_path]["fileSource"][
-                    "uuid"
-                ]
-                original_source_path = original_path
-
-        if (
-            path_to_wav
-            and misc_utils.is_valid_audio(path_to_wav)
-            and not any(
-                d["audio_file_path"] == path_to_wav
-                for d in all_wavs_for_silence_detection
-            )
-        ):
-            all_wavs_for_silence_detection.append(
-                {
-                    "video_bmd_media_pool_item": item["bmd_item"],
-                    "video_file_path": original_source_path,
-                    "audio_file_path": path_to_wav,
-                    "audio_file_uuid": uuid,
-                    "audio_file_name": os.path.basename(path_to_wav),
-                    "silence_intervals": [],
-                }
-            )
-
+    # --- 5. Perform Processing ONLY if in Standalone Mode ---
     if STANDALONE_MODE:
-        silence_results = detect_silence_parallel(
-            all_wavs_for_silence_detection, timeline_fps
-        )
-        for _, result_data in silence_results.items():
-            original_source_for_wav = result_data["video_file_path"]
-            if original_source_for_wav in globalz.PROJECT_DATA["files"]:
-                globalz.PROJECT_DATA["files"][original_source_for_wav][
-                    "silenceDetections"
-                ] = result_data["silence_intervals"]
+        print("Standalone Mode: Standardizing all required audio streams...")
+        standardize_all_audio_streams(audio_track_items, TEMP_DIR)
 
-    # --- 6. Calculate Edits for ALL Source Clips (Including Nested) ---
-    q_edits: list[Union[TimelineItem, NestedAudioTimelineItem]] = list(
-        all_timeline_items
-    )
-    while q_edits:
-        item = q_edits.pop(0)
-        if item.get("source_file_path"):  # This applies to regular and nested clips
-            file_data = globalz.PROJECT_DATA["files"].get(item["source_file_path"])
-            if file_data and file_data.get("silenceDetections"):
+        print("Standalone Mode: Detecting silence...")
+        all_processed_files = {
+            item["processed_file_name"]
+            for item in audio_track_items
+            if item.get("processed_file_name")
+        }
+
+        wavs_for_silence_detection: list[AudioFromVideo] = [
+            {
+                "audio_file_path": os.path.join(TEMP_DIR, fname),
+                "video_file_path": fname,
+                "silence_intervals": [],
+            }
+            for fname in all_processed_files
+            if misc_utils.is_valid_audio(os.path.join(TEMP_DIR, fname))
+        ]
+        silence_results = detect_silence_parallel(
+            wavs_for_silence_detection, timeline_fps
+        )
+
+        for item in audio_track_items:
+            if (
+                item.get("processed_file_name")
+                and item["processed_file_name"] in silence_results
+            ):
+                silence_intervals = silence_results[item["processed_file_name"]][
+                    "silence_intervals"
+                ]
                 clip_data: ClipData = {
                     "start_frame": item["start_frame"],
                     "end_frame": item["end_frame"],
@@ -988,54 +1021,10 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
                     "source_end_frame": item["source_end_frame"],
                 }
                 item["edit_instructions"] = create_edits_with_optional_silence(
-                    clip_data, file_data["silenceDetections"]
+                    clip_data, silence_intervals
                 )
 
-        if item.get("nested_clips"):
-            q_edits.extend(item["nested_clips"])
-
-    # --- 7. Finalize Timeline Items ---
-    for item in audio_track_items:
-        # Set processed_file_name for regular clips now
-        if not item.get("type") and item.get("source_file_path"):
-            original_path = item["source_file_path"]
-            if original_path in globalz.PROJECT_DATA["files"] and globalz.PROJECT_DATA[
-                "files"
-            ][original_path].get("processed_audio_path"):
-                item["processed_file_name"] = os.path.basename(
-                    globalz.PROJECT_DATA["files"][original_path]["processed_audio_path"]
-                )
-
-        # Unify edits from nested clips into the parent compound clip
-        if item.get("type") and item.get("nested_clips"):
-            unified_nested_edits = unify_edit_instructions(item["nested_clips"])
-            new_edit_instructions = []
-            if unified_nested_edits and unified_nested_edits[0][1] is not None:
-                for rel_start, rel_end in unified_nested_edits:
-                    duration = rel_end - rel_start
-                    if duration < 1:
-                        continue
-                    new_edit_instructions.append(
-                        {
-                            "source_start_frame": rel_start,
-                            "source_end_frame": rel_end,
-                            "start_frame": 0,
-                            "end_frame": 0,
-                            "enabled": True,
-                        }
-                    )
-            # else:  # Handle uncut case
-            #     new_edit_instructions.append(
-            #         {
-            #             "source_start_frame": item["source_start_frame"],
-            #             "source_end_frame": item["source_end_frame"],
-            #             "start_frame": item["start_frame"],
-            #             "end_frame": item["end_frame"],
-            #             "enabled": True,
-            #         }
-            #     )
-            item["edit_instructions"] = new_edit_instructions
-
+    print("Python-side analysis complete.")
     return True, None
 
 

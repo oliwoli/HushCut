@@ -44,6 +44,7 @@ export namespace main {
 	    source_start_frame: number;
 	    source_end_frame: number;
 	    duration: number;
+	    source_channel?: number;
 	    edit_instructions: EditInstruction[];
 	    nested_items?: NestedAudioTimelineItem[];
 	
@@ -60,6 +61,7 @@ export namespace main {
 	        this.source_start_frame = source["source_start_frame"];
 	        this.source_end_frame = source["source_end_frame"];
 	        this.duration = source["duration"];
+	        this.source_channel = source["source_channel"];
 	        this.edit_instructions = this.convertValues(source["edit_instructions"], EditInstruction);
 	        this.nested_items = this.convertValues(source["nested_items"], NestedAudioTimelineItem);
 	    }
@@ -97,6 +99,7 @@ export namespace main {
 	    source_end_frame: number;
 	    duration: number;
 	    edit_instructions: EditInstruction[];
+	    source_channel?: number;
 	    link_group_id?: number;
 	    type?: string;
 	    nested_clips?: NestedAudioTimelineItem[];
@@ -121,6 +124,7 @@ export namespace main {
 	        this.source_end_frame = source["source_end_frame"];
 	        this.duration = source["duration"];
 	        this.edit_instructions = this.convertValues(source["edit_instructions"], EditInstruction);
+	        this.source_channel = source["source_channel"];
 	        this.link_group_id = source["link_group_id"];
 	        this.type = source["type"];
 	        this.nested_clips = this.convertValues(source["nested_clips"], NestedAudioTimelineItem);
@@ -172,6 +176,7 @@ export namespace main {
 	}
 	export class FileData {
 	    properties: FileProperties;
+	    processed_audio_path?: string;
 	    silenceDetections?: SilenceInterval[];
 	    timelineItems: TimelineItem[];
 	    fileSource: FileSource;
@@ -183,6 +188,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.properties = this.convertValues(source["properties"], FileProperties);
+	        this.processed_audio_path = source["processed_audio_path"];
 	        this.silenceDetections = this.convertValues(source["silenceDetections"], SilenceInterval);
 	        this.timelineItems = this.convertValues(source["timelineItems"], TimelineItem);
 	        this.fileSource = this.convertValues(source["fileSource"], FileSource);

@@ -10,6 +10,8 @@ import { toast } from "sonner";
 
 import {
   GetGoServerPort,
+  MixdownCompoundClips,
+  ProcessProjectAudio,
   SyncWithDavinci,
 } from "@wails/go/main/App";
 
@@ -162,12 +164,17 @@ function AppContent() {
     setBusy(true);
     const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
 
-    const conditionalSetProjectData = (
+    const conditionalSetProjectData = async (
       newData: main.ProjectDataPayload | null
     ) => {
       if (!deepEqual(projectData, newData)) {
         // Using fast-deep-equal
         setProjectData(newData);
+        if (!newData) return
+        await Promise.all([
+          ProcessProjectAudio(newData),
+          MixdownCompoundClips(newData)
+        ]);
         console.log("handleSync: Project data updated.");
       } else {
         console.log(

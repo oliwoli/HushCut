@@ -37,6 +37,7 @@ type NestedAudioTimelineItem struct {
 	SourceStartFrame  float64                  `json:"source_start_frame"`
 	SourceEndFrame    float64                  `json:"source_end_frame"`
 	Duration          float64                  `json:"duration"`
+    SourceChannel     *int                     `json:"source_channel,omitempty"`
 	EditInstructions  []EditInstruction        `json:"edit_instructions"`
 	NestedItems       []*NestedAudioTimelineItem `json:"nested_items,omitempty"`
 }
@@ -57,6 +58,7 @@ type TimelineItem struct {
 	SourceEndFrame    float64                  `json:"source_end_frame"`
 	Duration          float64                  `json:"duration"`
 	EditInstructions  []EditInstruction        `json:"edit_instructions"`
+	SourceChannel     *int                      `json:"source_channel,omitempty"`
 	LinkGroupID       int                      `json:"link_group_id,omitempty"`
 	Type              string                   `json:"type,omitempty"` // "Compound", "Timeline"
 	NestedClips       []*NestedAudioTimelineItem `json:"nested_clips,omitempty"`
@@ -71,10 +73,11 @@ type FileSource struct {
 
 // FileData corresponds to the Python FileData TypedDict.
 type FileData struct {
-	Properties        FileProperties     `json:"properties"`
-	SilenceDetections []*SilenceInterval `json:"silenceDetections,omitempty"` // Slice of pointers to handle optionality/null
-	TimelineItems     []TimelineItem     `json:"timelineItems"`
-	FileSource        FileSource         `json:"fileSource"`
+	Properties         FileProperties     `json:"properties"`
+	ProcessedAudioPath string             `json:"processed_audio_path,omitempty"`
+	SilenceDetections  []*SilenceInterval `json:"silenceDetections,omitempty"`
+	TimelineItems      []TimelineItem     `json:"timelineItems"`
+	FileSource         FileSource         `json:"fileSource"`
 }
 
 // Timeline corresponds to the Python Timeline TypedDict.

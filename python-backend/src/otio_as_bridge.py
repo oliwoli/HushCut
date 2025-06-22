@@ -9,7 +9,7 @@ from local_types import TimelineItem, NestedAudioTimelineItem
 import globalz
 
 # from pprint import pprint
-from misc_utils import export_to_json
+from misc_utils import export_to_json, uuid_from_path
 
 
 def _create_nested_audio_item_from_otio(
@@ -18,7 +18,8 @@ def _create_nested_audio_item_from_otio(
     max_duration: Optional[float] = None,
 ) -> Optional[NestedAudioTimelineItem]:
     """
-    Parses an OTIO clip, respecting a maximum duration constraint.
+    (REVISED) Parses an OTIO clip and now also extracts specific
+    audio channel mapping information from its metadata.
     """
     media_refs = otio_clip.get("media_references", {})
     if not media_refs:
@@ -41,9 +42,10 @@ def _create_nested_audio_item_from_otio(
     else:
         source_file_path = os.path.normpath(source_path_uri)
 
+    source_uuid = uuid_from_path(source_file_path).hex
+
     source_range = otio_clip.get("source_range")
     available_range = media_ref.get("available_range")
-
     if not source_range or not available_range:
         return None
 
@@ -53,21 +55,37 @@ def _create_nested_audio_item_from_otio(
     normalized_source_start_frame = clip_source_start_val - media_available_start_val
     duration = source_range.get("duration", {}).get("value", 0.0)
 
-    # FIX 1: Respect the maximum duration constraint passed from the container.
     if max_duration is not None and duration > max_duration:
         duration = max_duration
 
-    normalized_source_end_frame = normalized_source_start_frame + duration
-    start_frame_in_container = clip_start_in_container
-    end_frame_in_container = start_frame_in_container + duration
+    # --- NEW LOGIC to extract channel data and determine processed filename ---
+    source_channel = 0  # Default to 0 for mono mixdown
+    processed_file_name = f"{source_uuid}.wav"  # Default filename
+
+    resolve_meta = otio_clip.get("metadata", {}).get("Resolve_OTIO", {})
+    channels_info = resolve_meta.get("Channels", [])
+
+    # Heuristic: If the clip is mapped to exactly one source track/channel,
+    # assume it's a specific channel extraction, not a mixdown.
+    if len(channels_info) == 1:
+        # "Source Track ID" corresponds to the 1-indexed channel number.
+        channel_num = channels_info[0].get("Source Track ID")
+        if isinstance(channel_num, int) and channel_num > 0:
+            source_channel = channel_num
+            processed_file_name = f"{source_uuid}_ch{source_channel}.wav"
+            logging.info(
+                f"OTIO parser: Found mapping for clip '{otio_clip.get('name')}' to source channel {source_channel}"
+            )
+    # --- END NEW LOGIC ---
 
     nested_item: NestedAudioTimelineItem = {
         "source_file_path": source_file_path,
-        "processed_file_name": None,
-        "start_frame": start_frame_in_container,
-        "end_frame": end_frame_in_container,
+        "processed_file_name": processed_file_name,  # Use the calculated name
+        "source_channel": source_channel + 1,  # Add the channel number
+        "start_frame": clip_start_in_container,
+        "end_frame": clip_start_in_container + duration,
         "source_start_frame": normalized_source_start_frame,
-        "source_end_frame": normalized_source_end_frame,
+        "source_end_frame": normalized_source_start_frame + duration,
         "duration": duration,
         "edit_instructions": [],
     }

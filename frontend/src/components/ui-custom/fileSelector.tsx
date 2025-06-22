@@ -4,6 +4,9 @@ import { cn } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import { EventsOn } from "@wails/runtime/runtime";
+import { Progress } from "../ui/progress";
+import { AudioLinesIcon, LayersIcon } from "lucide-react";
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -61,30 +64,35 @@ const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related 
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
 
-const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
+const AudioClip = ({ item, isSelected, onClipClick, disabled, fps, conversionProgress: progress, waveformProgress, hasError }: {
   item: main.TimelineItem,
   isSelected: boolean,
   onClipClick: () => void,
   disabled?: boolean,
-  fps?: number
+  fps?: number,
+  conversionProgress?: number,
+  waveformProgress?: number,
+  hasError?: boolean,
 }) => {
   const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
+  const [isFetchingWaveform, setIsFetchingWaveform] = useState(true);
+  const isLoading = isConverting || isFetchingWaveform;
 
-  const isCompound = item.type === 'Compound';
+  const isNested = !!item.type;
 
   const { startSeconds, endSeconds } = useMemo(() => {
     if (!fps || typeof item.source_start_frame !== 'number' || typeof item.source_end_frame !== 'number' || fps <= 0) {
       return { startSeconds: 0, endSeconds: 0 };
     }
     // For compounds, source start/end is relative to its own beginning.
-    const start = isCompound ? 0 : item.source_start_frame;
-    const end = isCompound ? (item.end_frame - item.start_frame) : item.source_end_frame;
+    const start = isNested ? 0 : item.source_start_frame;
+    const end = isNested ? (item.end_frame - item.start_frame) : item.source_end_frame;
     return {
       startSeconds: start / fps,
       endSeconds: end / fps,
     };
-  }, [item, fps, isCompound]);
+  }, [item, fps, isNested]);
 
   const clipDuration = endSeconds - startSeconds;
 
@@ -93,13 +101,12 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
     const delayMs = isSelected ? 5 : 15;
 
     const fetchWaveform = async () => {
-      // The logic is now correct: it relies on processed_file_name, which compounds have.
       if (!item.processed_file_name || clipDuration <= 0) {
-        setIsLoading(false);
+        setIsFetchingWaveform(false);
         return;
       }
 
-      setIsLoading(true);
+      setIsFetchingWaveform(true);
 
       const totalSamplesInClip = clipDuration * ASSUMED_SAMPLE_RATE;
       let dynamicSamplesPerPixel = Math.ceil(totalSamplesInClip / TARGET_PEAK_COUNT);
@@ -128,13 +135,13 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
         console.error(`Failed to fetch waveform for ${item.name}:`, error);
         if (!isCancelled) setWaveformPeaks(null);
       } finally {
-        if (!isCancelled) setIsLoading(false);
+        if (!isCancelled) setIsFetchingWaveform(false);
       }
     };
 
     fetchWaveform();
     return () => { isCancelled = true; };
-  }, [item.id, item.processed_file_name, startSeconds, endSeconds, clipDuration]);
+  }, [item.id, item.processed_file_name, startSeconds, endSeconds, clipDuration, isConverting]);
 
 
   return (
@@ -158,6 +165,27 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
           }
         )}
       >
+        {/* Progress Bar / Error Overlay */}
+        {(isConverting || hasError) && (
+          <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center p-2">
+            {hasError ? (
+              <span className="text-xs text-red-400 font-semibold">Error</span>
+            ) : (
+              <Progress value={progress} />
+            )}
+          </div>
+        )}
+
+        {(!isConverting && isLoading) && (
+          <div className="absolute inset-0 bg-black/10 z-20 flex items-top justify-center p-0">
+            {hasError ? (
+              <span className="text-xs text-red-400 font-semibold">Error</span>
+            ) : (
+              <Progress value={waveformProgress} className="rounded-none h-[2px] max-h-[2px] p-0" indicatorClassName="shadow-1 shadow-indigo-500 bg-teal-500 h-full w-full flex-1 transition-all" />
+            )}
+          </div>
+        )}
+
         <div className={cn("absolute inset-0 flex items-center justify-center text-teal-400/60 p-1 bottom-6", isLoading && "animate-pulse")}>
           {isLoading ? <SimulatedWaveform /> : (
             waveformPeaks ?
@@ -169,7 +197,13 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps }: {
         </div>
         <div className="relative z-10 h-full flex flex-col justify-end p-2 bg-gradient-to-t from-black/50 via-black/20 to-transparent">
           <div className="flex items-center space-x-1.5">
-            <ClipLinkIcon className="text-zinc-400" />
+            {isNested && (
+              <LayersIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
+            )}
+            {!isNested && (
+              <AudioLinesIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
+            )}
+            {/* <ClipLinkIcon className="text-zinc-400" /> */}
             <p className="font-medium text-xs text-zinc-200/90 truncate">{item.name}</p>
           </div>
         </div>
@@ -217,6 +251,70 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     );
   }
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [conversionProgress, setConversionProgress] = useState<Record<string, number>>({});
+  const [waveformProgress, setWaveformProgress] = useState<Record<string, number>>({});
+
+
+  useEffect(() => {
+    const getFileName = (fullPath: string): string => {
+      if (!fullPath) return '';
+      return fullPath.split(/[\\/]/).pop() || '';
+    }
+
+    const unsubProgress = EventsOn('conversion:progress', (e: { filePath: string; percentage: number }) => {
+      const fileName = getFileName(e.filePath);
+      if (fileName) {
+        setConversionProgress(prev => ({ ...prev, [fileName]: e.percentage }));
+        console.log(`${fileName}: ${e.percentage}`)
+      }
+    });
+
+    const unsubDone = EventsOn('conversion:done', (e: { filePath: string }) => {
+      const fileName = getFileName(e.filePath);
+      if (fileName) {
+        // Set to 100 to show completion, then clear after a short delay
+        setConversionProgress(prev => ({ ...prev, [fileName]: 100 }));
+        setTimeout(() => {
+          setConversionProgress(prev => {
+            const { [fileName]: _, ...rest } = prev;
+            return rest;
+          });
+        }, 500);
+      }
+    });
+
+    const unsubError = EventsOn('conversion:error', (e: { filePath: string }) => {
+      const fileName = getFileName(e.filePath);
+      if (fileName) {
+        // Use a negative number to signify an error state
+        setConversionProgress(prev => ({ ...prev, [fileName]: -1 }));
+      }
+    });
+
+    const unsubWaveformProgress = EventsOn('waveform:progress', (e: { filePath: string; percentage: number }) => {
+      // filePath here is the relative processed_file_name
+      if (e.filePath) {
+        setWaveformProgress(prev => ({ ...prev, [e.filePath]: e.percentage }));
+      }
+    });
+    const unsubWaveformDone = EventsOn('waveform:done', (e: { filePath: string }) => {
+      if (e.filePath) {
+        setWaveformProgress(prev => {
+          const { [e.filePath]: _, ...rest } = prev;
+          return rest;
+        });
+      }
+    });
+
+
+    return () => {
+      unsubProgress();
+      unsubDone();
+      unsubError();
+      unsubWaveformProgress();
+      unsubWaveformDone();
+    };
+  }, []);
 
   useEffect(() => {
     const element = scrollAreaRef.current;
@@ -254,6 +352,9 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
             console.warn("TimelineItem is missing a unique identifier:", item);
             return null;
           }
+          const progress = item.processed_file_name ? conversionProgress[item.processed_file_name] : undefined;
+          const waveProgress = item.processed_file_name ? waveformProgress[item.processed_file_name] : undefined;
+
           return (
             <AudioClip
               key={itemUniqueIdentifier}
@@ -262,6 +363,9 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
               onClipClick={() => onFileChange(itemUniqueIdentifier)}
               disabled={disabled}
               fps={fps}
+              conversionProgress={progress}
+              waveformProgress={waveProgress}
+              hasError={progress === -1}
             />
           );
         })}

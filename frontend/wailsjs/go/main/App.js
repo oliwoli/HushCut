@@ -14,8 +14,16 @@ export function DetectSilences(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['DetectSilences'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
+export function ExecuteAndTrackMixdown(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ExecuteAndTrackMixdown'](arg1, arg2, arg3);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetCurrentConversionProgress() {
+  return window['go']['main']['App']['GetCurrentConversionProgress']();
 }
 
 export function GetGoServerPort() {
@@ -54,6 +62,14 @@ export function MakeFinalTimeline(arg1, arg2) {
   return window['go']['main']['App']['MakeFinalTimeline'](arg1, arg2);
 }
 
+export function MixdownCompoundClips(arg1) {
+  return window['go']['main']['App']['MixdownCompoundClips'](arg1);
+}
+
+export function ProcessProjectAudio(arg1) {
+  return window['go']['main']['App']['ProcessProjectAudio'](arg1);
+}
+
 export function ProcessWavToLinearPeaks(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ProcessWavToLinearPeaks'](arg1, arg2, arg3, arg4);
 }
@@ -78,6 +94,14 @@ export function SendCommandToPython(arg1, arg2) {
   return window['go']['main']['App']['SendCommandToPython'](arg1, arg2);
 }
 
+export function StandardizeAudioToWav(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StandardizeAudioToWav'](arg1, arg2, arg3);
+}
+
 export function SyncWithDavinci() {
   return window['go']['main']['App']['SyncWithDavinci']();
+}
+
+export function WaitForFile(arg1) {
+  return window['go']['main']['App']['WaitForFile'](arg1);
 }
