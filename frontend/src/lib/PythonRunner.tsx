@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from "react"; // Added useCallback
 import { Button } from "@/components/ui/button";
 import deepEqual from "fast-deep-equal";
-import { SliceIcon } from "lucide-react";
+import { AudioWaveformIcon } from "lucide-react";
 
 import { EventsOn } from "@wails/runtime/runtime";
 import {
@@ -33,7 +33,7 @@ export function deriveAllClipDetectionParams(
     detectionParams[clipId] = {
       loudnessThreshold: correctClipParams.threshold,
       minSilenceDurationSeconds: correctClipParams.minDuration,
-      minContentDuration: correctClipParams.minContent,
+      minContent: correctClipParams.minContent,
       paddingLeftSeconds: correctClipParams.paddingLeft,
       paddingRightSeconds: correctClipParams.paddingRight,
     };
@@ -125,6 +125,7 @@ async function prepareProjectDataWithEdits(
             itemSpecificParams.minSilenceDurationSeconds,
             itemSpecificParams.paddingLeftSeconds,
             itemSpecificParams.paddingRightSeconds,
+            itemSpecificParams.minContent,
             clipStartSeconds,
             clipEndSeconds
           );
@@ -389,11 +390,11 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       disabled={buttonDisabled}
-      className={`bg-teal-800 border-1 text-white p-8 hover:bg-teal-700 font-[400] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""
+      className={`bg-stone-700/10 shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""
         }`}
     >
-      <span className="items-center align-middle flex text-xl gap-4">
-        <SliceIcon size={32} className="scale-150 text-teal-500" />
+      <span className="items-center align-middle flex text-xl gap-4 font-[50]">
+        <AudioWaveformIcon size={32} className="scale-150 text-gray-500" />
         {currentButtonText}
       </span>
     </Button>

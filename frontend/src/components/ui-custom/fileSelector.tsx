@@ -6,7 +6,7 @@ import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { EventsOn } from "@wails/runtime/runtime";
 import { Progress } from "../ui/progress";
-import { AudioLinesIcon, LayersIcon } from "lucide-react";
+import { AlignJustifyIcon, AudioLinesIcon, LayersIcon, Rows2Icon } from "lucide-react";
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -19,6 +19,25 @@ const SimulatedWaveform = ({ className }: { className?: string }) => (
     <path d="M 0 25 L 10 15 L 20 35 L 30 10 L 40 40 L 50 20 L 60 30 L 70 15 L 80 35 L 90 5 L 100 45 L 110 25 L 120 10 L 130 40 L 140 20 L 150 30 L 160 15 L 170 35 L 180 10 L 190 40 L 200 25" stroke="currentColor" strokeWidth="1.5" fill="none" vectorEffect="non-scaling-stroke" />
   </svg>
 );
+
+const generateWaveformJobKey = (fileName: string, start: number, end: number): string => {
+  // Use toFixed() to prevent inconsistencies from floating point numbers
+  return `${fileName}|${start.toFixed(3)}|${end.toFixed(3)}`;
+};
+
+
+function frameToTimecode(frame: number, fps: number = 30): string {
+  const totalSeconds = Math.floor(frame / fps);
+  //const frames = frame % fps;
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+
+  const pad = (n: number, size: number = 2) => String(n).padStart(size, '0');
+
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
 
 const LinearWaveform = ({ peaks, className }: { peaks: number[], className?: string }) => {
   if (!peaks || peaks.length === 0) return null;
@@ -64,8 +83,9 @@ const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related 
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
 
-const AudioClip = ({ item, isSelected, onClipClick, disabled, fps, conversionProgress: progress, waveformProgress, hasError }: {
+const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conversionProgress: progress, waveformProgress, hasError }: {
   item: main.TimelineItem,
+  index: string,
   isSelected: boolean,
   onClipClick: () => void,
   disabled?: boolean,
@@ -145,10 +165,11 @@ const AudioClip = ({ item, isSelected, onClipClick, disabled, fps, conversionPro
 
 
   return (
-    <div className="flex flex-col flex-shrink-0 max-w-36 min-w-24">
-      <div className="flex justify-between items-center text-xs text-zinc-500 font-mono px-1 pb-1">
-        <span>{item.start_frame}</span>
-        <span>Track {item.track_index}</span>
+    <div className="flex flex-col flex-shrink-0 max-w-44 min-w-24">
+      <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 space-x-2">
+        <span className="text-stone-200 p-1 rounded-xs border-1 flex items-center">{index}</span>
+        <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
+        <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
       </div>
       <button
         type="button"
@@ -291,19 +312,16 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
       }
     });
 
-    const unsubWaveformProgress = EventsOn('waveform:progress', (e: { filePath: string; percentage: number }) => {
-      // filePath here is the relative processed_file_name
-      if (e.filePath) {
-        setWaveformProgress(prev => ({ ...prev, [e.filePath]: e.percentage }));
-      }
+    const unsubWaveformProgress = EventsOn('waveform:progress', (e: { filePath: string; clipStart: number; clipEnd: number; percentage: number }) => {
+      const jobKey = generateWaveformJobKey(e.filePath, e.clipStart, e.clipEnd);
+      setWaveformProgress(prev => ({ ...prev, [jobKey]: e.percentage }));
     });
-    const unsubWaveformDone = EventsOn('waveform:done', (e: { filePath: string }) => {
-      if (e.filePath) {
-        setWaveformProgress(prev => {
-          const { [e.filePath]: _, ...rest } = prev;
-          return rest;
-        });
-      }
+    const unsubWaveformDone = EventsOn('waveform:done', (e: { filePath: string; clipStart: number; clipEnd: number; }) => {
+      const jobKey = generateWaveformJobKey(e.filePath, e.clipStart, e.clipEnd);
+      setWaveformProgress(prev => {
+        const { [jobKey]: _, ...rest } = prev;
+        return rest;
+      });
     });
 
 
@@ -329,7 +347,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
       e.preventDefault();
 
       viewport.scrollBy({
-        left: e.deltaY, // You can use deltaY directly for a more natural scroll speed
+        left: e.deltaY,
         behavior: 'auto', // 'auto' often feels more responsive than 'smooth' for wheel scrolling
       });
     };
@@ -343,29 +361,39 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     };
   }, []); // The empty dependency array ensures this effect runs only once
 
+  const totalItems = sortedItems.length;
+  const digits = String(totalItems).length;
+
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
       <div className="flex w-max space-x-1 px-2">
-        {sortedItems.map((item) => {
+        {sortedItems.map((item, index) => {
           const itemUniqueIdentifier = item.id || item.processed_file_name;
           if (!itemUniqueIdentifier) {
             console.warn("TimelineItem is missing a unique identifier:", item);
             return null;
           }
-          const progress = item.processed_file_name ? conversionProgress[item.processed_file_name] : undefined;
-          const waveProgress = item.processed_file_name ? waveformProgress[item.processed_file_name] : undefined;
+          const convProgress = item.processed_file_name ? conversionProgress[item.processed_file_name] : undefined;
+
+
+          const start = (item.type === 'Compound' ? 0 : item.source_start_frame) / (fps || 30);
+          const end = (item.type === 'Compound' ? (item.end_frame - item.start_frame) : item.source_end_frame) / (fps || 30);
+          const jobKey = item.processed_file_name ? generateWaveformJobKey(item.processed_file_name, start, end) : '';
+          const waveProgress = waveformProgress[jobKey];
+          const paddedIndex = String(index + 1).padStart(digits, '0');
 
           return (
             <AudioClip
               key={itemUniqueIdentifier}
+              index={paddedIndex}
               item={item}
               isSelected={currentFileId === itemUniqueIdentifier}
               onClipClick={() => onFileChange(itemUniqueIdentifier)}
               disabled={disabled}
               fps={fps}
-              conversionProgress={progress}
+              conversionProgress={convProgress}
               waveformProgress={waveProgress}
-              hasError={progress === -1}
+              hasError={convProgress === -1}
             />
           );
         })}

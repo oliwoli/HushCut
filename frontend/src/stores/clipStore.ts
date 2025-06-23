@@ -8,12 +8,16 @@ import { useStoreWithEqualityFn } from "zustand/traditional";
 
 interface GlobalStore {
   makeNewTimeline: boolean;
+  isThresholdDragging: boolean;
   setMakeNewTimeline: (value: boolean) => void;
+  setIsThresholdDragging: (value: boolean) => void;
 }
 
 export const useGlobalStore = create<GlobalStore>((set) => ({
   makeNewTimeline: false,
+  isThresholdDragging: false,
   setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
+  setIsThresholdDragging: (value) => set({ isThresholdDragging: value }),
 }));
 
 
@@ -21,17 +25,17 @@ export const useGlobalStore = create<GlobalStore>((set) => ({
 export const defaultParameters = {
   threshold: -30,
   minDuration: 0.5,
-  minContent: 0.5,
   paddingLeft: 0.5,
   paddingRight: 0.5,
+  minContent: 0.5,
 };
 
 export interface ClipParameters {
   threshold: number;
   minDuration: number;
-  minContent: number;
   paddingLeft: number;
   paddingRight: number;
+  minContent: number;
 }
 
 // Export the main store interface
@@ -152,21 +156,14 @@ export function useClipParameter<K extends keyof ClipParameters>(
 }
 
 export function useIsClipModified(): boolean {
-  // --- THIS IS THE FIX ---
-  // This new selector is more efficient. It returns a simple boolean.
-  // React will only re-render if the boolean's value actually changes from true to false or vice-versa.
-  // This prevents the re-render loop.
   const isModified = useStoreWithEqualityFn(
     useClipStore,
     (state) => {
       if (!state.currentClipId) {
         return false;
       }
-      // Directly compute and return the boolean primitive.
       return Object.prototype.hasOwnProperty.call(state.parameters, state.currentClipId);
     }
-    // We no longer need the `shallow` equality checker because the selector returns a primitive.
-    // Zustand's default `Object.is` comparison is perfect for this.
   );
 
   return isModified;

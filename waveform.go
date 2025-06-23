@@ -297,6 +297,8 @@ processingLoop:
 }
 
 type WaveformProgress struct {
+	ClipStart  float64 `json:"clipStart"`
+	ClipEnd    float64 `json:"clipEnd"`
 	FilePath   string  `json:"filePath"`
 	Percentage float64 `json:"percentage"`
 }
@@ -436,6 +438,8 @@ processingLoop:
 				if percentage-lastReportedPct >= 5.0 {
 					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
 						FilePath:   webInputPath,
+						ClipStart:  clipStartSeconds,
+						ClipEnd:    clipEndSeconds,
 						Percentage: percentage,
 					})
 					lastReportedPct = percentage
@@ -530,7 +534,11 @@ processingLoop:
 		finalOutputDuration = 0
 	}
 
-	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{FilePath: webInputPath})
+	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{
+		FilePath:  webInputPath,
+		ClipStart: clipStartSeconds,
+		ClipEnd:   clipEndSeconds,
+	})
 
 	return &PrecomputedWaveformData{
 		Duration: finalOutputDuration,

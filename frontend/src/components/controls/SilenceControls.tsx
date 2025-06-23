@@ -11,29 +11,18 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
-import ResetButton from './ResetButton'; // Assuming this exists
+import ResetButton from './ResetButton';
+
 
 const _MinDurationControl = React.memo(() => {
     const currentClipId = useClipStore(s => s.currentClipId);
     const [minDuration, setMinDuration] = useClipParameter('minDuration');
-    const setParameter = useClipStore(s => s.setParameter);
 
     const resetMinDuration = useCallback(() => {
         if (!currentClipId) return;
-        setParameter(currentClipId, 'minDuration', defaultParameters.minDuration);
-    }, [currentClipId, setParameter]);
+        setMinDuration(defaultParameters.minDuration);
+    }, [currentClipId, setMinDuration]);
 
-    const [immediateValue, setImmediateValue] = useState(minDuration);
-    const [debouncedValue] = useDebounce(immediateValue, 300);
-
-    useEffect(() => {
-        if (!currentClipId) return;
-        setMinDuration(debouncedValue);
-    }, [debouncedValue, setMinDuration, currentClipId]);
-
-    useEffect(() => {
-        setImmediateValue(minDuration);
-    }, [minDuration]);
 
     const isDisabled = !currentClipId;
 
@@ -46,13 +35,13 @@ const _MinDurationControl = React.memo(() => {
                 <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
                     <Slider
                         min={0} max={5} step={0.001}
-                        value={[immediateValue]}
-                        onValueChange={(vals) => setImmediateValue(vals[0])}
+                        value={[minDuration]}
+                        onValueChange={(vals) => setMinDuration(vals[0])}
                         className="w-[128px] max-w-[128px] min-w-[128px]"
                         disabled={isDisabled}
                     />
                     <span className="text-sm text-zinc-100 font-mono tracking-tighter">
-                        {immediateValue.toFixed(2)}
+                        {minDuration.toFixed(2)}
                         <span className="text-zinc-400 ml-1">s</span>
                     </span>
                     <ResetButton onClick={resetMinDuration} disabled={isDisabled} />
@@ -150,8 +139,38 @@ const _PaddingControl = React.memo(() => {
 
 const _MinContentControl = React.memo(() => {
     const currentClipId = useClipStore(s => s.currentClipId);
+    const [minContent, setMinContent] = useClipParameter('minContent');
+
+    const resetMinDuration = useCallback(() => {
+        if (!currentClipId) return;
+        setMinContent(defaultParameters.minContent);
+    }, [currentClipId, setMinContent]);
+
+
+    const isDisabled = !currentClipId;
+
     return (
-        <></>
+        <div className='space-y-1'>
+            <Label className="font-medium w-52 text-stone-400 pt-4">
+                Minimum Content Duration
+            </Label>
+            <div className="flex items-center space-x-5">
+                <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
+                    <Slider
+                        min={0} max={5} step={0.001}
+                        value={[minContent]}
+                        onValueChange={(vals) => setMinContent(vals[0])}
+                        className="w-[128px] max-w-[128px] min-w-[128px]"
+                        disabled={isDisabled}
+                    />
+                    <span className="text-sm text-zinc-100 font-mono tracking-tighter">
+                        {minContent.toFixed(2)}
+                        <span className="text-zinc-400 ml-1">s</span>
+                    </span>
+                    <ResetButton onClick={resetMinDuration} disabled={isDisabled} />
+                </div>
+            </div>
+        </div>
     );
 });
 
@@ -161,6 +180,7 @@ export const SilenceControls = () => {
         <div className="space-y-6 w-full p-5">
             <_MinDurationControl />
             <_PaddingControl />
+            <_MinContentControl />
         </div>
     );
 }

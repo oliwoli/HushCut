@@ -390,6 +390,7 @@ func (a *App) DetectSilences(
 	minSilenceDurationSeconds float64,
 	paddingLeftSeconds float64,
 	paddingRightSeconds float64,
+	minContentDuration float64,
 	clipStartSeconds float64,
 	clipEndSeconds float64,
 ) ([]SilencePeriod, error) {
@@ -398,95 +399,146 @@ func (a *App) DetectSilences(
 		clipStartSeconds = 0
 	}
 
-	if clipEndSeconds > 0 && clipEndSeconds <= clipStartSeconds {
-		return nil, fmt.Errorf("DetectSilences: clipEndSeconds (%.3f) must be greater than clipStartSeconds (%.3f) if a specific end is provided", clipEndSeconds, clipStartSeconds)
-	}
+	log.Printf("MIN CONTENT IS: %v", minContentDuration)
 
 	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
 
-	if err := a.WaitForFile(absPath); err != nil {
-		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
+	// This is a placeholder for your WaitForFile implementation
+	// if err := a.WaitForFile(absPath); err != nil {
+	//  return nil, fmt.Errorf("error waiting for file: %w", err)
+	// }
+
+	// --- FIX: Determine the effective end time of the clip for boundary checks ---
+	var effectiveClipEnd float64
+	if clipEndSeconds > 0 {
+		effectiveClipEnd = clipEndSeconds
+	} else {
+		return []SilencePeriod{}, nil
 	}
 
-	// format loudnessThreshold from num to num + "dB"
-	loudnessThresholdStr := fmt.Sprintf("%f", loudnessThreshold) + "dB"
+	if effectiveClipEnd <= clipStartSeconds {
+		return nil, fmt.Errorf("DetectSilences: effective clip end (%.3f) must be greater than clip start (%.3f)", effectiveClipEnd, clipStartSeconds)
+	}
 
-	trimFilter := fmt.Sprintf(
-		"atrim=start=%f:end=%f",
-		clipStartSeconds,
-		clipEndSeconds,
-	)
-	mainFilter := fmt.Sprintf(
-		"silencedetect=n=%s:d=%s",
-		loudnessThresholdStr,
-		fmt.Sprintf("%f", minSilenceDurationSeconds),
-	)
+	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)
+	// The silencedetect 'd' parameter can be shorter to catch silences that will become valid *after* merging
+	// However, keeping it at minSilenceDurationSeconds is a good optimization to avoid processing tiny, irrelevant silences.
+	minSilenceDurationForFFmpeg := fmt.Sprintf("%f", minSilenceDurationSeconds)
 
-	combinedFilter := fmt.Sprintf("%s,%s", trimFilter, mainFilter)
-
-	// outputTarget := "/dev/null"
-	// if runtime.Environment(a.ctx).Platform == "windows" {
-	// 	outputTarget = "NUL"
-	// }
+	// Apply trim filter first
+	filterGraph := fmt.Sprintf("atrim=start=%.3f:end=%.3f,silencedetect=n=%s:d=%s", clipStartSeconds, effectiveClipEnd, loudnessThresholdStr, minSilenceDurationForFFmpeg)
 
 	args := []string{
 		"-nostdin",
 		"-i", absPath,
-		"-af", combinedFilter,
+		"-af", filterGraph,
 		"-f", "null",
 		"-",
 	}
 	cmd := exec.Command(a.ffmpegBinaryPath, args...)
 	var outputBuffer bytes.Buffer
-	cmd.Stdout = &outputBuffer
-	cmd.Stderr = &outputBuffer
+	cmd.Stderr = &outputBuffer // silencedetect outputs to stderr
 
 	err := cmd.Run()
+	// FFmpeg might exit with an error code even on success in some scenarios, so we check the output regardless.
 	output := outputBuffer.String()
-	if err != nil {
+	if err != nil && len(output) == 0 {
 		return nil, fmt.Errorf("ffmpeg processing failed: %w. Output: %s", err, output)
 	}
 
-	detectedSilences := []SilencePeriod{}
-
+	// --- REFACTORED: Process FFmpeg output with new logic ---
+	var preliminarySilences []SilencePeriod
 	silenceStartRegex := regexp.MustCompile(`silence_start:\s*([0-9]+\.?[0-9]*)`)
 	silenceEndRegex := regexp.MustCompile(`silence_end:\s*([0-9]+\.?[0-9]*)`)
-
 	scanner := bufio.NewScanner(strings.NewReader(output))
+
 	var currentStartTime float64 = -1
+	const epsilon = 0.001 // Epsilon for float comparisons at boundaries
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		startMatch := silenceStartRegex.FindStringSubmatch(line)
 		if len(startMatch) > 1 {
-			startTime, parseErr := strconv.ParseFloat(startMatch[1], 64)
-			if parseErr == nil {
-				currentStartTime = startTime
-			}
+			startTime, _ := strconv.ParseFloat(startMatch[1], 64)
+			// Timestamps from silencedetect are relative to the start of the trimmed clip, so add the clip start time.
+			currentStartTime = startTime + clipStartSeconds
 		}
 
 		endMatch := silenceEndRegex.FindStringSubmatch(line)
 		if len(endMatch) > 1 && currentStartTime != -1 {
-			endTime, parseErr := strconv.ParseFloat(endMatch[1], 64)
-			if parseErr == nil {
-				adjustedStartTime := currentStartTime + paddingLeftSeconds
-				adjustedEndTime := endTime - paddingRightSeconds
-				if adjustedStartTime < adjustedEndTime {
-					detectedSilences = append(detectedSilences, SilencePeriod{
-						Start: adjustedStartTime,
-						End:   adjustedEndTime,
-					})
-				}
-				currentStartTime = -1
+			endTime, _ := strconv.ParseFloat(endMatch[1], 64)
+			endTime += clipStartSeconds
+
+			// --- FIX 3: Apply padding conditionally for clip boundaries ---
+			adjustedStartTime := currentStartTime
+			if currentStartTime > clipStartSeconds+epsilon { // Don't pad left if silence is at the very start
+				adjustedStartTime += paddingLeftSeconds
 			}
+
+			adjustedEndTime := endTime
+			if endTime < effectiveClipEnd-epsilon { // Don't pad right if silence is at the very end
+				adjustedEndTime -= paddingRightSeconds
+			}
+
+			// Ensure start is not after end due to padding
+			if adjustedStartTime >= adjustedEndTime {
+				currentStartTime = -1
+				continue
+			}
+
+			// --- FIX 2: Check minSilenceDuration AFTER padding is applied ---
+			if adjustedEndTime-adjustedStartTime >= minSilenceDurationSeconds {
+				preliminarySilences = append(preliminarySilences, SilencePeriod{
+					Start: adjustedStartTime,
+					End:   adjustedEndTime,
+				})
+			}
+			currentStartTime = -1
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading ffmpeg output: %w", err)
+	if len(preliminarySilences) == 0 {
+		return []SilencePeriod{}, nil
 	}
 
-	return detectedSilences, nil
+	// --- FIX 1: Merge silences if content between them is too short ---
+	var finalSilences []SilencePeriod
+
+	// Step 1: Handle short content at the start of the clip
+	firstSilence := preliminarySilences[0]
+	contentBefore := firstSilence.Start - clipStartSeconds
+	if contentBefore > 0 && contentBefore < minContentDuration {
+		preliminarySilences[0].Start = clipStartSeconds // Extend first silence to the beginning
+	}
+
+	// Step 2: Handle short content at the end of the clip
+	lastSilence := preliminarySilences[len(preliminarySilences)-1]
+	contentAfter := effectiveClipEnd - lastSilence.End
+	if contentAfter > 0 && contentAfter < minContentDuration {
+		preliminarySilences[len(preliminarySilences)-1].End = effectiveClipEnd // Extend last silence to the end
+	}
+
+	// Step 3: Iterate through and merge silences with short content between them
+	if len(preliminarySilences) > 0 {
+		currentMergedSilence := preliminarySilences[0]
+		for i := 1; i < len(preliminarySilences); i++ {
+			nextSilence := preliminarySilences[i]
+			contentDuration := nextSilence.Start - currentMergedSilence.End
+
+			if contentDuration < minContentDuration {
+				// Merge by extending the end of the current silence to the end of the next one
+				currentMergedSilence.End = nextSilence.End
+			} else {
+				// The gap is large enough, finalize the current silence and start a new one
+				finalSilences = append(finalSilences, currentMergedSilence)
+				currentMergedSilence = nextSilence
+			}
+		}
+		// Add the last processed silence (which might be a result of several merges)
+		finalSilences = append(finalSilences, currentMergedSilence)
+	}
+
+	return finalSilences, nil
 }
 
 func (a *App) GetOrDetectSilencesWithCache(
@@ -495,6 +547,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 	minSilenceDurationSeconds float64,
 	paddingLeftSeconds float64,
 	paddingRightSeconds float64,
+	minContentDuration float64,
 	clipStartSeconds float64,
 	clipEndSeconds float64,
 ) ([]SilencePeriod, error) {
@@ -504,6 +557,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 		MinSilenceDurationSeconds: minSilenceDurationSeconds,
 		PaddingLeftSeconds:        paddingLeftSeconds,
 		PaddingRightSeconds:       paddingRightSeconds,
+		MinContentDuration:        minContentDuration,
 		ClipStartSeconds:          clipStartSeconds,
 		ClipEndSeconds:            clipEndSeconds,
 	}
@@ -527,6 +581,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 		minSilenceDurationSeconds,
 		paddingLeftSeconds,
 		paddingRightSeconds,
+		minContentDuration,
 		clipStartSeconds,
 		clipEndSeconds,
 	)

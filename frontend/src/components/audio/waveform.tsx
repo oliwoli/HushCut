@@ -6,7 +6,7 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js"; // 1. Import Minimap
 import ZoomPlugin from "wavesurfer.js/dist/plugins/zoom.esm.js";
 
-import { useClipParameter } from "@/stores/clipStore";
+import { useClipParameter, useGlobalStore } from "@/stores/clipStore";
 
 import { useClipStore } from "@/stores/clipStore";
 import { useStoreWithEqualityFn } from "zustand/traditional";
@@ -68,13 +68,14 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       if (!clipId) return null;
 
       const correctParams = s.parameters[clipId] ?? s.liveDefaultParameters;
+      console.log(`[Selector] Threshold: ${correctParams.threshold}, MinDuration: ${correctParams.minDuration}, MinContent: ${correctParams.minContent}`);
 
       return {
         loudnessThreshold: correctParams.threshold,
         minSilenceDurationSeconds: correctParams.minDuration,
-        minContentDuration: correctParams.minContent,
         paddingLeftSeconds: correctParams.paddingLeft,
         paddingRightSeconds: correctParams.paddingRight,
+        minContent: correctParams.minContent,
       };
     },
     shallow
@@ -93,13 +94,14 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const clipOriginalStartSeconds = activeClip.sourceStartFrame / projectFrameRate
   const clipOriginalStartSecondsRef = useRef(clipOriginalStartSeconds);
   useEffect(() => {
-
     clipOriginalStartSecondsRef.current = clipOriginalStartSeconds;
   }, [clipOriginalStartSeconds]);
 
 
   const audioUrl = activeClip?.previewUrl
   const [threshold] = useClipParameter("threshold");
+  const isThresholdDragging = useGlobalStore(s => s.isThresholdDragging);
+
 
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
@@ -576,10 +578,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         <canvas className="absolute inset-0 z-0" />
 
         {/* Threshold overlay line */}
-        <div
-          className="absolute w-full h-[2px] rounded-full bg-teal-400 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.6)]"
-          style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
-        />
+        {isThresholdDragging && (
+          <div
+            className="absolute w-full h-[1px] rounded-full bg-teal-500 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.9)]"
+            style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
+          />
+
+        )}
 
         {isLoading && (
           <div className="absolute inset-0 flex items-end justify-end p-5 bg-gray-800/20 bg-opacity-50 text-white/60 z-10">
@@ -588,7 +593,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         )}
       </div>
 
-      <div className="shadow-xl shadow-stone-900 rounded-md border-1 mt-1 overflow-hidden">
+      <div className="shadow-xl rounded-md border-1 mt-1 overflow-hidden">
         <div
           ref={minimapContainerRef}
           className="h-[40px] w-full bg-[#2c2d32] border-0 border-t-0 border-stone-900 rounded-none box-border overflow-hidden shadow-inner shadow-stone-900/50"

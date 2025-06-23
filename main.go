@@ -30,8 +30,9 @@ type CacheKey struct {
 	MinSilenceDurationSeconds float64 `json:"minSilenceDurationSeconds"`
 	PaddingLeftSeconds        float64 `json:"paddingLeftSeconds"`
 	PaddingRightSeconds       float64 `json:"paddingRightSeconds"`
-	ClipStartSeconds          float64 
-	ClipEndSeconds            float64 
+	MinContentDuration        float64 `json:"minContentDuration"`
+	ClipStartSeconds          float64
+	ClipEndSeconds            float64
 }
 
 type WaveformCacheKey struct {
@@ -93,10 +94,10 @@ func main() {
 		AlwaysOnTop: true,
 		Frameless:   true,
 		Linux: &linux.Options{
-			Icon: icon,
+			Icon:                icon,
 			WindowIsTranslucent: false,
-			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
-			ProgramName: "HushCut",
+			WebviewGpuPolicy:    linux.WebviewGpuPolicyNever,
+			ProgramName:         "HushCut",
 		},
 	})
 

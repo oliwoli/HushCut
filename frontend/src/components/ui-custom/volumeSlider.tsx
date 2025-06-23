@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils"; // Assuming this utility exists
 import { memo, useEffect, useMemo, useState } from "react";
 import * as SliderPrimitive from "@radix-ui/react-slider"
+import { useGlobalStore } from "@/stores/clipStore";
 
 
 
@@ -39,6 +40,8 @@ export function _LogSlider({
   const actualMaxDb = Math.max(minDb, maxDb);
   const rangeDb = actualMaxDb - actualMinDb;
 
+  const setIsThresholdDragging = useGlobalStore(s => s.setIsThresholdDragging);
+
   return (
     <div className="flex items-center h-[287px] select-none mt-[5px]">
       <SliderPrimitive.Root
@@ -48,6 +51,8 @@ export function _LogSlider({
         step={rangeDb > 0 ? rangeDb / 500 : 0.1}
         value={[currentDbValue]}
         onValueChange={handleChange}
+        onPointerDown={() => setIsThresholdDragging(true)}
+        onPointerUp={() => setIsThresholdDragging(false)}
         className="relative flex touch-none select-none data-[orientation=vertical]:h-full data-[orientation=vertical]:w-6 z-10"
       >
         <SliderPrimitive.Track className="bg-none relative grow rounded-none w-1">
@@ -69,7 +74,7 @@ export function _LogSlider({
         </SliderPrimitive.Thumb>
       </SliderPrimitive.Root>
 
-      <div className="relative h-66 bottom-0 bg-zinc-950/80 border-1 drop-shadow-zinc-700 drop-shadow-xs w-1 z-0 right-[18px] rounded-xs"></div>
+      <div className="relative h-66 bottom-0 bg-zinc-950/80 border-1 border-black drop-shadow-zinc-700 drop-shadow-xs w-1 z-0 right-[18px] rounded-xs"></div>
 
       <div className="relative h-[87%] ml-0 top-[2px] right-3 font-mono">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {

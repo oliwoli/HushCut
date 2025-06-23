@@ -76,6 +76,7 @@ export function useSilenceData(
         detectionParams.minSilenceDurationSeconds,
         detectionParams.paddingLeftSeconds,
         detectionParams.paddingRightSeconds,
+        detectionParams.minContent,
         clipStartSeconds,
         clipEndSeconds
       );

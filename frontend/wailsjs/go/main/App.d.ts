@@ -6,7 +6,7 @@ export function CalculateAndStoreEditsForTimeline(arg1:main.ProjectDataPayload,a
 
 export function CloseApp():Promise<void>;
 
-export function DetectSilences(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number):Promise<Array<main.SilencePeriod>>;
+export function DetectSilences(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number):Promise<Array<main.SilencePeriod>>;
 
 export function ExecuteAndTrackMixdown(arg1:number,arg2:string,arg3:Array<main.NestedAudioTimelineItem>):Promise<void>;
 
@@ -16,7 +16,7 @@ export function GetCurrentConversionProgress():Promise<Record<string, number>>;
 
 export function GetGoServerPort():Promise<number>;
 
-export function GetOrDetectSilencesWithCache(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number):Promise<Array<main.SilencePeriod>>;
+export function GetOrDetectSilencesWithCache(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number):Promise<Array<main.SilencePeriod>>;
 
 export function GetOrGenerateWaveformWithCache(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number,arg7:number):Promise<main.PrecomputedWaveformData>;
 
