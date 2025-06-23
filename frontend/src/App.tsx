@@ -9,6 +9,7 @@ import deepEqual from "fast-deep-equal";
 import { toast } from "sonner";
 
 import {
+  CloseApp,
   GetGoServerPort,
   MixdownCompoundClips,
   ProcessProjectAudio,
@@ -56,7 +57,7 @@ const MIN_CONTENT_DURATION = 0.5
 const getDefaultDetectionParams = (): DetectionParams => ({
   loudnessThreshold: DEFAULT_THRESHOLD,
   minSilenceDurationSeconds: DEFAULT_MIN_DURATION,
-  minContentDuration: MIN_DURATION_LIMIT,
+  minContent: MIN_DURATION_LIMIT,
   paddingLeftSeconds: DEFAULT_PADDING,
   paddingRightSeconds: DEFAULT_PADDING,
   // If you want to store paddingLocked per-clip, add it here:
@@ -91,6 +92,19 @@ const createActiveFileFromTimelineItem = (
     sourceEndFrame: item.source_end_frame,
   };
 };
+
+
+function supportsRealBackdrop() {
+  const el = document.createElement("div");
+  el.style.position = "absolute";
+  el.style.width = el.style.height = "10px";
+  el.style.backdropFilter = "blur(5px)";
+  el.style.visibility = "hidden";
+  document.body.appendChild(el);
+  const applied = window.getComputedStyle(el).backdropFilter;
+  document.body.removeChild(el);
+  return applied && applied !== "none";
+}
 
 
 function AppContent() {
@@ -247,6 +261,12 @@ function AppContent() {
 
   const initialInitDone = useRef(false); // Ref to track if the effect has run
 
+
+  useEffect(() => {
+    const hasBlur = supportsRealBackdrop();
+    document.body.classList.add(hasBlur ? "has-blur" : "no-blur");
+  }, []);
+
   useEffect(() => {
     const getInitialServerInfo = async () => {
       if (initialInitDone.current) return;
@@ -301,11 +321,67 @@ function AppContent() {
     };
   }, []);
 
+  const syncTimeoutRef = useRef<number | null>(null);
+  const syncMouseUpListenerRef = useRef<(() => void) | null>(null);
+
+  // Helper to cancel any scheduled sync operation.
+  // This is useful on blur or unmount.
+  const cancelPendingSync = () => {
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = null;
+    }
+    if (syncMouseUpListenerRef.current) {
+      window.removeEventListener('mouseup', syncMouseUpListenerRef.current, { capture: true });
+      syncMouseUpListenerRef.current = null;
+    }
+  };
+
+  const handleFocusWithDragDelay = () => {
+    // First, cancel any previously pending sync, just in case.
+    cancelPendingSync();
+
+    const executeSyncAndCleanup = () => {
+      // Ensure cleanup happens, even if called directly by the timeout.
+      cancelPendingSync();
+
+      console.log("Drag-friendly delay is over. Executing sync.");
+      handleSync();
+    };
+
+    // Store the listener function in a ref so it can be removed by other functions.
+    syncMouseUpListenerRef.current = executeSyncAndCleanup;
+
+    console.log("Window focused. Waiting for mouseup or a short timeout to sync.");
+
+    // Add the listener for the mouse release. We manage removal manually.
+    window.addEventListener('mouseup', syncMouseUpListenerRef.current, { capture: true });
+
+    // Set a fallback timeout for non-mouse focus (e.g., Alt+Tab).
+    syncTimeoutRef.current = setTimeout(() => {
+      console.log("Sync fallback timeout triggered.");
+      // Call the main handler, which will sync and clean up.
+      executeSyncAndCleanup();
+    }, 1200);
+  };
+
+  const handleBlur = () => {
+    console.log("Tab is blurred, cancelling any pending sync operation.");
+    cancelPendingSync();
+  };
+
   useWindowFocus(
-    () => handleSync(),
-    () => console.log("Tab is blurred"),
+    handleFocusWithDragDelay,
+    handleBlur,
     { fireOnMount: false, throttleMs: 500 }
   );
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cancelPendingSync();
+    };
+  }, []);
 
 
   const handleAudioClipSelection = (selectedItemId: string) => {
@@ -320,7 +396,7 @@ function AppContent() {
   return (
     <>
       <div
-        className="pt-3 bg-[#28282e] border-1 border-t-0 border-zinc-900"
+        className="pt-3 bg-[#1b1b1f] border-t-0"
         style={{
           marginTop: titleBarHeight,
           height: `calc(100vh - ${titleBarHeight})`,
@@ -328,7 +404,7 @@ function AppContent() {
         }}
       >
         <header className="flex items-center justify-between"></header>
-        <main className="flex-1 gap-8 max-w-screen select-none space-y-4">
+        <main className="flex-1 gap-8 max-w-screen select-none space-y-0">
           {currentActiveClip?.id && (
             <FileSelector
               audioItems={projectData?.timeline?.audio_track_items}
@@ -340,10 +416,10 @@ function AppContent() {
                 !projectData?.timeline?.audio_track_items ||
                 projectData.timeline.audio_track_items.length === 0
               }
-              className="w-full mt-2 overflow-visible"
+              className="w-full mt-1 overflow-visible"
             />
           )}
-          <div className="flex flex-col space-y-8 px-4">
+          <div className="flex flex-col space-y-4 px-3">
             {/* Group Threshold, Min Duration, and Padding */}
             <div className="flex flex-row space-x-6 items-start">
               {currentClipId && (
@@ -366,8 +442,8 @@ function AppContent() {
                 </>
               )}
             </div>
-            <div className="w-full px-1 bg-[#28282e] rounded-2xl border-1 overflow-hidden shadow-xl">
-              <div className="p-5 space-y-6">
+            <div className="w-full px-1 bg-[#212126] rounded-2xl border-1 overflow-hidden shadow-xl">
+              <div className="p-5 space-y-2">
                 <SilenceControls key={currentClipId} />
                 <DavinciSettings />
                 {projectData && (
@@ -383,11 +459,11 @@ function AppContent() {
             </div>
 
 
-            <div className="flex space-y-8 w-full">
+            {/* <div className="flex space-y-8 w-full">
               <div className="items-center space-y-2 mt-4">
 
               </div>
-            </div>
+            </div> */}
 
           </div>
         </main>
@@ -410,12 +486,14 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
   const displayMessage = progressPercentage === 100 ? "Done" : message;
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent>
+      <DrawerContent className="maybe-glass">
         <div className="max-w-full p-4 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
           <DrawerTitle className="text-2xl sm:text-4xl md:text-6xl mt-12 font-medium">{displayMessage}</DrawerTitle>
-          <Progress value={progressPercentage} className="h-0.5" />
+          {Number.isFinite(progressPercentage) && (
+            <Progress value={progressPercentage} className="h-0.5" />
+          )}
           <DrawerDescription>
-            {progressPercentage && progressPercentage === 100 && (
+            {progressPercentage === 100 && (
               <>
                 Completed in: <span className="text-stone-200 mr-[2px]">{totalTime.toFixed(2)}</span><span>s</span>
               </>
@@ -428,22 +506,30 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
             )}
 
           </DrawerDescription>
+
+
           <DrawerFooter className="flex flex-col sm:flex-row sm:justify-start gap-3 pt-6 px-0">
-            <Button
-              onClick={() => onOpenChange(false)}
-              className="rounded-2xl text-base px-6 py-2 shadow transition-colors"
-            >
-              Continue
-            </Button>
-            <DrawerClose asChild>
+            {progressPercentage === 100 && (
+              <Button
+                onClick={() => onOpenChange(false)}
+                className="rounded-2xl text-base px-6 py-2 shadow transition-colors"
+              >
+                Continue
+              </Button>
+            )}
+
+            <DrawerClose asChild onClick={CloseApp}>
               <Button
                 variant="outline"
                 className="rounded-2xl text-base px-6 py-2 border-muted text-muted-foreground hover:bg-muted/20 transition-colors"
               >
-                Cancel
+                Exit
               </Button>
             </DrawerClose>
           </DrawerFooter>
+
+
+
         </div>
       </DrawerContent>
     </Drawer>
