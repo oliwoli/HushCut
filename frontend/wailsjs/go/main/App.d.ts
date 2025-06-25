@@ -34,6 +34,8 @@ export function MakeFinalTimeline(arg1:main.ProjectDataPayload,arg2:boolean):Pro
 
 export function MixdownCompoundClips(arg1:main.ProjectDataPayload):Promise<void>;
 
+export function OpenURL(arg1:string):Promise<void>;
+
 export function ProcessProjectAudio(arg1:main.ProjectDataPayload):Promise<void>;
 
 export function ProcessWavToLinearPeaks(arg1:string,arg2:number,arg3:number,arg4:number):Promise<main.PrecomputedWaveformData>;
@@ -47,6 +49,10 @@ export function RunPythonScriptWithArgs(arg1:Array<string>):Promise<void>;
 export function SaveConfig(arg1:Record<string, any>):Promise<void>;
 
 export function SendCommandToPython(arg1:string,arg2:Record<string, any>):Promise<main.PythonCommandResponse>;
+
+export function SetDavinciPlayhead(arg1:string):Promise<boolean>;
+
+export function SetWindowAlwaysOnTop(arg1:boolean):Promise<void>;
 
 export function StandardizeAudioToWav(arg1:string,arg2:string,arg3:any):Promise<void>;
 

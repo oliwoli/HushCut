@@ -1,12 +1,13 @@
 // ./components/ui/fileSelector.tsx
 import React, { useState, useEffect, useMemo, WheelEvent, useRef } from "react";
-import { cn } from "@/lib/utils";
+import { cn, frameToTimecode } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { EventsOn } from "@wails/runtime/runtime";
 import { Progress } from "../ui/progress";
 import { AlignJustifyIcon, AudioLinesIcon, LayersIcon, Rows2Icon } from "lucide-react";
+import { useGlobalStore } from "@/stores/clipStore";
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -24,19 +25,6 @@ const generateWaveformJobKey = (fileName: string, start: number, end: number): s
   // Use toFixed() to prevent inconsistencies from floating point numbers
   return `${fileName}|${start.toFixed(3)}|${end.toFixed(3)}`;
 };
-
-
-function frameToTimecode(frame: number, fps: number = 30): string {
-  const totalSeconds = Math.floor(frame / fps);
-  //const frames = frame % fps;
-  const seconds = totalSeconds % 60;
-  const minutes = Math.floor(totalSeconds / 60) % 60;
-  const hours = Math.floor(totalSeconds / 3600);
-
-  const pad = (n: number, size: number = 2) => String(n).padStart(size, '0');
-
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-}
 
 
 const LinearWaveform = ({ peaks, className }: { peaks: number[], className?: string }) => {
@@ -94,6 +82,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
   waveformProgress?: number,
   hasError?: boolean,
 }) => {
+  if (!fps) return;
   const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
   const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
   const [isFetchingWaveform, setIsFetchingWaveform] = useState(true);
@@ -234,22 +223,22 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
 };
 
 interface FileSelectorProps {
-  audioItems: main.TimelineItem[] | null | undefined;
   currentFileId: string | null;
   onFileChange: (selectedItemId: string) => void;
   disabled?: boolean;
   className?: string;
-  fps?: number; // Added fps prop
 }
 
 const _FileSelector: React.FC<FileSelectorProps> = ({
-  audioItems,
   currentFileId,
   onFileChange,
   disabled,
   className,
-  fps, // Destructure fps
 }) => {
+  const projectData = useGlobalStore(s => s.projectData);
+  const audioItems = projectData?.timeline?.audio_track_items || [];
+  const fps = projectData?.timeline?.fps || 30;
+
   const sortedItems = useMemo(() => {
     if (!audioItems || audioItems.length === 0) return [];
     // QUICK FIX: Filter out compound clips as they are not yet supported and break the UI.
@@ -366,7 +355,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
-      <div className="flex w-max space-x-1 px-2">
+      <div className="flex w-max space-x-1 px-4">
         {sortedItems.map((item, index) => {
           const itemUniqueIdentifier = item.id || item.processed_file_name;
           if (!itemUniqueIdentifier) {

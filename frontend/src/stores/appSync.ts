@@ -1,4 +1,4 @@
-// stores/clipParameters.ts
+// stores/appSync.ts
 import { create } from 'zustand';
 
 type SyncBusyState = {

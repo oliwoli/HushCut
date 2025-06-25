@@ -1194,6 +1194,24 @@ def tl_has_nested_item() -> bool:
     return False
 
 
+def setTimecode(timecode: str, task_id: str = "") -> bool:
+    global RESOLVE
+    global PROJECT
+    global TIMELINE
+    if not timecode:
+        return False
+
+    if not RESOLVE:
+        return False
+    if not TIMELINE:
+        return False
+
+    if not TIMELINE.SetCurrentTimecode(timecode):
+        return False
+
+    return True
+
+
 def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global RESOLVE
     global TEMP_DIR
@@ -1264,7 +1282,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
         response_payload = {
             "status": "error",
-            "message": message,  # Overall message for the sync operation
+            "message": message,
             "data": globalz.PROJECT_DATA,
             "shouldShowAlert": True,
             "alertTitle": "No Open Timeline",
@@ -1389,8 +1407,6 @@ def _append_clips_to_timeline(
             continue
         media_type = 1 if item["track_type"] == "video" else 2
         for i, edit in enumerate(item.get("edit_instructions", [])):
-            if not edit.get("enabled", False):
-                continue
             record_frame = round(edit.get("start_frame", 0))
             end_frame = round(edit.get("end_frame", 0))
             duration_frames = end_frame - record_frame
@@ -1409,7 +1425,7 @@ def _append_clips_to_timeline(
                 "mediaPoolItem": item["bmd_mpi"],
                 "startFrame": source_start,
                 "endFrame": source_end,
-                "recordFrame": record_frame,
+                "recordFrame": round(edit.get("start_frame", 0)),
                 "trackIndex": item["track_index"],
                 "mediaType": media_type,
             }
@@ -1818,15 +1834,6 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                     # If no data exists yet, the incoming data becomes the new base
                     globalz.PROJECT_DATA = project_data_from_go
 
-                # save project data to json for debugging
-                # debug_output_path = os.path.join(
-                #     os.path.dirname(TEMP_DIR), "project_data_from_go.json"
-                # )
-
-                # Also check here before saving
-                # if globalz.PROJECT_DATA:
-                #    misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output_path)
-
                 main(sync=False, task_id=task_id)
                 return
 
@@ -1837,14 +1844,8 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                     "message": "Project save command received.",
                 }
             elif command == "setPlayhead":
-                time_value = params.get(
-                    "time"
-                )  # e.g., {"time": "01:00:10:00"} or {"time": 70.5}
-                if time_value is not None:
-                    print(
-                        f"Python: Simulating set playhead to {time_value}...",
-                        flush=True,
-                    )
+                time_value = params.get("time")
+                if time_value is not None and setTimecode(time_value, task_id):
                     response_payload = {
                         "status": "success",
                         "message": f"Playhead position set to {time_value}.",
@@ -1854,7 +1855,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                         400,
                         {
                             "status": "error",
-                            "message": "Missing 'time' parameter for setPlayhead.",
+                            "message": "Could not set playhead for current timeline.",
                         },
                     )
                     return

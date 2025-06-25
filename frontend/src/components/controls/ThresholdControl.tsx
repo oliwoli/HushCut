@@ -26,7 +26,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                 }}
 
             />
-            <div className="flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300">
+            <div className="flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300 px-3">
                 <p className="text-base/tight">
                     Silence
                     <br />

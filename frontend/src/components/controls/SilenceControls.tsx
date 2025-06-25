@@ -126,6 +126,7 @@ const _PaddingControl = React.memo(() => {
                                 onValueChange={(vals) => handlePaddingChange("right", vals[0])}
                                 className="w-32"
                                 disabled={isDisabled}
+                                dir='rtl'
                             />
                             <ResetButton onClick={resetPadding} disabled={isDisabled} />
                         </div>

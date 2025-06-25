@@ -1,20 +1,39 @@
 // src/hooks/useSilenceData.ts
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useDebouncedCallback } from 'use-debounce';
-// Make sure this path is correct for your project structure
 import { GetOrDetectSilencesWithCache } from '@wails/go/main/App';
-import type { ActiveClip, DetectionParams, SilencePeriod, SilenceDataHookResult } from '../types'; // Adjust path to types.ts
+import { useClipStore } from '@/stores/clipStore'; // Import the store hook
+import { useStoreWithEqualityFn } from "zustand/traditional";
+import { shallow } from "zustand/shallow";
+import type { ActiveClip, DetectionParams, SilencePeriod, SilenceDataHookResult } from '../types';
+
 
 export function useSilenceData(
   activeFile: ActiveClip | null,
-  detectionParams: DetectionParams | null,
-  timelineFps: number | null, // NEW: Pass timeline FPS
-  debounceMs: number = 50
+  timelineFps: number | null,
+  debounceMs: number = 125
 ): SilenceDataHookResult {
   const [silenceData, setSilenceData] = useState<SilencePeriod[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  const clipId = activeFile?.id ?? '';
+  const detectionParams: DetectionParams | null = useStoreWithEqualityFn(
+    useClipStore,
+    (s) => {
+      if (!clipId) return null;
+      const correctParams = s.parameters[clipId] ?? s.liveDefaultParameters;
+      // This is safe because useStoreWithEqualityFn with `shallow` is efficient
+      return {
+        loudnessThreshold: correctParams.threshold,
+        minSilenceDurationSeconds: correctParams.minDuration,
+        paddingLeftSeconds: correctParams.paddingLeft,
+        paddingRightSeconds: correctParams.paddingRight,
+        minContent: correctParams.minContent,
+      };
+    },
+    shallow
+  );
 
   const isMounted = useRef(true);
   useEffect(() => {
@@ -25,53 +44,22 @@ export function useSilenceData(
   }, []);
 
   const fetchLogic = useCallback(async () => {
-    // Ensure all required parameters are present and valid
+
     if (!activeFile || !detectionParams || !timelineFps || timelineFps <= 0) {
-      if (isMounted.current) {
-        setSilenceData(null);
-        setError(null); // Clear error if conditions are not met for fetching
-        setIsLoading(false);
-      }
       return;
     }
-
-    // Also check if source frame numbers are valid; they should be numbers.
-    // The ActiveClip type should enforce this, but an extra check doesn't hurt.
-    if (typeof activeFile.sourceStartFrame !== 'number' || typeof activeFile.sourceEndFrame !== 'number') {
-        console.warn("useSilenceData: Invalid sourceStartFrame or sourceEndFrame in activeFile.", activeFile);
-        if (isMounted.current) {
-            setSilenceData(null);
-            setError("Invalid clip frame data.");
-            setIsLoading(false);
-        }
-        return;
-    }
-
+    
     if (isMounted.current) {
       setIsLoading(true);
       setError(null);
     }
 
-    // Convert frame numbers to seconds
     const clipStartSeconds = activeFile.sourceStartFrame / timelineFps;
     const clipEndSeconds = activeFile.sourceEndFrame / timelineFps;
 
-    // Validate the calculated segment duration
-    if (clipEndSeconds <= clipStartSeconds) {
-        console.warn(
-            `useSilenceData: Invalid segment for ${activeFile.name} - start ${clipStartSeconds.toFixed(3)}s, end ${clipEndSeconds.toFixed(3)}s. Not fetching silences.`
-        );
-        if(isMounted.current) {
-            setSilenceData(null);
-            setError("Invalid clip segment duration for silence detection.");
-            setIsLoading(false);
-        }
-        return;
-    }
-
     try {
       const result = await GetOrDetectSilencesWithCache(
-        activeFile.processedFileName, // String() wrapper is not strictly needed if already string
+        activeFile.processedFileName,
         detectionParams.loudnessThreshold,
         detectionParams.minSilenceDurationSeconds,
         detectionParams.paddingLeftSeconds,
@@ -84,11 +72,8 @@ export function useSilenceData(
         setSilenceData(result);
       }
     } catch (err: any) {
-      console.error("useSilenceData: Failed to get silence data from Go backend:", err);
-      const errorMessage =
-        typeof err === "string"
-          ? err
-          : err.message || "An unknown error occurred while processing audio.";
+      console.error("useSilenceData: Failed to get silence data:", err);
+      const errorMessage = typeof err === "string" ? err : err.message || "Unknown error";
       if (isMounted.current) {
         setError(errorMessage);
         setSilenceData(null);
@@ -98,7 +83,7 @@ export function useSilenceData(
         setIsLoading(false);
       }
     }
-  }, [activeFile, detectionParams, timelineFps]); // Added timelineFps to dependency array
+  }, [activeFile, detectionParams, timelineFps]);
 
   const debouncedFetch = useDebouncedCallback(fetchLogic, debounceMs);
 

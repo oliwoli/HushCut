@@ -86,9 +86,9 @@ export function useClipControls() {
         detectionParams[clipId] = {
             loudnessThreshold: params.threshold,
             minSilenceDurationSeconds: params.minDuration,
-            minContent: params.minContent,
             paddingLeftSeconds: params.paddingLeft,
             paddingRightSeconds: params.paddingRight,
+            minContent: params.minContent,
         };
     }
     return detectionParams;

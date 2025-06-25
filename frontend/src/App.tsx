@@ -7,6 +7,7 @@ scan({
 import { useEffect, useMemo, useRef, useState } from "react";
 import deepEqual from "fast-deep-equal";
 import { toast } from "sonner";
+import { timecodeToFrame } from "@/lib/utils";
 
 import {
   CloseApp,
@@ -28,42 +29,50 @@ import FileSelector from "./components/ui-custom/fileSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
 import { createPortal } from "react-dom";
 import { ThresholdControl } from "./components/controls/ThresholdControl";
-import { TitleBar } from "./components/ui-custom/titlebar";
+import { TitleBar } from "./titlebar";
 
 import { useSyncBusyState } from "./stores/appSync";
 
-import { useClipStore } from '@/stores/clipStore';
+import {
+  defaultParameters,
+  useClipStore,
+  useGlobalStore,
+} from "@/stores/clipStore";
 import { SilenceControls } from "./components/controls/SilenceControls";
-import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "./components/ui/drawer";
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from "./components/ui/drawer";
 import { Button } from "./components/ui/button";
 import { Progress } from "./components/ui/progress";
 import { DavinciSettings } from "./components/controls/DavinciSettings";
+import { useUiStore } from "./stores/uiStore";
+import { InfoDialog } from "./InfoDialog";
+import Timecode, { FRAMERATE } from "smpte-timecode";
 
 
-EventsOn("showToast", (data) => {
-  console.log("Event: showToast", data);
-  // Simple alert for now, TODO: use nicer shadcn component
-  alert(`Toast [${data.toastType || "info"}]: ${data.message}`);
-});
+// EventsOn("showToast", (data) => {
+//   console.log("Event: showToast", data);
+//   // Simple alert for now, TODO: use nicer shadcn component
+//   alert(`Toast [${data.toastType || "info"}]: ${data.message}`);
+// });
 
-
-const DEFAULT_THRESHOLD = -30;
-const DEFAULT_MIN_DURATION = 1.0;
-const MIN_DURATION_LIMIT = 0.01;
-const DEFAULT_PADDING = 0.25;
-const MIN_CONTENT_DURATION = 0.5
 
 
 const getDefaultDetectionParams = (): DetectionParams => ({
-  loudnessThreshold: DEFAULT_THRESHOLD,
-  minSilenceDurationSeconds: DEFAULT_MIN_DURATION,
-  minContent: MIN_DURATION_LIMIT,
-  paddingLeftSeconds: DEFAULT_PADDING,
-  paddingRightSeconds: DEFAULT_PADDING,
+  loudnessThreshold: defaultParameters.threshold,
+  minSilenceDurationSeconds: defaultParameters.minDuration,
+  minContent: defaultParameters.minContent,
+  paddingLeftSeconds: defaultParameters.paddingLeft,
+  paddingRightSeconds: defaultParameters.paddingRight,
   // If you want to store paddingLocked per-clip, add it here:
   // paddingLocked: true,
 });
-
 
 const createActiveFileFromTimelineItem = (
   item: main.TimelineItem,
@@ -90,6 +99,7 @@ const createActiveFileFromTimelineItem = (
     previewUrl: `http://localhost:${port}/${item.processed_file_name}.wav`,
     sourceStartFrame: item.source_start_frame,
     sourceEndFrame: item.source_end_frame,
+    startFrame: item.start_frame,
   };
 };
 
@@ -114,49 +124,54 @@ function AppContent() {
   const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
-  const [projectData, setProjectData] =
-    useState<main.ProjectDataPayload | null>(null);
+
+  const projectData = useGlobalStore((s) => s.projectData);
+  const setTimecode = useGlobalStore((s) => s.setTimecode);
+  const setProjectData = useGlobalStore((s) => s.setProjectData);
+  const currTimecode = useGlobalStore(s => s.timecode);
+  const audioItems = projectData?.timeline?.audio_track_items || [];
+  const timelineFps = projectData?.timeline?.fps || 30;
 
   useEffect(() => {
-    const audioItems = projectData?.timeline?.audio_track_items || [];
+    // If there is no timecode or no clips, there's nothing to select.
     if (audioItems.length === 0) {
-      if (currentClipId !== null) {
-        setCurrentClipId(null); // No clips available, so deselect
-      }
+      setCurrentClipId(null);
       return;
     }
+    if (!currTimecode) return;
 
-    if (audioItems.length === 0) {
-      if (currentClipId !== null) {
-        setCurrentClipId(null);
+    // 1. Convert the current timecode to frames
+    const currentFrame = currTimecode.frameCount;
+
+    // 2. Find the clip that contains the current frame
+    // A clip "contains" the frame if the frame is between its start and end markers.
+    const clipAtTimecode = audioItems.find(
+      (item) =>
+        currentFrame >= item.start_frame && currentFrame < item.end_frame
+    );
+
+    // 3. Update the current clip ID
+    if (clipAtTimecode) {
+      const newClipId = clipAtTimecode.id || clipAtTimecode.processed_file_name;
+      // Only update state if the ID has actually changed to prevent re-renders
+      if (newClipId && newClipId !== currentClipId) {
+        setCurrentClipId(newClipId);
       }
-      return;
     }
-
-    const availableIds = new Set(audioItems.map(item => item.id || item.processed_file_name));
-
-    // If no clip is selected, or the selected clip no longer exists,
-    // default to the first one in the list.
-    if (!currentClipId || !availableIds.has(currentClipId)) {
-      // FIX: Coalesce a potentially undefined/empty string to null
-      const firstItemId = (audioItems[0].id || audioItems[0].processed_file_name) || null;
-      setCurrentClipId(firstItemId);
-    }
-  }, [projectData, currentClipId, setCurrentClipId]);
-
+  }, [currTimecode, audioItems, timelineFps]);
 
   // 3. Use useMemo for PURE calculations. It now only derives the active clip.
   const currentActiveClip = useMemo(() => {
     if (!projectData || !httpPort || !projectData.timeline?.audio_track_items) {
       return null;
     }
-
-    const audioItems = projectData.timeline.audio_track_items;
     if (audioItems.length === 0) return null;
 
     // Find the item corresponding to the current ID.
     let itemToDisplay = currentClipId
-      ? audioItems.find(item => (item.id || item.processed_file_name) === currentClipId)
+      ? audioItems.find(
+        (item) => (item.id || item.processed_file_name) === currentClipId
+      )
       : audioItems[0];
 
     // Fallback if the ID wasn't found (e.g., during a state transition)
@@ -165,7 +180,6 @@ function AppContent() {
     }
 
     return createActiveFileFromTimelineItem(itemToDisplay, httpPort);
-
   }, [projectData, httpPort, currentClipId]);
 
 
@@ -181,6 +195,17 @@ function AppContent() {
     const conditionalSetProjectData = async (
       newData: main.ProjectDataPayload | null
     ) => {
+      if (newData) {
+        // extract the timecode
+        const timecode = Timecode(
+          newData.timeline.curr_timecode,
+          newData.timeline.fps as FRAMERATE
+        );
+        setTimecode(timecode);
+
+        // remove the curr timecode from it to not trigger unnecessary re-renders
+        newData.timeline.curr_timecode = "";
+      }
       if (!deepEqual(projectData, newData)) {
         // Using fast-deep-equal
         setProjectData(newData);
@@ -407,10 +432,8 @@ function AppContent() {
         <main className="flex-1 gap-8 max-w-screen select-none space-y-0">
           {currentActiveClip?.id && (
             <FileSelector
-              audioItems={projectData?.timeline?.audio_track_items}
               currentFileId={currentClipId}
               onFileChange={handleAudioClipSelection}
-              fps={projectData?.timeline?.fps}
               disabled={
                 !httpPort ||
                 !projectData?.timeline?.audio_track_items ||
@@ -419,9 +442,9 @@ function AppContent() {
               className="w-full mt-1 overflow-visible"
             />
           )}
-          <div className="flex flex-col space-y-4 px-3">
+          <div className="flex flex-col space-y-6 px-3">
             {/* Group Threshold, Min Duration, and Padding */}
-            <div className="flex flex-row space-x-6 items-start">
+            <div className="flex flex-row space-x-3 items-start">
               {currentClipId && (
                 <>
                   <ThresholdControl key={currentClipId} />
@@ -429,15 +452,14 @@ function AppContent() {
                     {httpPort &&
                       currentActiveClip &&
                       projectData &&
-                      projectData.timeline &&
-                      (
+                      projectData.timeline && (
                         <WaveformPlayer
+                          key={currentActiveClip.id}
                           activeClip={currentActiveClip}
                           projectFrameRate={projectData.timeline.fps}
                           httpPort={httpPort}
                         />
                       )}
-
                   </div>
                 </>
               )}
@@ -450,7 +472,6 @@ function AppContent() {
                   <div className="flex justify-start mb-4">
                     <RemoveSilencesButton
                       projectData={projectData}
-                      keepSilenceSegments={false}
                       defaultDetectionParams={getDefaultDetectionParams()}
                     />
                   </div>
@@ -458,13 +479,11 @@ function AppContent() {
               </div>
             </div>
 
-
             {/* <div className="flex space-y-8 w-full">
               <div className="items-center space-y-2 mt-4">
 
               </div>
             </div> */}
-
           </div>
         </main>
         <div id="dialog-portal-container" />
@@ -552,7 +571,7 @@ export default function App() {
   };
 
   const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
-
+  const { isInfoDialogOpen, setInfoDialogOpen } = useUiStore();
 
   const [showFinalProgress, setShowFinalProgress] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
@@ -616,12 +635,11 @@ export default function App() {
           totalTime={totalTime}
           onOpenChange={setShowFinalProgress}
         />
+        <InfoDialog open={isInfoDialogOpen} onOpenChange={setInfoDialogOpen} />
       </ClientPortal>
 
-      <ClientPortal targetId="title-bar-root">
-        {MemoizedTitleBar}
-      </ClientPortal>
+      <ClientPortal targetId="title-bar-root">{MemoizedTitleBar}</ClientPortal>
       <AppContent />
     </>
-  )
+  );
 }

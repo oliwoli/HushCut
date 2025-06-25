@@ -17,8 +17,8 @@ import { useSyncBusyState } from "@/stores/appSync";
 
 
 export function deriveAllClipDetectionParams(
-  timelineItems: main.TimelineItem[], // <-- Pass in all timeline clips
-  clipStoreState: ClipStore             // <-- Pass in the full store state
+  timelineItems: main.TimelineItem[],
+  clipStoreState: ClipStore
 ): Record<string, DetectionParams> {
   const detectionParams: Record<string, DetectionParams> = {};
 
@@ -26,7 +26,6 @@ export function deriveAllClipDetectionParams(
     const clipId = item.id;
     if (!clipId) continue;
 
-    // This is the correct logic, identical to our previous fix.
     // It checks for clip-specific params, then falls back to live defaults.
     const correctClipParams = clipStoreState.parameters[clipId] ?? clipStoreState.liveDefaultParameters;
 
@@ -48,7 +47,6 @@ interface PythonRunnerProps {
   onScriptLog?: (line: string) => void;
   onScriptDone?: (message: string) => void;
   onScriptError?: (error: any) => void;
-  keepSilenceSegments?: boolean;
 }
 
 // Helper function
@@ -57,7 +55,6 @@ async function prepareProjectDataWithEdits(
   allClipParams: Record<string, DetectionParams>,
   keepSilenceSegments: boolean,
   defaultParams: DetectionParams
-  // FPS is implicitly available in projectDataInput.timeline.fps
 ): Promise<main.ProjectDataPayload> {
   let workingProjectData: main.ProjectDataPayload = JSON.parse(
     JSON.stringify(projectDataInput)
@@ -157,228 +154,146 @@ async function prepareProjectDataWithEdits(
   return projectDataWithEdits;
 }
 
-const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
-  const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
+type ProcessedDataCache = {
+  data: main.ProjectDataPayload;
+  // The key represents all inputs used to generate the data
+  key: {
+    projectData: main.ProjectDataPayload;
+    clipParams: Record<string, DetectionParams>;
+    keepSilence: boolean;
+  };
+};
 
+const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const {
     projectData: initialProjectData,
     defaultDetectionParams,
     onScriptLog,
     onScriptDone,
     onScriptError,
-    keepSilenceSegments = false,
   } = props;
 
-
+  // Zustand state
+  const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
+  const keepSilence = useGlobalStore(s => s.keepSilence);
   const setBusy = useSyncBusyState(s => s.setBusy);
 
-  const [processedData, setProcessedData] =
-    useState<main.ProjectDataPayload | null>(null);
-  const processedDataInputRef = useRef<main.ProjectDataPayload | null>(null);
-  // This state will now store the map of params used for the `processedData`
-  const [paramsMapForProcessedData, setParamsMapForProcessedData] =
-    useState<Record<string, DetectionParams> | null>(null);
+  // --- REFACTORED STATE ---
+  // Single ref to manage the entire cache. No more duplicating Zustand state.
+  const cacheRef = useRef<ProcessedDataCache | null>(null);
 
+  // State for UI purposes only (button text, disabled status)
   const [isProcessingClick, setIsProcessingClick] = useState(false);
   const [isProcessingHover, setIsProcessingHover] = useState(false);
+  // --- END REFACTORED STATE ---
 
-  const initialProjectDataRef = useRef(initialProjectData);
-  const defaultParamsRef = useRef(defaultDetectionParams);
-
-
-  useEffect(() => {
-    initialProjectDataRef.current = initialProjectData;
-    defaultParamsRef.current = defaultDetectionParams;
-  }, [initialProjectData, defaultDetectionParams]);
-
-  // REFACTOR: This useEffect is now MUCH simpler. It only invalidates the cache
-  // if the main project data changes. Parameter changes will be handled
-  // on-demand by the click/hover handlers.
+  // Invalidate the cache if the base project data prop changes.
   useEffect(() => {
     console.log("Invalidating processedData due to initialProjectData change.");
-    setProcessedData(null);
-    processedDataInputRef.current = null;
-    setParamsMapForProcessedData(null);
+    cacheRef.current = null;
   }, [initialProjectData]);
 
+  // Effect for Wails event listeners remains the same
   useEffect(() => {
-    const logHandler = (line: string) => {
-      if (onScriptLog) onScriptLog(line);
-    };
-    const doneHandler = (message: string) => {
-      if (onScriptDone) onScriptDone(message);
-    };
-    const unsubscribeLog = EventsOn(
-      "python:log",
-      logHandler as (data: unknown) => void
-    );
-    const unsubscribeDone = EventsOn(
-      "python:done",
-      doneHandler as (data: unknown) => void
-    );
+    const logHandler = (line: string) => { if (onScriptLog) onScriptLog(line); };
+    const doneHandler = (message: string) => { if (onScriptDone) onScriptDone(message); };
+    const unsubscribeLog = EventsOn("python:log", logHandler as (data: unknown) => void);
+    const unsubscribeDone = EventsOn("python:done", doneHandler as (data: unknown) => void);
     return () => {
       unsubscribeLog();
       unsubscribeDone();
     };
   }, [onScriptLog, onScriptDone]);
 
-  const handleMouseEnter = useCallback(async () => {
+  // useCallback is still useful, but its dependencies are simpler.
+  const handleAction = useCallback(async (isClick: boolean) => {
+    if (!initialProjectData) {
+      console.error("Action: Initial project data is not available.");
+      return;
+    }
+
+    // 1. Get current state of all inputs
     const clipStoreState = useClipStore.getState();
-    const timelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
-    const currentAllClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
+    const timelineItems = initialProjectData?.timeline?.audio_track_items ?? [];
+    const currentClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
 
-    // Use refs for props that might change, to avoid stale closures.
-    const currentInitialData = initialProjectDataRef.current;
-    const currentDefaultParams = defaultParamsRef.current;
+    // 2. Create the "key" for the current state
+    const currentKey = {
+      projectData: initialProjectData,
+      clipParams: currentClipParams,
+      keepSilence: keepSilence,
+    };
 
-    if (isProcessingHover || !currentInitialData || isProcessingClick) {
-      return;
+    // 3. Check if the cache is valid by comparing keys
+    if (cacheRef.current && deepEqual(cacheRef.current.key, currentKey)) {
+      console.log(`Action (${isClick ? 'Click' : 'Hover'}): Using existing pre-processed data.`);
+      // If it's a click, proceed to use the cached data. If it's just a hover, do nothing.
+      if (isClick) {
+        return cacheRef.current.data;
+      }
+      return; // Data is already cached, so hover action is complete.
     }
 
-    if (
-      processedData &&
-      processedDataInputRef.current === currentInitialData &&
-      // Use deepEqual for comparing the map of params
-      deepEqual(currentAllClipParams, paramsMapForProcessedData)
-    ) {
-      console.log(
-        "Hover: Data already processed for current input and params map."
-      );
-      return;
-    }
-
-    setIsProcessingHover(true);
-    console.log(
-      "Hover: Starting silent pre-processing (data or params map changed)..."
-    );
+    // 4. If cache is invalid or doesn't exist, re-compute
+    console.log(`Action (${isClick ? 'Click' : 'Hover'}): Stale or no cache. Preparing data...`);
+    if (isClick) setIsProcessingClick(true);
+    else setIsProcessingHover(true);
 
     try {
       const result = await prepareProjectDataWithEdits(
-        currentInitialData,
-        currentAllClipParams,
-        keepSilenceSegments,
-        currentDefaultParams // This prop can now be removed
+        initialProjectData,
+        currentClipParams,
+        keepSilence,
+        defaultDetectionParams
       );
 
-      const finalClipStoreState = useClipStore.getState();
-      const finalTimelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
-      const finalAllClipParams = deriveAllClipDetectionParams(finalTimelineItems, finalClipStoreState);
+      // 5. Update the cache with the new data and the key that produced it
+      cacheRef.current = { data: result, key: currentKey };
+      console.log("Action: Cache updated.");
+      return result;
 
-      if (
-        initialProjectDataRef.current === currentInitialData &&
-        deepEqual(finalAllClipParams, currentAllClipParams)
-      ) {
-        setProcessedData(result);
-        processedDataInputRef.current = currentInitialData;
-        setParamsMapForProcessedData(currentAllClipParams);
-      }
     } catch (error) {
-      console.error("Hover: Error during silent pre-processing:", error);
+      console.error(`Action (${isClick ? 'Click' : 'Hover'}): Error during processing:`, error);
+      // Invalidate cache on error to prevent using faulty data
+      cacheRef.current = null;
+      if (isClick && onScriptError) onScriptError(error);
     } finally {
-      setIsProcessingHover(false);
+      if (isClick) setIsProcessingClick(false);
+      else setIsProcessingHover(false);
     }
-    // REFACTOR: The dependency array for useCallback is now simpler.
-  }, [
-    isProcessingHover,
-    isProcessingClick,
-    keepSilenceSegments,
-    processedData,
-    paramsMapForProcessedData,
-  ]);
+  }, [initialProjectData, keepSilence, defaultDetectionParams, onScriptError]); // Dependencies are now simpler
+
+  const handleMouseEnter = () => {
+    if (isProcessingHover || isProcessingClick) return;
+    handleAction(false);
+  };
 
   const handleClick = async () => {
-    if (isProcessingClick) {
-      console.warn("Click: Processing already in progress.");
-      return;
-    }
+    if (isProcessingClick) return;
     setBusy(true);
-    const clipStoreState = useClipStore.getState();
-    const timelineItems = initialProjectDataRef.current?.timeline?.audio_track_items ?? [];
-
-    // Call the corrected helper function to get params for ALL clips
-    const currentAllClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
-
-    const currentInitialData = initialProjectDataRef.current;
-    const currentDefaultParams = defaultParamsRef.current;
-
-    if (!currentInitialData) {
-      console.error("Click: Initial project data is not available.");
-      if (onScriptError)
-        onScriptError("Initial project data is not available.");
-      return;
-    }
-    if (
-      !currentInitialData?.timeline?.fps ||
-      currentInitialData.timeline.fps <= 0
-    ) {
-      console.error(
-        "Cannot process: Missing or invalid timeline FPS from project data."
-      );
-      if (onScriptError) onScriptError("Missing or invalid timeline FPS.");
-      return;
-    }
-
-    setIsProcessingClick(true);
-    console.log("Click: Starting 'HushCut Silences' process...");
 
     try {
-      let dataToSend: main.ProjectDataPayload;
+      const dataToSend = await handleAction(true);
 
-      if (
-        processedData &&
-        processedDataInputRef.current === currentInitialData &&
-        // Use deepEqual for comparing the map of params
-        deepEqual(currentAllClipParams, paramsMapForProcessedData)
-      ) {
-        console.log(
-          "Click: Using existing pre-processed data (input and params map match)."
-        );
-        dataToSend = processedData;
-      } else {
-        // console.log("Click: No fresh pre-processed data or params map mismatch/stale. Preparing data now...");
-        dataToSend = await prepareProjectDataWithEdits(
-          currentInitialData,
-          currentAllClipParams,
-          keepSilenceSegments,
-          currentDefaultParams
-        );
-        setProcessedData(dataToSend);
-        processedDataInputRef.current = currentInitialData;
-        setParamsMapForProcessedData(currentAllClipParams); // Store the map that was used
+      if (dataToSend) {
+        console.log("Click: Making final timeline...");
+        const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
+        // ... (rest of your response handling logic) ...
+        if (!response || response.status === "error") {
+          const errMessage = response?.message || "Unknown error occurred in timeline generation.";
+          console.error("Click: Timeline generation failed:", errMessage);
+          if (onScriptError) onScriptError(errMessage);
+          return;
+        }
+        console.log("Click: 'HushCut Silences' process finished successfully.");
+        if (onScriptDone) onScriptDone("'HushCut Silences' process completed successfully.");
       }
-
-      console.log("Click: Making final timeline...");
-      const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
-
-      if (!response || response.status === "error") {
-        const errMessage =
-          response?.message || "Unknown error occurred in timeline generation.";
-        console.error("Click: Timeline generation failed:", errMessage);
-        if (onScriptError) onScriptError(errMessage);
-        return;
-      }
-
-      if (response.alertIssued) {
-        console.warn(
-          "Sync operation resulted in an alert (issued by Go). Message:",
-          response.message
-        );
-      }
-      //else { console.log("eh") }
-      setBusy(false);
-
-      console.log("Click: 'HushCut Silences' process finished successfully.");
-      if (onScriptDone)
-        onScriptDone("'HushCut Silences' process completed successfully.");
-    } catch (error: any) {
+    } catch (error) {
       console.error("Click: Error during 'HushCut Silences' process:", error);
-      const errorMessage =
-        typeof error === "string"
-          ? error
-          : error.message || "An unknown error occurred.";
+      const errorMessage = typeof error === "string" ? error : (error as Error).message || "An unknown error occurred.";
       if (onScriptError) onScriptError(errorMessage);
     } finally {
-      setIsProcessingClick(false);
+      setBusy(false);
     }
   };
 
@@ -390,8 +305,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       disabled={buttonDisabled}
-      className={`bg-stone-700/10 shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""
-        }`}
+      className={`bg-stone-700/10 shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       <span className="items-center align-middle flex text-xl gap-4 font-[50]">
         <AudioWaveformIcon size={32} className="scale-150 text-gray-500" />

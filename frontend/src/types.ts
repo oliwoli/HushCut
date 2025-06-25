@@ -12,6 +12,7 @@ export interface ActiveClip {
   previewUrl: string;           // Full URL to the .wav file
   sourceStartFrame: number;     // For WaveformPlayer region (TimelineItem.SourceStartFrame)
   sourceEndFrame: number;       // For WaveformPlayer region (TimelineItem.SourceEndFrame)
+  startFrame: number;
   // Optional: Store original timeline item data if needed elsewhere for convenience
   // trackIndex: number;
   // timelineStartFrame: number; // To distinguish from sourceStartFrame for other uses

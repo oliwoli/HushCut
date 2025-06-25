@@ -66,6 +66,10 @@ export function MixdownCompoundClips(arg1) {
   return window['go']['main']['App']['MixdownCompoundClips'](arg1);
 }
 
+export function OpenURL(arg1) {
+  return window['go']['main']['App']['OpenURL'](arg1);
+}
+
 export function ProcessProjectAudio(arg1) {
   return window['go']['main']['App']['ProcessProjectAudio'](arg1);
 }
@@ -92,6 +96,14 @@ export function SaveConfig(arg1) {
 
 export function SendCommandToPython(arg1, arg2) {
   return window['go']['main']['App']['SendCommandToPython'](arg1, arg2);
+}
+
+export function SetDavinciPlayhead(arg1) {
+  return window['go']['main']['App']['SetDavinciPlayhead'](arg1);
+}
+
+export function SetWindowAlwaysOnTop(arg1) {
+  return window['go']['main']['App']['SetWindowAlwaysOnTop'](arg1);
 }
 
 export function StandardizeAudioToWav(arg1, arg2, arg3) {

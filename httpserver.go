@@ -34,9 +34,9 @@ type PythonMessage struct {
 }
 
 type TaskUpdatePayload struct {
-    Message  string  `json:"message"`
+	Message  string  `json:"message"`
 	TaskType string  `json:"tasktype,omitempty"`
-    Progress float64 `json:"progress,omitempty"` // Optional progress percentage (0.0 to 1.0)
+	Progress float64 `json:"progress,omitempty"` // Optional progress percentage (0.0 to 1.0)
 }
 
 type ToastPayload struct {
@@ -140,9 +140,10 @@ func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.Han
 			} else {
 				log.Printf("Middleware: Global auth is DISABLED. Token check skipped for %s (even though endpoint requires it).", request.URL.Path)
 			}
-		} else {
-			log.Printf("Middleware: Endpoint %s does not require auth.", request.URL.Path)
 		}
+		// } else {
+		// 	log.Printf("Middleware: Endpoint %s does not require auth.", request.URL.Path)
+		// }
 
 		// 4. Call the actual handler if all checks passed (or were skipped)
 		next.ServeHTTP(writer, request)
@@ -358,51 +359,35 @@ func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Reques
 // (Assuming a.effectiveAudioFolderPath is correctly set up as in your original code)
 
 func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
-	// Allow GET and HEAD. HEAD is useful for players to check content length/type without downloading.
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		log.Printf("RenderClip: Method %s blocked for: %s", r.Method, r.URL.Path)
-		return
-	}
-
+	// --- Parameter validation (same as your original code) ---
 	query := r.URL.Query()
 	fileName := query.Get("file")
 	startStr := query.Get("start")
 	endStr := query.Get("end")
-
 	if fileName == "" || startStr == "" || endStr == "" {
-		http.Error(w, "Missing required query parameters: file, start, end", http.StatusBadRequest)
-		log.Printf("RenderClip: Missing parameters. File: '%s', Start: '%s', End: '%s'", fileName, startStr, endStr)
+		http.Error(w, "Missing required query parameters", http.StatusBadRequest)
 		return
 	}
-
 	startSeconds, errStart := strconv.ParseFloat(startStr, 64)
 	endSeconds, errEnd := strconv.ParseFloat(endStr, 64)
-
 	if errStart != nil || errEnd != nil || startSeconds < 0 || endSeconds <= startSeconds {
 		http.Error(w, "Invalid start or end time parameters", http.StatusBadRequest)
-		log.Printf("RenderClip: Invalid time parameters. Start: '%s' (err: %v), End: '%s' (err: %v)", startStr, errStart, endStr, errEnd)
 		return
 	}
-
 	cleanFileName := filepath.Base(fileName)
 	if cleanFileName != fileName || strings.Contains(fileName, "..") || strings.ContainsAny(fileName, "/\\") {
 		http.Error(w, "Invalid file name parameter", http.StatusBadRequest)
-		log.Printf("RenderClip: Invalid file name (potential traversal): '%s'", fileName)
 		return
 	}
-
 	originalFilePath := filepath.Join(a.effectiveAudioFolderPath, cleanFileName)
-
 	if _, err := os.Stat(originalFilePath); os.IsNotExist(err) {
 		http.NotFound(w, r)
-		log.Printf("RenderClip: Original source file not found: %s", originalFilePath)
 		return
 	}
 
-	log.Printf("RenderClip: Processing request for %s, segment %f to %f seconds. Range: %s",
-		originalFilePath, startSeconds, endSeconds, r.Header.Get("Range"))
+	log.Printf("RenderClip: BUFFERING request for %s, segment %f to %f", originalFilePath, startSeconds, endSeconds)
 
+	// --- FFMPEG Command Setup ---
 	cmd := exec.Command(a.ffmpegBinaryPath,
 		"-i", originalFilePath,
 		"-ss", fmt.Sprintf("%f", startSeconds),
@@ -410,94 +395,74 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 		"-c", "copy",
 		"-f", "wav",
 		"-vn",
+		"-hide_banner",
+		"-loglevel", "error",
 		"pipe:1",
 	)
 
+	// --- 1. THE SAFETY NET: Guaranteed Process Cleanup ---
+	// This defer block is the most important part. It ensures that no matter what happens,
+	// the ffmpeg process is killed and its resources are released.
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill() // Ensure the process is terminated.
+		}
+		// Wait is still required to release the process resources from Go's perspective.
+		cmd.Wait()
+		log.Printf("RenderClip Cleanup: Successfully cleaned up ffmpeg process for %s", originalFilePath)
+	}()
+
+	// --- Pipe Setup ---
 	ffmpegOutput, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("RenderClip: Error creating StdoutPipe for ffmpeg: %v", err)
-		http.Error(w, "Internal server error (ffmpeg pipe)", http.StatusInternalServerError)
-		return
-	}
-
-	ffmpegErrOutput, err := cmd.StderrPipe()
-	if err != nil {
-		log.Printf("RenderClip: Error creating StderrPipe for ffmpeg: %v", err)
-		// Continue, but we might not get detailed ffmpeg errors
+		http.Error(w, "Internal server error (stdout pipe)", http.StatusInternalServerError)
+		return // defer will run
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("RenderClip: Error starting ffmpeg for %s: %v", originalFilePath, err)
 		http.Error(w, "Internal server error (ffmpeg start)", http.StatusInternalServerError)
-		return
+		return // defer will run
 	}
 
-	var ffmpegErrBuffer bytes.Buffer
-	if ffmpegErrOutput != nil {
-		go func() {
-			_, copyErr := io.Copy(&ffmpegErrBuffer, ffmpegErrOutput)
-			if copyErr != nil {
-				log.Printf("RenderClip: Error copying ffmpeg stderr: %v", copyErr)
-			}
-		}()
-	}
-
-	// Buffer the entire ffmpeg output for this segment
+	// --- 2. THE BUFFERING LOGIC ---
 	var audioData bytes.Buffer
-	bytesCopied, copyErr := io.Copy(&audioData, ffmpegOutput)
+	doneCh := make(chan error, 1) // A channel to signal when copying is complete.
 
-	waitErr := cmd.Wait()
+	go func() {
+		// Perform the copy in a separate goroutine.
+		_, err := io.Copy(&audioData, ffmpegOutput)
+		doneCh <- err
+	}()
 
-	if copyErr != nil {
-		log.Printf("RenderClip: Error piping ffmpeg output to internal buffer for %s: %v. Bytes copied: %d. FFMPEG Stderr: %s",
-			originalFilePath, copyErr, bytesCopied, ffmpegErrBuffer.String())
-		// Avoid writing partial content if pipe broke
-		if !strings.Contains(copyErr.Error(), "read/write on closed pipe") && // Common if client disconnects
-			!strings.Contains(copyErr.Error(), "broken pipe") { // Also common
-			http.Error(w, "Internal server error (ffmpeg stream copy)", http.StatusInternalServerError)
-			return
+	// --- 3. THE STABILITY ADDITION: Handle Client Disconnects ---
+	// We wait for one of two things to happen:
+	// - The copying to the buffer finishes (doneCh receives a value).
+	// - The client disconnects (r.Context().Done() is closed).
+	select {
+	case err := <-doneCh:
+		// Copying finished. Check for errors.
+		if err != nil {
+			log.Printf("RenderClip: Failed to buffer ffmpeg output: %v", err)
+			http.Error(w, "Failed to generate audio segment", http.StatusInternalServerError)
+			return // defer will run
 		}
-		log.Printf("RenderClip: Continuing despite pipe error during copy, likely client disconnect or ffmpeg finished early. Copied %d bytes.", bytesCopied)
-	}
-
-	if waitErr != nil {
-		log.Printf("RenderClip: ffmpeg command finished with error for %s: %v. Stderr: %s. Bytes copied to buffer: %d",
-			originalFilePath, waitErr, ffmpegErrBuffer.String(), audioData.Len())
-		if audioData.Len() == 0 { // Or some threshold if partial WAVs could be useful
-			http.Error(w, "Internal server error (ffmpeg execution)", http.StatusInternalServerError)
-			return
-		}
-		log.Printf("RenderClip: Warning - ffmpeg exited with error, but some data (%d bytes) was captured. Attempting to serve.", audioData.Len())
-	}
-
-	if audioData.Len() == 0 && bytesCopied == 0 && waitErr == nil && copyErr == nil {
-		log.Printf("RenderClip: ffmpeg produced no output for %s (segment %f-%f). Stderr: %s", originalFilePath, startSeconds, endSeconds, ffmpegErrBuffer.String())
-		// This could happen if the segment is empty or ffmpeg has an issue not reported as an exit error.
-		// Send a custom error or an empty WAV, or just 204 No Content.
-		// For now, let's treat as not found or bad request.
-		http.Error(w, "No content generated for the requested segment.", http.StatusNotFound) // Or http.StatusInternalServerError
+	case <-r.Context().Done():
+		// Client disconnected before we finished buffering.
+		log.Printf("RenderClip: Client disconnected during buffering. Aborting.")
+		// We don't need to write an error to the response, as the client is gone.
+		// We simply return, and the defer block will kill ffmpeg and clean up.
 		return
 	}
 
-	log.Printf("RenderClip: Successfully buffered %d bytes for %s (segment %f-%f). Now serving with http.ServeContent.",
-		audioData.Len(), originalFilePath, startSeconds, endSeconds)
-
-	// Create an io.ReadSeeker from the buffered data
+	// If we get here, the audioData buffer is successfully filled.
+	log.Printf("RenderClip: Successfully buffered %d bytes. Now serving content.", audioData.Len())
 	audioDataReader := bytes.NewReader(audioData.Bytes())
 
-	// Set headers that http.ServeContent might use or that are good practice
-	w.Header().Set("Content-Type", "audio/wav")
-	// Accept-Ranges will be set by ServeContent if the seeker supports it, which bytes.Reader does.
-	w.Header().Set("Accept-Ranges", "bytes") // Not strictly needed here, ServeContent does it.
-
 	serveName := fmt.Sprintf("rendered_clip_%s_%.2f_%.2f.wav", cleanFileName, startSeconds, endSeconds)
-
-	// Modification time: For dynamic content, time.Now() is okay.
-	// If the content was cached and had a fixed generation time, you'd use that.
-	// Using a fixed time (e.g., based on original file's modtime if transformation is deterministic)
-	// can improve client-side caching if the same segment is requested again.
 	modTime := time.Now()
 
+	// http.ServeContent is perfect for serving data from an in-memory buffer (via io.ReadSeeker).
+	// It will correctly set Content-Length, Content-Type, and handle range requests.
 	http.ServeContent(w, r, serveName, modTime, audioDataReader)
 }
 
@@ -526,30 +491,30 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 	taskID := r.URL.Query().Get("task_id")
 
 	if msg.Type == "taskUpdate" {
-        if taskID == "" {
-            http.Error(w, "'taskUpdate' requires a task_id", http.StatusBadRequest)
-            return
-        }
+		if taskID == "" {
+			http.Error(w, "'taskUpdate' requires a task_id", http.StatusBadRequest)
+			return
+		}
 
-        var updateData TaskUpdatePayload
-        if err := json.Unmarshal(msg.Payload, &updateData); err != nil {
-            http.Error(w, "Invalid payload for 'taskUpdate'", http.StatusBadRequest)
-            log.Printf("msgEndpoint: Error unmarshalling taskUpdate payload: %v", err)
-            return
-        }
+		var updateData TaskUpdatePayload
+		if err := json.Unmarshal(msg.Payload, &updateData); err != nil {
+			http.Error(w, "Invalid payload for 'taskUpdate'", http.StatusBadRequest)
+			log.Printf("msgEndpoint: Error unmarshalling taskUpdate payload: %v", err)
+			return
+		}
 
-        // Emit an event to the frontend with the progress update.
-        // The frontend will listen for "taskProgressUpdate".
-        runtime.EventsEmit(a.ctx, "taskProgressUpdate", map[string]interface{}{
-            "taskID":   taskID,
-            "message":  updateData.Message,
-            "progress": updateData.Progress,
-        })
+		// Emit an event to the frontend with the progress update.
+		// The frontend will listen for "taskProgressUpdate".
+		runtime.EventsEmit(a.ctx, "taskProgressUpdate", map[string]interface{}{
+			"taskID":   taskID,
+			"message":  updateData.Message,
+			"progress": updateData.Progress,
+		})
 
-        w.WriteHeader(http.StatusOK)
-        fmt.Fprintln(w, "Task update received.")
-        return // IMPORTANT: We are done. We do not touch the pendingTasks channel.
-    }
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "Task update received.")
+		return // IMPORTANT: We are done. We do not touch the pendingTasks channel.
+	}
 
 	// --- New Primary Handler for Task-Related Responses from Python ---
 	if msg.Type == "taskResult" {
@@ -798,68 +763,95 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 }
 
 func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline bool) (*PythonCommandResponse, error) {
-    if !a.pythonReady {
-        return nil, fmt.Errorf("python backend not ready")
-    }
+	if !a.pythonReady {
+		return nil, fmt.Errorf("python backend not ready")
+	}
 	runtime.EventsEmit(a.ctx, "showFinalTimelineProgress")
 
-    // 1. Adopt the async task pattern
-    taskID := uuid.NewString()
-    respCh := make(chan PythonCommandResponse, 1)
+	// 1. Adopt the async task pattern
+	taskID := uuid.NewString()
+	respCh := make(chan PythonCommandResponse, 1)
 
-    a.pendingMu.Lock()
-    a.pendingTasks[taskID] = respCh
-    a.pendingMu.Unlock()
+	a.pendingMu.Lock()
+	a.pendingTasks[taskID] = respCh
+	a.pendingMu.Unlock()
 
-    defer func() {
-        a.pendingMu.Lock()
-        delete(a.pendingTasks, taskID)
-        a.pendingMu.Unlock()
-        log.Printf("Go: Cleaned up task %s", taskID)
-    }()
-    
-    // The frontend can now listen for "taskProgressUpdate" events with this taskID
-    log.Printf("Go: Starting task 'makeFinalTimeline' with ID: %s", taskID)
+	defer func() {
+		a.pendingMu.Lock()
+		delete(a.pendingTasks, taskID)
+		a.pendingMu.Unlock()
+		log.Printf("Go: Cleaned up task %s", taskID)
+	}()
 
-    // 2. Add taskId to the parameters sent to Python
-    params := map[string]interface{}{
-        "taskId":      taskID,
-        "projectData": projectData,
+	// The frontend can now listen for "taskProgressUpdate" events with this taskID
+	log.Printf("Go: Starting task 'makeFinalTimeline' with ID: %s", taskID)
+
+	// 2. Add taskId to the parameters sent to Python
+	params := map[string]interface{}{
+		"taskId":          taskID,
+		"projectData":     projectData,
 		"makeNewTimeline": makeNewTimeline,
-    }
+	}
 
-    // 3. Send the command and just check the acknowledgement
-    pyAckResp, err := a.SendCommandToPython("makeFinalTimeline", params)
-    if err != nil {
-        return nil, fmt.Errorf("failed to send 'makeFinalTimeline' command: %w", err)
-    }
-    if pyAckResp.Status != "success" {
-        return nil, fmt.Errorf("python 'makeFinalTimeline' ack error: %s", pyAckResp.Message)
-    }
+	// 3. Send the command and just check the acknowledgement
+	pyAckResp, err := a.SendCommandToPython("makeFinalTimeline", params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send 'makeFinalTimeline' command: %w", err)
+	}
+	if pyAckResp.Status != "success" {
+		return nil, fmt.Errorf("python 'makeFinalTimeline' ack error: %s", pyAckResp.Message)
+	}
 
-    log.Printf("Go: Waiting for final timeline result for task %s...", taskID)
+	log.Printf("Go: Waiting for final timeline result for task %s...", taskID)
 
-    // 4. Wait for the final result from the channel
-    finalResponse := <-respCh
-    log.Printf("Go: Received final timeline result for task %s", taskID)
+	// 4. Wait for the final result from the channel
+	finalResponse := <-respCh
+	log.Printf("Go: Received final timeline result for task %s", taskID)
 
-    // 5. Process the final response (handle alerts, errors, etc.)
-    if finalResponse.ShouldShowAlert {
-        runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
-            "title":    finalResponse.AlertTitle, "message":  finalResponse.AlertMessage, "severity": finalResponse.AlertSeverity,
-        })
-        finalResponse.AlertIssued = true
-        if finalResponse.Status != "error" { finalResponse.Status = "error" }
-        if finalResponse.Message == "" { finalResponse.Message = finalResponse.AlertMessage }
-    }
-    
-    // Return the full response object, which is more flexible than just a string
-    if finalResponse.Status != "success" {
-        // We return the response object so the frontend can see the message, even on error.
-        // The second return value (error) is nil because the *communication* was successful.
-        // The frontend should check the Status field of the returned object.
-        return &finalResponse, nil
-    }
+	// 5. Process the final response (handle alerts, errors, etc.)
+	if finalResponse.ShouldShowAlert {
+		runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+			"title": finalResponse.AlertTitle, "message": finalResponse.AlertMessage, "severity": finalResponse.AlertSeverity,
+		})
+		finalResponse.AlertIssued = true
+		if finalResponse.Status != "error" {
+			finalResponse.Status = "error"
+		}
+		if finalResponse.Message == "" {
+			finalResponse.Message = finalResponse.AlertMessage
+		}
+	}
+
+	// Return the full response object, which is more flexible than just a string
+	if finalResponse.Status != "success" {
+		// We return the response object so the frontend can see the message, even on error.
+		// The second return value (error) is nil because the *communication* was successful.
+		// The frontend should check the Status field of the returned object.
+		return &finalResponse, nil
+	}
 	runtime.EventsEmit(a.ctx, "finished")
-    return &finalResponse, nil
+	return &finalResponse, nil
+}
+
+func (a *App) SetDavinciPlayhead(timecode string) (bool, error) {
+	if !a.pythonReady {
+		return false, fmt.Errorf("python backend not ready")
+	}
+	params := map[string]interface{}{
+		"time": timecode,
+	}
+
+	// 3. Send the command and just check the acknowledgement
+	pyResponse, err := a.SendCommandToPython("setPlayhead", params)
+	if err != nil {
+		return false, fmt.Errorf("failed to send 'makeFinalTimeline' command: %w", err)
+	}
+	if pyResponse.Status != "success" {
+		return false, fmt.Errorf("python 'makeFinalTimeline' ack error: %s", pyResponse.Message)
+	}
+
+	if pyResponse.Status != "success" {
+		return false, nil
+	}
+	return true, nil
 }
