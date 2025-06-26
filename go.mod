@@ -1,4 +1,4 @@
-module resocut
+module hushcut
 
 go 1.23
 

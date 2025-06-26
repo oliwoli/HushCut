@@ -69,7 +69,7 @@ jobs:
       - name: Build Wails frontend
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
         with:
-          build-name: hushCut
+          build-name: HushCut
           build-platform: ${{ matrix.platform }}
           package: true
           go-version: '1.22'
@@ -77,7 +77,7 @@ jobs:
       - name: Move Python backend to macOS Resources folder
         if: matrix.label == 'macos'
         run: |
-          RESOURCE_DIR="build/bin/hushCut.app/Contents/Resources"
+          RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
           mkdir -p "$RESOURCE_DIR"
           mv -v build/bin/python_backend "$RESOURCE_DIR/"
 
@@ -95,20 +95,20 @@ jobs:
             mv -v ffmpeg-*/bin/ffmpeg.exe build/bin/
           elif [[ "${{ matrix.label }}" == "macos" ]]; then
             curl -JL -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
-            unzip ffmpeg.zip -d build/bin/hushCut.app/Contents/Resources
-            chmod +x build/bin/hushCut.app/Contents/Resources/ffmpeg
+            unzip ffmpeg.zip -d build/bin/HushCut.app/Contents/Resources
+            chmod +x build/bin/HushCut.app/Contents/Resources/ffmpeg
           fi
 
       - name: Zip bin folder
         if: startsWith(github.ref, 'refs/tags/')
-        run: zip -r hushCut-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
+        run: zip -r HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
-          name: hushCut-${{ github.ref_name }}-${{ matrix.label }}
-          path: hushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
+          name: HushCut-${{ github.ref_name }}-${{ matrix.label }}
+          path: HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
 
   upload-release-assets:
     env:
