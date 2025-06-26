@@ -10,6 +10,8 @@ import { toast } from "sonner";
 
 import {
   CloseApp,
+  DownloadFFmpeg,
+  GetFFmpegStatus,
   GetGoServerPort,
   MixdownCompoundClips,
   ProcessProjectAudio,
@@ -54,13 +56,7 @@ import { DavinciSettings } from "./components/controls/DavinciSettings";
 import { useUiStore } from "./stores/uiStore";
 import { InfoDialog } from "./InfoDialog";
 import Timecode, { FRAMERATE } from "smpte-timecode";
-
-
-// EventsOn("showToast", (data) => {
-//   console.log("Event: showToast", data);
-//   // Simple alert for now, TODO: use nicer shadcn component
-//   alert(`Toast [${data.toastType || "info"}]: ${data.message}`);
-// });
+import { Toaster } from "./components/ui/sonner";
 
 
 
@@ -116,8 +112,15 @@ function supportsRealBackdrop() {
   return applied && applied !== "none";
 }
 
+// EventsOn("ffmpeg:missing", (data) => {
+//   console.log("Event: MISSING FFMPEG", data);
+//   // Simple alert for now, TODO: use nicer shadcn component
+//   alert("missing ffmpeg bljiad");
+// });
 
 function AppContent() {
+
+
   const isBusy = useSyncBusyState(s => s.isBusy);
   const setBusy = useSyncBusyState(s => s.setBusy);
   const currentClipId = useClipStore(s => s.currentClipId);
@@ -305,9 +308,30 @@ function AppContent() {
         if (port && port > 0) {
           console.log("App.tsx: HTTP Server Port received:", port);
           setHttpPort(port); // This will trigger a re-render
-
+          
+          const ffmpegReady = await GetFFmpegStatus();
+          if (!ffmpegReady) {
+            console.log("no ffmpeg!");
+            alert("no ffmpeg!")
+            toast.warning("FFmpeg is missing. Would you like to download it?", {
+              duration: Infinity,
+              action: {
+                label: "Download",
+                onClick: async () => {
+                  toast.info("Downloading FFmpeg...");
+                  try {
+                    await DownloadFFmpeg();
+                    toast.success("FFmpeg downloaded successfully!");
+                  } catch (err) {
+                    toast.error("Failed to download FFmpeg: " + err);
+                  }
+                },
+              },
+            });
+          }
           const pyReady = await GetPythonReadyStatus();
           console.log("App.tsx: Python ready status:", pyReady);
+
         } else {
           console.error(
             "App.tsx: GetGoServerPort() returned an invalid or zero port:",
@@ -348,6 +372,8 @@ function AppContent() {
       if (typeof unsubscribe === "function") unsubscribe();
     };
   }, []);
+
+  
 
   const syncTimeoutRef = useRef<number | null>(null);
   const syncMouseUpListenerRef = useRef<(() => void) | null>(null);
@@ -582,6 +608,7 @@ export default function App() {
   const [showFinalProgress, setShowFinalProgress] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+  
 
   const timeStartedRef = useRef<number | null>(null);
   const timeFinishedRef = useRef<number | null>(null);
@@ -623,10 +650,15 @@ export default function App() {
     });
 
 
+    const off4 = EventsOn("ffmpeg:installed", () => {
+      toast.success("FFmpeg downloaded successfully!");
+    });
+
     return () => {
       off1();
       off2();
       off3();
+      off4();
     };
   }, []);
 
@@ -642,6 +674,7 @@ export default function App() {
           onOpenChange={setShowFinalProgress}
         />
         <InfoDialog open={isInfoDialogOpen} onOpenChange={setInfoDialogOpen} />
+        <Toaster />
       </ClientPortal>
 
       <ClientPortal targetId="title-bar-root">{MemoizedTitleBar}</ClientPortal>

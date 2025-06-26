@@ -14,6 +14,10 @@ export function DetectSilences(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) {
   return window['go']['main']['App']['DetectSilences'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
 }
 
+export function DownloadFFmpeg() {
+  return window['go']['main']['App']['DownloadFFmpeg']();
+}
+
 export function ExecuteAndTrackMixdown(arg1, arg2, arg3) {
   return window['go']['main']['App']['ExecuteAndTrackMixdown'](arg1, arg2, arg3);
 }
@@ -24,6 +28,10 @@ export function GetConfig() {
 
 export function GetCurrentConversionProgress() {
   return window['go']['main']['App']['GetCurrentConversionProgress']();
+}
+
+export function GetFFmpegStatus() {
+  return window['go']['main']['App']['GetFFmpegStatus']();
 }
 
 export function GetGoServerPort() {

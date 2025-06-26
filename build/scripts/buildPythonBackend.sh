@@ -25,6 +25,9 @@ cd "$PROJECT_ROOT"
 echo "Activating Python virtual environment from: $PROJECT_ROOT/python-backend/venv/bin/activate"
 source python-backend/venv/bin/activate
 
+echo "Installing/updating Python dependencies..."
+pip install -r python-backend/requirements.txt
+
 echo "Running PyInstaller with spec file: $PROJECT_ROOT/python-backend/main.spec"
 pyinstaller python-backend/src/main.py -y
 

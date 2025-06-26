@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +39,7 @@ type App struct {
 	pendingMu                sync.Mutex
 	pendingTasks             map[string]chan PythonCommandResponse
 	ffmpegBinaryPath         string
+	hasFfmpeg                bool
 	ffmpegSemaphore          chan struct{}
 	waveformSemaphore        chan struct{}
 	conversionTracker        sync.Map
@@ -77,40 +80,52 @@ type ConversionTracker struct {
 func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
 	platform := runtime.Environment(a.ctx).Platform
 
+	goExecutablePath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("could not get executable path: %w", err)
+	}
+	goExecutableDir := filepath.Dir(goExecutablePath)
+
 	// Adjust binary name for Windows
 	if platform == "windows" {
 		binaryName += ".exe"
 	}
 
 	// Attempt to resolve relative to the Go executable
-	if goExecutablePath, err := os.Executable(); err == nil {
-		goExecutableDir := filepath.Dir(goExecutablePath)
+	var candidatePath string
+	switch platform {
+	case "darwin":
+		// Look in ../Resources/ relative to the executable
+		candidatePath = filepath.Join(goExecutableDir, "..", "Resources", binaryName)
 
-		var candidatePath string
-		switch platform {
-		case "darwin":
-			// Look in ../Resources/ relative to the executable
-			candidatePath = filepath.Join(goExecutableDir, "..", "Resources", binaryName)
+	case "windows", "linux":
+		// Look in the same directory as the executable
+		candidatePath = filepath.Join(goExecutableDir, binaryName)
+	}
 
-		case "windows", "linux":
-			// Look in the same directory as the executable
-			candidatePath = filepath.Join(goExecutableDir, binaryName)
-		}
-
-		if candidatePath != "" {
-			if _, statErr := os.Stat(candidatePath); statErr == nil {
-				return filepath.Abs(candidatePath)
-			}
+	if candidatePath != "" {
+		if _, statErr := os.Stat(candidatePath); statErr == nil {
+			return filepath.Abs(candidatePath)
 		}
 	}
 
 	// Fallbacks if not found relative to executable
 	switch platform {
 	case "darwin":
+		// Fallback for development mode (wails dev)
+		candidatePath = filepath.Join(goExecutableDir, "..", "..", "build", "bin", binaryName)
+		if _, statErr := os.Stat(candidatePath); statErr == nil {
+			return filepath.Abs(candidatePath)
+		}
 		// Fallback: relative to working directory (development mode?)
 		return filepath.Abs(filepath.Join("..", "Resources", binaryName))
 
 	case "windows", "linux":
+		// Fallback for development mode (wails dev)
+		candidatePath = filepath.Join(goExecutableDir, "..", "build", "bin", binaryName)
+		if _, statErr := os.Stat(candidatePath); statErr == nil {
+			return filepath.Abs(candidatePath)
+		}
 		// Fallback: look in current working directory
 		return filepath.Abs(binaryName)
 
@@ -165,27 +180,137 @@ func binaryExists(path string) bool {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
+	// Launch the main initialization logic in a separate goroutine
+	go a.initializeBackendsAndPython()
 	var err error
 	a.ffmpegBinaryPath, err = a.ResolveBinaryPath("ffmpeg")
 	if err != nil || !binaryExists(a.ffmpegBinaryPath) {
 		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 
-		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
-			a.ffmpegBinaryPath = pathInSystem
-			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
-		} else {
-			log.Fatalf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
+		// if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+		// 	a.ffmpegBinaryPath = pathInSystem
+		// 	log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
+		// 	a.hasFfmpeg = true
+		// } else {
+		if true {
+			//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
+			a.hasFfmpeg = false
+			log.Print("no ffmpeg installation")
+			runtime.EventsEmit(a.ctx, "ffmpeg:missing", nil)
 		}
+	} else {
+		a.hasFfmpeg = true
 	}
-
-	// Launch the main initialization logic in a separate goroutine
-	go a.initializeBackendsAndPython()
 
 	// set window always on top
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
 
+}
+
+func (a *App) DownloadFFmpeg() error {
+	platform := runtime.Environment(a.ctx).Platform
+	var url, zipPath, finalBinaryName string
+
+	switch platform {
+	case "darwin":
+		url = "https://github.com/eihab-abdelhafiz/ffmpeg-static/releases/download/b6.1.1-2/ffmpeg-6.1.1-macos-x86-64.zip"
+		zipPath = "ffmpeg-6.1.1-macos-x86-64/ffmpeg"
+		finalBinaryName = "ffmpeg"
+	case "windows":
+		url = "https://github.com/eihab-abdelhafiz/ffmpeg-static/releases/download/b6.1.1-2/ffmpeg-6.1.1-windows-x86-64.zip"
+		zipPath = "ffmpeg-6.1.1-windows-x86-64/ffmpeg.exe"
+		finalBinaryName = "ffmpeg.exe"
+	default:
+		return fmt.Errorf("unsupported platform for ffmpeg download: %s", platform)
+	}
+
+	// Get the directory of the executable
+	goExecutablePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("could not get executable path: %w", err)
+	}
+	goExecutableDir := filepath.Dir(goExecutablePath)
+
+	var resourceDir string
+	switch platform {
+	case "darwin":
+		resourceDir = filepath.Join(goExecutableDir, "..", "Resources")
+	case "windows", "linux":
+		resourceDir = goExecutableDir
+	}
+
+	// Create the resource directory if it doesn't exist
+	if err := os.MkdirAll(resourceDir, 0755); err != nil {
+		return fmt.Errorf("could not create resource directory: %w", err)
+	}
+
+	finalBinaryPath := filepath.Join(resourceDir, finalBinaryName)
+
+	// Download the zip file
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("could not download ffmpeg: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Create a temporary file to store the zip
+	tmpFile, err := os.CreateTemp("", "ffmpeg-*.zip")
+	if err != nil {
+		return fmt.Errorf("could not create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Write the downloaded content to the temp file
+	_, err = io.Copy(tmpFile, resp.Body)
+	if err != nil {
+		return fmt.Errorf("could not write to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Open the zip file for reading
+	r, err := zip.OpenReader(tmpFile.Name())
+	if err != nil {
+		return fmt.Errorf("could not open zip file: %w", err)
+	}
+	defer r.Close()
+
+	// Find and extract the ffmpeg binary
+	for _, f := range r.File {
+		if f.Name == zipPath {
+			rc, err := f.Open()
+			if err != nil {
+				return fmt.Errorf("could not open file in zip: %w", err)
+			}
+			defer rc.Close()
+
+			outFile, err := os.Create(finalBinaryPath)
+			if err != nil {
+				return fmt.Errorf("could not create output file: %w", err)
+			}
+			defer outFile.Close()
+
+			// Make the file executable
+			if err := os.Chmod(finalBinaryPath, 0755); err != nil {
+				return fmt.Errorf("could not make ffmpeg executable: %w", err)
+			}
+
+			_, err = io.Copy(outFile, rc)
+			if err != nil {
+				return fmt.Errorf("could not copy file from zip: %w", err)
+			}
+
+			// Update the app state
+			a.ffmpegBinaryPath = finalBinaryPath
+			a.hasFfmpeg = true
+			runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("could not find ffmpeg binary in zip file")
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -654,6 +779,10 @@ func (a *App) GetOrGenerateWaveformWithCache(
 
 func (a *App) GetPythonReadyStatus() bool {
 	return a.pythonReady
+}
+
+func (a *App) GetFFmpegStatus() bool {
+	return a.hasFfmpeg
 }
 
 func isValidWav(path string) bool {
