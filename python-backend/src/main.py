@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 import json
+import http
 
 import pprint
 import threading
@@ -62,7 +63,7 @@ from otio_as_bridge import (
 #     restore_clips_from_temp_folder,
 # )
 
-import requests
+
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # GLOBALS
@@ -193,38 +194,56 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
         )
         return False
 
-    url = f"http://localhost:{GO_SERVER_PORT}/msg"  # Your Go endpoint for general messages
-
-    message_data = {"type": message_type, "payload": payload}
+    # Use http.client for sending messages to Go
+    conn = None
     try:
+        conn = http.client.HTTPConnection("localhost", GO_SERVER_PORT, timeout=5)
         headers = {"Content-Type": "application/json"}
 
-        # This is an independent HTTP request from Python to Go
+        # Helper to serialize objects that might not be directly JSON serializable
         def fallback_serializer(obj):
             if hasattr(obj, "__dict__"):
                 return obj.__dict__
-            return "<BMDObject>"
+            return str(obj) # Fallback to string representation
 
-        response = requests.post(
-            url,
-            data=json.dumps(message_data, default=fallback_serializer),
-            headers=headers,
-            params={"task_id": task_id},
-            timeout=5,
-        )  # 5s timeout
-        response.raise_for_status()
+        # Construct the message as expected by the Go backend
+        go_message = {
+            "Type": message_type,
+            "Payload": payload
+        }
+        json_payload = json.dumps(go_message, default=fallback_serializer)
+        
+        path = f"/msg?task_id={task_id}" if task_id else "/msg"
+        conn.request("POST", path, body=json_payload, headers=headers)
+        response = conn.getresponse()
+
+        if response.status >= 200 and response.status < 300:
+            print(
+                f"Python (to Go): Message type '{message_type}' sent. Task id: {task_id}. Go responded: {response.status}",
+                flush=True,
+            )
+            return True
+        else:
+            print(
+                f"Python (to Go): Error sending message type '{message_type}'. Go responded with status {response.status}: {response.read().decode()}",
+                flush=True,
+            )
+            return False
+    except http.client.HTTPException as e:
         print(
-            f"Python (to Go): Message type '{message_type}' sent. Task id: {task_id}. Go responded: {response.status_code}",
+            f"Python (to Go): HTTP error sending message type '{message_type}': {e}",
             flush=True,
         )
-        return True
-    except requests.exceptions.RequestException as e:
-        print(
-            f"Python (to Go): Error sending message type '{message_type}': {e}",
-            flush=True,
-        )
-        # print(f"Payload: {payload}")
         return False
+    except Exception as e:
+        print(
+            f"Python (to Go): General error sending message type '{message_type}': {e}",
+            flush=True,
+        )
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 
 def resolve_import_error_msg(e: Exception, task_id: str = "") -> None:
@@ -1694,50 +1713,22 @@ def find_item_folder_by_id(item_id: str) -> Any | None:
     return _recursive_find_item_in_folder(root_folder, item_id)
 
 
-def signal_go_ready(go_server_port: int):
+# Add this new global event
+go_server_ready_event = threading.Event()
+
+def wait_for_go_ready(go_server_port: int) -> bool:
     """
-    Sends an HTTP request to the Go server to signal readiness.
-    Retries a few times in case the Go server isn't immediately available.
+    Waits for the Go server to signal its readiness by successfully connecting to its /ready endpoint.
     """
-    # This URL must match the endpoint defined in your Go server's LaunchHttpServer
-    ready_url = f"http://localhost:{go_server_port}/ready"
-    max_retries = 5
-    retry_delay_seconds = 2
-
-    print(f"Python Backend: Attempting to signal Go server at {ready_url}", flush=True)
-
-    for attempt in range(max_retries):
-        try:
-            # Using GET, but POST would also work based on your Go handler
-            response = requests.get(
-                ready_url, timeout=10
-            )  # 10-second timeout for the request
-            response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-            print(
-                f"Python Backend: Successfully signaled Go server. Status: {response.status_code}",
-                flush=True,
-            )
-            print(f"Python Backend: Go server response: {response.text}", flush=True)
-            return True
-        except requests.exceptions.RequestException as e:
-            print(
-                f"Python Backend: Error signaling Go (attempt {attempt + 1}/{max_retries}): {e}",
-                flush=True,
-            )
-            if attempt < max_retries - 1:
-                print(
-                    f"Python Backend: Retrying in {retry_delay_seconds} seconds...",
-                    flush=True,
-                )
-                sleep(retry_delay_seconds)
-            else:
-                print(
-                    f"Python Backend: Failed to signal Go server after {max_retries} attempts.",
-                    flush=True,
-                )
-                return False
-    return False  # Should not be reached if max_retries > 0
-
+    print(f"Python Backend: Waiting for Go server to register...", flush=True)
+    # Wait for the event to be set by the /register endpoint
+    event_was_set = go_server_ready_event.wait(timeout=25) # 25 second timeout
+    if not event_was_set:
+        print("Python Backend: Timed out waiting for Go server to register.", flush=True)
+        return False
+    
+    print("Python Backend: Go server has registered.", flush=True)
+    return True
 
 class PythonCommandHandler(BaseHTTPRequestHandler):
     def _send_json_response(self, status_code, data_dict):
@@ -1747,6 +1738,25 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data_dict).encode("utf-8"))
 
     def do_POST(self):
+        global GO_SERVER_PORT
+        if self.path == "/register":
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                port = data.get("go_server_port")
+                if port:
+                    GO_SERVER_PORT = port
+                    print(f"Python Command Server: Registered Go server on port {port}", flush=True)
+                    self._send_json_response(200, {"status": "success", "message": "Go server registered."})
+                    go_server_ready_event.set() # Signal that Go is ready
+                else:
+                    self._send_json_response(400, {"status": "error", "message": "Missing 'go_server_port' in request."})
+            except json.JSONDecodeError:
+                self._send_json_response(400, {"status": "error", "message": "Invalid JSON."})
+            return
+        
+        # ... (rest of the do_POST method is unchanged)
         global MAKE_NEW_TIMELINE
         if not self.path == "/command":
             self._send_json_response(
@@ -1906,15 +1916,17 @@ def init():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-gp", "--go-port", type=int
+        "-gp", "--go-port", type=int, default=8080
     )  # port to communicate with http server
     parser.add_argument(
-        "-lp", "--listen-on-port", type=int
+        "-lp", "--listen-on-port", type=int, default=8081
     )  # port to receive commands from go
     parser.add_argument("--auth-token", type=str)  # authorization token
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("-s", "--sync", action="store_true")
     parser.add_argument("--standalone", action="store_true")
+    parser.add_argument("--launch-go", action="store_true", help="Launch the Go Wails application after Python backend starts.")
+    parser.add_argument("--wails-dev", action="store_true", help="Launch the Go Wails application in development mode (wails dev).")
     args = parser.parse_args()
 
     GO_SERVER_PORT = args.go_port
@@ -1947,19 +1959,79 @@ def init():
 
     # Perform other Python initializations...
     print("Python Backend: Internal initialization complete.", flush=True)
+        
+    if args.wails_dev:
+        print("Python Backend: Launching Go Wails application in development mode...", flush=True)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-    if not signal_go_ready(args.go_port):
-        print(
-            "Python Backend: CRITICAL - Could not signal main readiness to Go application.",
-            flush=True,
-        )
-        # Consider how to handle this - maybe try to stop the command_server_thread or sys.exit(1)
+        # Check if 'wails' command is available
+        try:
+            subprocess.run(["wails", "version"], check=True, capture_output=True)
+        except FileNotFoundError:
+            print("Python Backend: Error: 'wails' command not found. Please ensure Wails CLI is installed and in your system's PATH.", flush=True)
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            print(f"Python Backend: Error running 'wails version': {e.stdout.decode()}{e.stderr.decode()}", flush=True)
+            sys.exit(1)
+
+        # Pass the Python command port via an environment variable for wails dev
+        env = os.environ.copy()
+        env["WAILS_PYTHON_PORT"] = str(args.listen_on_port)
+        wails_dev_command = ["wails", "dev"]
+        try:
+            # Use Popen to run in the background and not block the Python script
+            # Capture stdout/stderr to help diagnose issues
+            process = subprocess.Popen(wails_dev_command, cwd=project_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            print(f"Python Backend: 'wails dev' launched with command: {wails_dev_command} in {project_root}", flush=True)
+
+            # Read and print output in a non-blocking way (for debugging)
+            def read_output(pipe, prefix):
+                for line in pipe:
+                    print(f"[{prefix}] {line.strip()}", flush=True)
+
+            threading.Thread(target=read_output, args=(process.stdout, "WAILS_STDOUT"), daemon=True).start()
+            threading.Thread(target=read_output, args=(process.stderr, "WAILS_STDERR"), daemon=True).start()
+
+            # Go application registers with Python, so no need for Python to wait for Go or signal back.
+            # The Python command server is already running and listening for Go's registration.
+            print("Python Backend: Go application launch initiated. Waiting for Go to register.", flush=True)
+
+        except Exception as e:
+            print(f"Python Backend: Error launching 'wails dev': {e}", flush=True)
     else:
-        print(
-            "Python Backend: Successfully signaled main readiness to Go application.",
-            flush=True,
-        )
+        print("Python Backend: Launching Go Wails application...", flush=True)
+        go_app_path = ""
+        if sys.platform.startswith("darwin"):
+            # For macOS, check both the .app bundle path (production) and direct executable path (development)
+            app_bundle_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut.app", "Contents", "MacOS", "HushCut"))
+            dev_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut"))
+            print(f"Python Backend: Checking app bundle path: {app_bundle_path}", flush=True)
+            if os.path.exists(app_bundle_path):
+                print("Python Backend: App bundle path exists.", flush=True)
+                go_app_path = app_bundle_path
+            else:
+                print("Python Backend: App bundle path does NOT exist.", flush=True)
+            
+            print(f"Python Backend: Checking dev path: {dev_path}", flush=True)
+            if os.path.exists(dev_path):
+                print("Python Backend: Dev path exists.", flush=True)
+                go_app_path = dev_path
+            else:
+                print("Python Backend: Dev path does NOT exist.", flush=True)
+        elif sys.platform.startswith("win"):
+            go_app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut.exe"))
+        elif sys.platform.startswith("linux"):
+            go_app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut"))
 
+        if not os.path.exists(go_app_path):
+            print(f"Python Backend: Error: Go Wails application not found at {go_app_path}", flush=True)
+        else:
+            go_command = [go_app_path, f"--python-port={args.listen_on_port}"]
+            try:
+                subprocess.Popen(go_command)
+                print(f"Python Backend: Go Wails application launched with command: {go_command}", flush=True)
+            except Exception as e:
+                print(f"Python Backend: Error launching Go Wails application: {e}", flush=True)
     print(
         "Python Backend: Running. Command server is active in a background thread.",
         flush=True,

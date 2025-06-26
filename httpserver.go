@@ -166,7 +166,7 @@ func findFreePort() (int, error) {
 // initializes and starts the HTTP server in a goroutine.
 // It sets the global actualPort and serverListenAddress if successful.
 // Returns an error if listener setup fails.
-func (a *App) LaunchHttpServer(pythonRdyChan chan bool) error {
+func (a *App) LaunchHttpServer() error {
 	targetFolderName := "wav_files"
 
 	var audioFolderPath string
@@ -215,17 +215,7 @@ func (a *App) LaunchHttpServer(pythonRdyChan chan bool) error {
 			return
 		}
 		log.Println("HTTP Server: Received ready signal from Python backend.")
-		if pythonRdyChan != nil {
-			select {
-			case pythonRdyChan <- true:
-				log.Println("HTTP Server: Notified main app that Python is ready.")
-			default:
-				log.Println("HTTP Server Warning: Python ready channel was full or signal already sent.")
-			}
-		} else {
-			// This case should ideally not happen if LaunchHttpServer is called correctly.
-			log.Println("HTTP Server Error: pythonReadyChan (for signaling app) is nil.")
-		}
+		a.pythonReadyChan <- true
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Go server acknowledges Python backend readiness.")
 	}

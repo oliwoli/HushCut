@@ -58,8 +58,8 @@ export function GetWaveform(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['GetWaveform'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
-export function LaunchHttpServer(arg1) {
-  return window['go']['main']['App']['LaunchHttpServer'](arg1);
+export function LaunchHttpServer() {
+  return window['go']['main']['App']['LaunchHttpServer']();
 }
 
 export function LaunchPythonBackend(arg1, arg2) {

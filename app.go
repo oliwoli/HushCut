@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -211,106 +210,146 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) DownloadFFmpeg() error {
 	platform := runtime.Environment(a.ctx).Platform
-	var url, zipPath, finalBinaryName string
+	var url string
+	var finalBinaryName string
+	var extractCmd *exec.Cmd
+	var tempDir string
 
-	switch platform {
-	case "darwin":
-		url = "https://github.com/eihab-abdelhafiz/ffmpeg-static/releases/download/b6.1.1-2/ffmpeg-6.1.1-macos-x86-64.zip"
-		zipPath = "ffmpeg-6.1.1-macos-x86-64/ffmpeg"
-		finalBinaryName = "ffmpeg"
-	case "windows":
-		url = "https://github.com/eihab-abdelhafiz/ffmpeg-static/releases/download/b6.1.1-2/ffmpeg-6.1.1-windows-x86-64.zip"
-		zipPath = "ffmpeg-6.1.1-windows-x86-64/ffmpeg.exe"
-		finalBinaryName = "ffmpeg.exe"
-	default:
-		return fmt.Errorf("unsupported platform for ffmpeg download: %s", platform)
-	}
-
-	// Get the directory of the executable
 	goExecutablePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("could not get executable path: %w", err)
 	}
 	goExecutableDir := filepath.Dir(goExecutablePath)
 
-	var resourceDir string
+	var installDir string
 	switch platform {
 	case "darwin":
-		resourceDir = filepath.Join(goExecutableDir, "..", "Resources")
-	case "windows", "linux":
-		resourceDir = goExecutableDir
+		url = "https://evermeet.cx/ffmpeg/getrelease/zip"
+		finalBinaryName = "ffmpeg"
+		installDir = filepath.Join(goExecutableDir, "..", "Resources")
+	case "windows":
+		url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
+		finalBinaryName = "ffmpeg.exe"
+		installDir = goExecutableDir
+	case "linux":
+		url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+		finalBinaryName = "ffmpeg"
+		installDir = goExecutableDir
+	default:
+		return fmt.Errorf("unsupported platform for ffmpeg download: %s", platform)
 	}
 
-	// Create the resource directory if it doesn't exist
-	if err := os.MkdirAll(resourceDir, 0755); err != nil {
-		return fmt.Errorf("could not create resource directory: %w", err)
+	// Create install directory if it doesn't exist
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		return fmt.Errorf("could not create install directory: %w", err)
 	}
 
-	finalBinaryPath := filepath.Join(resourceDir, finalBinaryName)
+	// Create a temporary directory for download and extraction
+	tempDir, err = os.MkdirTemp("", "ffmpeg-download-")
+	if err != nil {
+		return fmt.Errorf("could not create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir) // Clean up temp directory
 
-	// Download the zip file
+	downloadPath := filepath.Join(tempDir, filepath.Base(url))
+
+	// Download the file
+	log.Printf("Downloading FFmpeg from %s to %s", url, downloadPath)
 	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("could not download ffmpeg: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Create a temporary file to store the zip
-	tmpFile, err := os.CreateTemp("", "ffmpeg-*.zip")
+	out, err := os.Create(downloadPath)
 	if err != nil {
-		return fmt.Errorf("could not create temp file: %w", err)
+		return fmt.Errorf("could not create download file: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer out.Close()
 
-	// Write the downloaded content to the temp file
-	_, err = io.Copy(tmpFile, resp.Body)
+	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		return fmt.Errorf("could not write to temp file: %w", err)
+		return fmt.Errorf("could not write download to file: %w", err)
 	}
-	tmpFile.Close()
+	out.Close() // Close the file before extraction
 
-	// Open the zip file for reading
-	r, err := zip.OpenReader(tmpFile.Name())
-	if err != nil {
-		return fmt.Errorf("could not open zip file: %w", err)
+	// Extract the archive
+	switch platform {
+	case "darwin":
+		extractCmd = exec.Command("unzip", downloadPath, "-d", tempDir)
+	case "windows":
+		// Assuming 7z is available in PATH or bundled.
+		// For a production app, consider embedding a 7z Go library or ensuring 7z is present.
+		extractCmd = exec.Command("7z", "x", downloadPath, "-o"+tempDir)
+	case "linux":
+		extractCmd = exec.Command("tar", "-xf", downloadPath, "-C", tempDir)
 	}
-	defer r.Close()
 
-	// Find and extract the ffmpeg binary
-	for _, f := range r.File {
-		if f.Name == zipPath {
-			rc, err := f.Open()
-			if err != nil {
-				return fmt.Errorf("could not open file in zip: %w", err)
+	log.Printf("Extracting FFmpeg with command: %v", extractCmd.Args)
+	extractCmd.Stdout = os.Stdout
+	extractCmd.Stderr = os.Stderr
+	if err := extractCmd.Run(); err != nil {
+		return fmt.Errorf("failed to extract ffmpeg archive: %w", err)
+	}
+
+	// Find the extracted ffmpeg binary and move it to the install directory
+	var extractedFfmpegPath string
+	switch platform {
+	case "darwin":
+		extractedFfmpegPath = filepath.Join(tempDir, finalBinaryName)
+	case "windows":
+		// Find the ffmpeg.exe inside the extracted folder (e.g., ffmpeg-xxxx/bin/ffmpeg.exe)
+		// This requires listing directory contents.
+		entries, err := os.ReadDir(tempDir)
+		if err != nil {
+			return fmt.Errorf("failed to read temp directory after 7z extraction: %w", err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "ffmpeg-") {
+				extractedFfmpegPath = filepath.Join(tempDir, entry.Name(), "bin", finalBinaryName)
+				break
 			}
-			defer rc.Close()
-
-			outFile, err := os.Create(finalBinaryPath)
-			if err != nil {
-				return fmt.Errorf("could not create output file: %w", err)
+		}
+		if extractedFfmpegPath == "" {
+			return fmt.Errorf("could not find ffmpeg.exe in extracted windows archive")
+		}
+	case "linux":
+		// Find the ffmpeg binary inside the extracted folder (e.g., ffmpeg-release-amd64-static/ffmpeg)
+		entries, err := os.ReadDir(tempDir)
+		if err != nil {
+			return fmt.Errorf("failed to read temp directory after tar extraction: %w", err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "ffmpeg-") {
+				extractedFfmpegPath = filepath.Join(tempDir, entry.Name(), finalBinaryName)
+				break
 			}
-			defer outFile.Close()
-
-			// Make the file executable
-			if err := os.Chmod(finalBinaryPath, 0755); err != nil {
-				return fmt.Errorf("could not make ffmpeg executable: %w", err)
-			}
-
-			_, err = io.Copy(outFile, rc)
-			if err != nil {
-				return fmt.Errorf("could not copy file from zip: %w", err)
-			}
-
-			// Update the app state
-			a.ffmpegBinaryPath = finalBinaryPath
-			a.hasFfmpeg = true
-			runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
-
-			return nil
+		}
+		if extractedFfmpegPath == "" {
+			return fmt.Errorf("could not find ffmpeg in extracted linux archive")
 		}
 	}
 
-	return fmt.Errorf("could not find ffmpeg binary in zip file")
+	finalBinaryPath := filepath.Join(installDir, finalBinaryName)
+	log.Printf("Moving FFmpeg from %s to %s", extractedFfmpegPath, finalBinaryPath)
+	if err := os.Rename(extractedFfmpegPath, finalBinaryPath); err != nil {
+		return fmt.Errorf("failed to move ffmpeg binary: %w", err)
+	}
+
+	// Make the file executable
+	if platform != "windows" { // Windows doesn't need explicit chmod for executables
+		if err := os.Chmod(finalBinaryPath, 0755); err != nil {
+			return fmt.Errorf("could not make ffmpeg executable: %w", err)
+		}
+	}
+
+	// Update the app state
+	a.ffmpegBinaryPath = finalBinaryPath
+	a.hasFfmpeg = true
+	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
+
+	log.Println("FFmpeg download and installation complete.")
+	return nil
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -352,13 +391,14 @@ func (a *App) initializeBackendsAndPython() {
 	log.Println("Go Routine: Starting backend initialization...")
 
 	// 1. Launch Go's HTTP Server
-	if err := a.LaunchHttpServer(a.pythonReadyChan); err != nil {
+	if err := a.LaunchHttpServer(); err != nil {
 		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Go HTTP server: %v", err)
 		log.Println("Go Routine: " + errMsg)
-		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg) // Notify frontend
+		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
 		return
 	}
 	log.Println("Go Routine: Go HTTP server launch sequence initiated.")
+	runtime.EventsEmit(a.ctx, "go:ready", nil)
 
 	goHTTPServerPort := a.GetGoServerPort()
 	if goHTTPServerPort == 0 {
@@ -368,44 +408,76 @@ func (a *App) initializeBackendsAndPython() {
 		return
 	}
 
-	// 2. Determine port for Python's command server
-	pythonCmdPort, err := findFreePort()
-	if err != nil {
-		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to find free port for Python command server: %v", err)
-		log.Println("Go Routine: " + errMsg)
-		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
-		return
-	}
-	a.pythonCommandPort = pythonCmdPort
-	log.Printf("Go Routine: Python command server will use port: %d", a.pythonCommandPort)
-
-	// 3. Launch Python Backend
-	if err := a.LaunchPythonBackend(goHTTPServerPort, a.pythonCommandPort); err != nil {
-		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Python backend: %v", err)
-		log.Println("Go Routine: " + errMsg)
-		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
-		return
-	}
-	log.Println("Go Routine: Python backend launch sequence initiated.")
-
-	// 4. Wait for Python's initial "ready" signal (Python-to-Go)
-	pythonReadinessTimeout := 30 * time.Second
-	log.Printf("Go Routine: Waiting up to %s for Python to signal readiness...", pythonReadinessTimeout)
-
-	select {
-	case <-a.pythonReadyChan:
-		log.Println("Go Routine: Python backend has signaled it is ready.")
+	// 2. Determine if Python is already running (dev mode)
+	if a.pythonCommandPort != 0 {
+		log.Printf("Go Routine: Python command server detected on port: %d", a.pythonCommandPort)
+		if err := a.registerWithPython(goHTTPServerPort); err != nil {
+			errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to register with Python: %v", err)
+			log.Println("Go Routine: " + errMsg)
+			runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+			return
+		}
 		a.pythonReady = true
 		runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": true})
-	case <-time.After(pythonReadinessTimeout):
-		log.Printf("Go Routine Warning: Timed out waiting for Python backend readiness.")
-		a.pythonReady = false
-		runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": false, "error": "timeout"})
-	case <-a.ctx.Done(): // Main application context cancelled
-		log.Println("Go Routine: Application shutdown requested during Python ready wait.")
-		return
+	} else {
+		// Python is not running, launch it for production
+		pythonCmdPort, err := findFreePort()
+		if err != nil {
+			errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to find free port for Python: %v", err)
+			log.Println("Go Routine: " + errMsg)
+			runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+			return
+		}
+		a.pythonCommandPort = pythonCmdPort
+
+		if err := a.LaunchPythonBackend(goHTTPServerPort, a.pythonCommandPort); err != nil {
+			errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Python backend: %v", err)
+			log.Println("Go Routine: " + errMsg)
+			runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+			return
+		}
+
+		// Wait for Python's registration signal
+		select {
+		case <-a.pythonReadyChan:
+			log.Println("Go Routine: Python backend has registered successfully.")
+			a.pythonReady = true
+			runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": true})
+		case <-time.After(30 * time.Second):
+			log.Printf("Go Routine Warning: Timed out waiting for Python registration.")
+			a.pythonReady = false
+		case <-a.ctx.Done():
+			log.Println("Go Routine: Application shutdown requested during Python wait.")
+			return
+		}
 	}
 	log.Println("Go Routine: Backend initialization complete.")
+}
+
+func (a *App) registerWithPython(goPort int) error {
+	registrationURL := fmt.Sprintf("http://localhost:%d/register", a.pythonCommandPort)
+	payload := map[string]int{"go_server_port": goPort}
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal registration payload: %w", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		resp, err := http.Post(registrationURL, "application/json", bytes.NewBuffer(jsonPayload))
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				log.Printf("Successfully registered with Python at %s", registrationURL)
+				return nil
+			}
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("Python registration failed with status %d: %s", resp.StatusCode, string(body))
+		} else {
+			log.Printf("Attempt %d: Could not connect to Python at %s: %v", i+1, registrationURL, err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("failed to register with Python after multiple attempts")
 }
 
 // GetConfig reads config.json. Creates it with defaults if it doesn't exist.

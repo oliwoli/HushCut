@@ -3,8 +3,10 @@ package main
 import (
 	"embed"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
@@ -70,10 +72,18 @@ func (h *FileLoader) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 var icon []byte
 
 func main() {
-	// Serve the frontend assets
-
 	// Create an instance of the app structure
 	app := NewApp()
+
+	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)
+	if pythonPortStr := os.Getenv("WAILS_PYTHON_PORT"); pythonPortStr != "" {
+		if p, err := strconv.Atoi(pythonPortStr); err == nil {
+			app.pythonCommandPort = p
+			log.Printf("Go App: Received Python port from environment variable: %d", app.pythonCommandPort)
+		} else {
+			log.Printf("Go App: Could not parse WAILS_PYTHON_PORT environment variable: %v", err)
+		}
+	}
 
 	// Create application with options
 	err := wails.Run(&options.App{
