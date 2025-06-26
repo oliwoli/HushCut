@@ -1,13 +1,12 @@
 import React from "react";
-import { scan } from "react-scan";
-scan({
-  enabled: true,
-});
+// import { scan } from "react-scan";
+// scan({
+//   enabled: true,
+// });
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import deepEqual from "fast-deep-equal";
 import { toast } from "sonner";
-import { timecodeToFrame } from "@/lib/utils";
 
 import {
   CloseApp,
@@ -37,6 +36,7 @@ import {
   defaultParameters,
   useClipStore,
   useGlobalStore,
+  useTimecodeStore,
 } from "@/stores/clipStore";
 import { SilenceControls } from "./components/controls/SilenceControls";
 import {
@@ -125,10 +125,13 @@ function AppContent() {
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
 
-  const projectData = useGlobalStore((s) => s.projectData);
-  const setTimecode = useGlobalStore((s) => s.setTimecode);
-  const setProjectData = useGlobalStore((s) => s.setProjectData);
-  const currTimecode = useGlobalStore(s => s.timecode);
+  //const projectData = useGlobalStore((s) => s.projectData);
+  const [projectData, setProjectData] =
+    useState<main.ProjectDataPayload | null>(null);
+
+  const setTimecode = useTimecodeStore((s) => s.setTimecode);
+  //const setProjectData = useTimecodeStore((s) => s.setProjectData);
+  const currTimecode = useTimecodeStore(s => s.timecode);
   const audioItems = projectData?.timeline?.audio_track_items || [];
   const timelineFps = projectData?.timeline?.fps || 30;
 
@@ -432,8 +435,10 @@ function AppContent() {
         <main className="flex-1 gap-8 max-w-screen select-none space-y-0">
           {currentActiveClip?.id && (
             <FileSelector
+              audioItems={projectData?.timeline.audio_track_items}
               currentFileId={currentClipId}
               onFileChange={handleAudioClipSelection}
+              fps={projectData?.timeline.fps}
               disabled={
                 !httpPort ||
                 !projectData?.timeline?.audio_track_items ||
@@ -571,7 +576,8 @@ export default function App() {
   };
 
   const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
-  const { isInfoDialogOpen, setInfoDialogOpen } = useUiStore();
+  const isInfoDialogOpen = useUiStore((state) => state.isInfoDialogOpen);
+  const setInfoDialogOpen = useUiStore((state) => state.setInfoDialogOpen);
 
   const [showFinalProgress, setShowFinalProgress] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);

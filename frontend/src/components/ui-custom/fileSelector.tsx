@@ -1,13 +1,12 @@
 // ./components/ui/fileSelector.tsx
-import React, { useState, useEffect, useMemo, WheelEvent, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { cn, frameToTimecode } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { EventsOn } from "@wails/runtime/runtime";
 import { Progress } from "../ui/progress";
-import { AlignJustifyIcon, AudioLinesIcon, LayersIcon, Rows2Icon } from "lucide-react";
-import { useGlobalStore } from "@/stores/clipStore";
+import { AlignJustifyIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -64,8 +63,6 @@ const ClipLinkIcon = ({ className }: { className?: string }) => (
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path>
   </svg>
 );
-const MIN_DB = -60; // Define a floor for silence
-const MAX_DB = 0
 const TARGET_PEAK_COUNT = 64;
 const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related audio
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
@@ -223,21 +220,24 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
 };
 
 interface FileSelectorProps {
-  currentFileId: string | null;
+  audioItems: main.TimelineItem[] | null | undefined; currentFileId: string | null;
   onFileChange: (selectedItemId: string) => void;
   disabled?: boolean;
   className?: string;
+  fps?: number;
 }
 
 const _FileSelector: React.FC<FileSelectorProps> = ({
+  audioItems,
   currentFileId,
   onFileChange,
+  fps,
   disabled,
   className,
 }) => {
-  const projectData = useGlobalStore(s => s.projectData);
-  const audioItems = projectData?.timeline?.audio_track_items || [];
-  const fps = projectData?.timeline?.fps || 30;
+  //const projectData = useGlobalStore(s => s.projectData);
+  //const audioItems = projectData?.timeline?.audio_track_items || [];
+  //const fps = projectData?.timeline?.fps || 30;
 
   const sortedItems = useMemo(() => {
     if (!audioItems || audioItems.length === 0) return [];

@@ -5,33 +5,45 @@ import { useCallback, useMemo } from 'react';
 import deepEqual from 'fast-deep-equal';
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { main } from "@wails/go/models";
-import Timecode, { TimecodeInstance } from "smpte-timecode";
+import { TimecodeInstance } from "smpte-timecode";
 
 
 interface GlobalStore {
-  projectData: main.ProjectDataPayload | null;
-  timecode: TimecodeInstance | null;
   makeNewTimeline: boolean;
   isThresholdDragging: boolean;
   keepSilence: boolean;
-  setProjectData: (value: main.ProjectDataPayload | null) => void;
-  setTimecode: (value: TimecodeInstance | null) => void;
   setMakeNewTimeline: (value: boolean) => void;
   setIsThresholdDragging: (value: boolean) => void;
   setKeepSilence: (value: boolean) => void;
 }
 
 export const useGlobalStore = create<GlobalStore>((set) => ({
-  projectData: null,
-  timecode: null,
   makeNewTimeline: false,
   isThresholdDragging: false,
   keepSilence: false,
-  setProjectData: (value) => set({ projectData: value }),
-  setTimecode: (value) => set({ timecode: value }),
   setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
   setIsThresholdDragging: (value) => set({ isThresholdDragging: value }),
   setKeepSilence: (value) => set({ keepSilence: value})
+}));
+
+interface TimecodeStore {
+  timecode: TimecodeInstance | null;
+  setTimecode: (value: TimecodeInstance | null) => void;
+}
+
+export const useTimecodeStore = create<TimecodeStore>((set) => ({
+  timecode: null,
+  setTimecode: (value) => set({ timecode: value }),
+}));
+
+interface ProjectDataStore {
+  projectData: main.ProjectDataPayload | null;
+  setProjectData: (value: main.ProjectDataPayload | null) => void;
+}
+
+export const useTProjectDataStore = create<ProjectDataStore>((set) => ({
+  projectData: null,
+  setProjectData: (value) => set({ projectData: value }),
 }));
 
 

@@ -3,10 +3,10 @@ import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
-import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js"; // 1. Import Minimap
+import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js";
 import ZoomPlugin from "wavesurfer.js/dist/plugins/zoom.esm.js";
 
-import { useClipParameter, useGlobalStore } from "@/stores/clipStore";
+import { useClipParameter, useGlobalStore, useTimecodeStore } from "@/stores/clipStore";
 
 import { ActiveClip } from "@/types";
 import { useSilenceData } from "@/hooks/useSilenceData";
@@ -51,6 +51,37 @@ interface SilencePeriod {
   end: number;
 }
 
+
+interface TimecodeDisplayProps {
+  time: number;
+  duration: number;
+  frameRate: number;
+}
+
+export const TimecodeDisplay: React.FC<TimecodeDisplayProps> = React.memo(({
+  time,
+  duration,
+  frameRate,
+}) => {
+  // Determine if the hour format is needed based on the total duration
+  const showHours = duration >= 3600;
+
+  // Format the current time and total duration
+  const formattedTime = formatAudioTime(time, frameRate, showHours);
+  const formattedDuration = formatAudioTime(duration, frameRate, showHours);
+
+  return (
+    <span className="ml-2 flex gap-1.5 pt-1 text-xs font-mono tracking-tighter text-gray-400/80 mb-[3px]">
+      <span>{formattedTime}</span>
+      <span>/</span>
+      <span>{formattedDuration}</span>
+    </span>
+  );
+});
+
+TimecodeDisplay.displayName = "TimecodeDisplay";
+
+
 interface WaveformPlayerProps {
   activeClip: ActiveClip | null;
   projectFrameRate?: number | 30.0;
@@ -66,8 +97,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     // You can return a placeholder here if you want, e.g., <div>Select a clip</div>
     return null;
   }
-
-  //const projectData = useGlobalStore((s) => s.projectData);
 
   const { peakData, cutAudioSegmentUrl } = useWaveformData(
     activeClip,
@@ -99,8 +128,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   const duration = peakData?.duration || 0;
 
-  const currTimecode = useGlobalStore((s) => s.timecode);
-  //const setTimecode = useGlobalStore((s) => s.setTimecode);
+  const currTimecode = useTimecodeStore((s) => s.timecode);
+  const setTimecode = useTimecodeStore((s) => s.setTimecode);
   const clipFrameDuration =
     activeClip.sourceEndFrame - activeClip.sourceStartFrame;
   const maxTimecode = Timecode(
@@ -109,113 +138,113 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     false
   );
 
-  // update the player time if timecode fits
-  // useEffect(() => {
-  //   if (!wavesurferRef.current || !currTimecode) return;
-  //   if (currTimecode.frameCount < maxTimecode.frameCount) {
-  //     console.log("curr timecode: ", currTimecode);
-  //     //const currTime = (currTimelineFrameRefTC.frameCount - activeClip.startFrame) / projectFrameRate;
-  //     const clipTime =
-  //       (currTimecode.frameCount - activeClip.startFrame) / projectFrameRate;
-  //     console.log("we can use the timecode! ", clipTime);
-  //     currentTimeRef.current = clipTime;
-  //     setDisplayedTime(clipTime);
-  //     wavesurferRef.current?.setTime(clipTime);
-  //   }
-  // }, [currTimecode]);
+  //update the player time if timecode fits
+  useEffect(() => {
+    if (!wavesurferRef.current || !currTimecode) return;
+    if (currTimecode.frameCount < maxTimecode.frameCount) {
+      console.log("curr timecode: ", currTimecode);
+      //const currTime = (currTimelineFrameRefTC.frameCount - activeClip.startFrame) / projectFrameRate;
+      const clipTime =
+        (currTimecode.frameCount - activeClip.startFrame) / projectFrameRate;
+      console.log("we can use the timecode! ", clipTime);
+      currentTimeRef.current = clipTime;
+      setDisplayedTime(clipTime);
+      wavesurferRef.current?.setTime(clipTime);
+    }
+  }, [currTimecode]);
 
   const currentTimeRef = useRef(0);
   const [displayedTime, setDisplayedTime] = useState(0);
 
   const currTimelineFrameRef = useRef<number | null>(null);
+  const lastRenderedFrameRef = useRef(-1);
+
+
   const lastTimecodeRef = useRef<string | null>(null);
   const lastCallTimeRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
+  const isUpdatingRef = useRef(false);
+  const cooldown = 125; // ms
 
-  const cooldown = 9000; // ms
+  // 1) Update the “current frame” ref in real time (always, even during playback)
+  useEffect(() => {
+    if (isLoading || displayedTime == null) return;
+    const frame =
+      secToFrames(displayedTime, projectFrameRate) + activeClip.startFrame;
+    currTimelineFrameRef.current = frame;
+  }, [displayedTime, isLoading, projectFrameRate, activeClip.startFrame]);
 
-  // // 1) Update the “current frame” ref in real time (always, even during playback)
-  // useEffect(() => {
-  //   if (isLoading || displayedTime == null) return;
-  //   const frame =
-  //     secToFrames(displayedTime, projectFrameRate) + activeClip.startFrame;
-  //   currTimelineFrameRef.current = frame;
-  // }, [displayedTime, isLoading, projectFrameRate, activeClip.startFrame]);
+  // 2) Cooldown-style throttle, but only when paused
+  useEffect(() => {
+    if (isPlaying || isLoading || displayedTime == null) {
+      // If we're playing, loading, or don't have a time, clear any pending timer and exit.
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
 
-  // // 2) Cooldown-style throttle, but only when paused
-  // useEffect(() => {
-  //   // // If we're playing, do nothing (and clear any pending timer)
-  //   if (isPlaying) {
-  //     if (timerRef.current != null) {
-  //       clearTimeout(timerRef.current);
-  //       timerRef.current = null;
-  //     }
-  //     return;
-  //   }
+    const makeUpdate = async () => {
+      // *** FIX 1: Check the lock. If an update is already running, do nothing. ***
+      if (isUpdatingRef.current) return;
 
-  //   // Also don’t run while loading or before we have a time
-  //   if (isLoading || displayedTime == null) {
-  //     return;
-  //   }
+      const f = Math.round(currTimelineFrameRef.current!);
+      const tcStr = Timecode(f, projectFrameRate as FRAMERATE, false).toString();
 
-  //   const now = Date.now();
-  //   const elapsed = now - lastCallTimeRef.current;
-  //   if (elapsed < cooldown) return
+      // No-op if timecode hasn't actually changed
+      if (tcStr === lastTimecodeRef.current) return;
 
-  //   const makeUpdate = async () => {
-  //     const f = Math.round(currTimelineFrameRef.current!);
-  //     const tcStr = Timecode(
-  //       f,
-  //       projectFrameRate as FRAMERATE,
-  //       false
-  //     ).toString();
+      try {
+        // *** FIX 2: Set the lock and update the call time BEFORE the async call. ***
+        isUpdatingRef.current = true;
+        lastCallTimeRef.current = Date.now();
+        lastTimecodeRef.current = tcStr;
 
-  //     // No-op if unchanged
-  //     if (tcStr === lastTimecodeRef.current) return;
+        await SetDavinciPlayhead(tcStr);
 
-  //     lastTimecodeRef.current = tcStr;
+      } catch (err) {
+        console.error("Wails error:", err);
+      } finally {
+        // *** FIX 3: Always release the lock when done. ***
+        isUpdatingRef.current = false;
+      }
+    };
 
-  //     try {
-  //       await SetDavinciPlayhead(tcStr);
-  //     } catch (err) {
-  //       console.error("Wails error:", err);
-  //     } finally {
-  //       lastCallTimeRef.current = Date.now();
-  //     }
-  //   };
+    const now = Date.now();
+    const elapsed = now - lastCallTimeRef.current;
 
-  //   if (elapsed >= cooldown) {
-  //     // Cooldown expired ⇒ fire immediately
-  //     if (timerRef.current != null) {
-  //       clearTimeout(timerRef.current);
-  //       timerRef.current = null;
-  //     }
-  //     makeUpdate();
-  //   } else {
-  //     // Still in cooldown ⇒ (re)start trailing timer
-  //     if (timerRef.current != null) {
-  //       clearTimeout(timerRef.current);
-  //     }
-  //     // timerRef.current = window.setTimeout(() => {
-  //     //   makeUpdate();
-  //     //   timerRef.current = null;
-  //     // }, cooldown - elapsed);
-  //   }
+    // If cooldown has passed, fire immediately.
+    if (elapsed >= cooldown) {
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      makeUpdate();
+    } else {
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+      }
+      timerRef.current = window.setTimeout(() => {
+        makeUpdate();
+        timerRef.current = null;
+      }, cooldown - elapsed);
+    }
 
-  //   // Cleanup on unmount or when deps change
-  //   return () => {
-  //     if (timerRef.current != null) {
-  //       clearTimeout(timerRef.current);
-  //       timerRef.current = null;
-  //     }
-  //   };
-  // }, [
-  //   displayedTime,
-  //   projectFrameRate,
-  //   isLoading,
-  //   activeClip.startFrame,
-  //   isPlaying, // <-- ensure we re-run when play/pause toggles
-  // ]);
+    // Cleanup on unmount or when deps change
+    return () => {
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [
+    displayedTime,
+    projectFrameRate,
+    isLoading,
+    activeClip.startFrame,
+    isPlaying,
+  ]);
 
   const silenceDataRef = useRef(silenceData);
   useEffect(() => {
@@ -353,7 +382,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         event.stopPropagation();
 
         const scrollWrapper = wsInstance.getWrapper();
-        // This guard is important
         if (!scrollWrapper) return;
 
         isPanningRef.current = true;
@@ -362,7 +390,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
         scrollWrapper.style.cursor = "grabbing";
 
-        // 2. ATTACH the global listeners. The handlers are now in scope.
         document.addEventListener("mousemove", handleGlobalMouseMove);
         document.addEventListener("mouseup", handleGlobalMouseUp);
       }
@@ -388,6 +415,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           currentTimeRef.current = clipTime;
           setDisplayedTime(clipTime);
           ws.setTime(clipTime);
+          lastRenderedFrameRef.current = getFrameFromTime(clipTime, projectFrameRate)
         } else if (currTimelineFrameRef.current) {
           const currTimelineFrameRefTC = Timecode(
             currTimelineFrameRef.current,
@@ -398,6 +426,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           if (currTimelineFrameRefTC.frameCount > maxTimecode.frameCount) {
             currentTimeRef.current = 0;
             setDisplayedTime(0);
+            lastRenderedFrameRef.current = 0
           } else {
             const clipTime =
               (currTimelineFrameRefTC.frameCount - activeClip.startFrame) /
@@ -406,45 +435,61 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             currentTimeRef.current = clipTime;
             setDisplayedTime(clipTime);
             ws.setTime(clipTime);
+            lastRenderedFrameRef.current = getFrameFromTime(clipTime, projectFrameRate)
           }
         } else {
           //console.log(`max tc: ${maxTimecode.frameCount}, curr tc: ${currTimecode.frameCount}`)
           currentTimeRef.current = 0;
           setDisplayedTime(0);
+          lastRenderedFrameRef.current = -1
         }
       });
       ws.on("play", () => {
         setIsPlaying(true);
         if (ws.isPlaying()) return;
-        // make sure the volume is set to 1
+        // cursed webkit fix
         if (ws.getVolume() != 1) {
           console.log("Volume was not 1, setting it to 1 webkit is cursed.");
-          // let's make an alert while we're at it to warnt the user of cursed webkit
-          alert("Volume was not 1, setting it to 1 webkit is cursed.");
-          // TODO: remove when building for production
           ws.setVolume(1);
         }
       });
       ws.on("pause", () => {
+        if (isPlaying) {
+          const timecode = currTimelineFrameRef.current || 0;
+          console.log("timecode", timecode);
+          setTimecode(Timecode(timecode, projectFrameRate as FRAMERATE, false))
+        }
+
         setIsPlaying(false);
+        if (!currTimelineFrameRef) return;
+
+
       });
       ws.on("finish", () => {
         setIsPlaying(false);
         ws.setTime(0);
         currentTimeRef.current = 0;
         setDisplayedTime(0);
+        lastRenderedFrameRef.current = -1
       }); // Reset to start on finish
 
       ws.on("interaction", (newTime: number) => {
         ws.setTime(newTime); // Ensure wavesurfer time is set
         currentTimeRef.current = newTime;
         setDisplayedTime(newTime);
+        lastRenderedFrameRef.current = getFrameFromTime(newTime, projectFrameRate);
       });
 
       ws.on("timeupdate", (time: number) => {
         currentTimeRef.current = time;
-        //const currentFrame = getFrameFromTime(time, projectFrameRate);
-        setDisplayedTime(time);
+        const currentFrame = getFrameFromTime(time, projectFrameRate);
+
+        // Only update state and trigger a re-render if the frame has changed
+        if (currentFrame !== lastRenderedFrameRef.current) {
+          lastRenderedFrameRef.current = currentFrame;
+          setDisplayedTime(time);
+        }
+
         if (
           ws.isPlaying() &&
           skipRegionsEnabledRef.current &&
@@ -674,18 +719,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  const showHoursFormat = (duration || 0) >= 3600;
-  const formattedCurrentTime = formatAudioTime(
-    displayedTime,
-    currentProjectFrameRate,
-    showHoursFormat
-  );
-  const formattedDuration = formatAudioTime(
-    duration,
-    currentProjectFrameRate,
-    showHoursFormat
-  );
-
   const skipClass = useMemo(() => {
     return skipRegionsEnabled
       ? "text-amber-500 hover:text-amber-400"
@@ -707,7 +740,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           title={skipTitle}
         >
           <RedoDotIcon size={21} className="mr-1" />
-          {/* Optional text: {skipRegionsEnabled ? "Skip ON" : "Skip OFF"} */}
+          {skipRegionsEnabled ? "Skip ON" : "Skip OFF"}
         </button>
       );
     });
@@ -756,10 +789,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           </button>
           {!isLoading && duration > 0 && <SkipButton />}
           {!isLoading && duration > 0 && (
-            <span className="ml-2 text-xs gap-1.5 flex pt-1 text-gray-400/80 font-mono tracking-tighter mb-[3px]">
-              <span>{formattedCurrentTime}</span> /{" "}
-              <span>{formattedDuration}</span>
-            </span>
+            <TimecodeDisplay
+              time={displayedTime}
+              duration={duration}
+              frameRate={projectFrameRate}
+            />
           )}
         </div>
       </div>

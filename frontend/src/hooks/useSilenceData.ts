@@ -44,9 +44,26 @@ export function useSilenceData(
   }, []);
 
   const fetchLogic = useCallback(async () => {
-
+    // Ensure all required parameters are present and valid
     if (!activeFile || !detectionParams || !timelineFps || timelineFps <= 0) {
+      if (isMounted.current) {
+        setSilenceData(null);
+        setError(null); // Clear error if conditions are not met for fetching
+        setIsLoading(false);
+      }
       return;
+    }
+
+    // Also check if source frame numbers are valid; they should be numbers.
+    // The ActiveClip type should enforce this, but an extra check doesn't hurt.
+    if (typeof activeFile.sourceStartFrame !== 'number' || typeof activeFile.sourceEndFrame !== 'number') {
+        console.warn("useSilenceData: Invalid sourceStartFrame or sourceEndFrame in activeFile.", activeFile);
+        if (isMounted.current) {
+            setSilenceData(null);
+            setError("Invalid clip frame data.");
+            setIsLoading(false);
+        }
+        return;
     }
     
     if (isMounted.current) {
@@ -56,6 +73,19 @@ export function useSilenceData(
 
     const clipStartSeconds = activeFile.sourceStartFrame / timelineFps;
     const clipEndSeconds = activeFile.sourceEndFrame / timelineFps;
+
+    if (clipEndSeconds <= clipStartSeconds) {
+      console.warn(
+          `useSilenceData: Invalid segment for ${activeFile.name} - start ${clipStartSeconds.toFixed(3)}s, end ${clipEndSeconds.toFixed(3)}s. Not fetching silences.`
+      );
+      if(isMounted.current) {
+          setSilenceData(null);
+          setError("Invalid clip segment duration for silence detection.");
+          setIsLoading(false);
+      }
+      return;
+  }
+
 
     try {
       const result = await GetOrDetectSilencesWithCache(

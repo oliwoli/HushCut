@@ -531,7 +531,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 	a.cacheMutex.RUnlock()
 
 	if found {
-		fmt.Println("Cache hit for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
+		//fmt.Println("Cache hit for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
 		return cachedSilences, nil
 	}
 
