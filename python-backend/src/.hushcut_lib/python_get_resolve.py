@@ -28,7 +28,7 @@ def load_source(module_name, file_path):
         return imp.load_source(module_name, file_path)
 
 
-def GetResolve() -> Union[Any, False]:
+def GetResolve() -> Union[Any, None]:
     expectedPath: str = ""
     try:
         import DaVinciResolveScript as bmd
@@ -64,7 +64,7 @@ def GetResolve() -> Union[Any, False]:
                 + expectedPath
             )
             print(ex)
-            return False
+            return None
     return bmd.scriptapp("Resolve")
 
 

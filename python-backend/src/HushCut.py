@@ -4,9 +4,12 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 import json
-import http
+from http.client import HTTPConnection
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import pprint
+import signal
+import socket
 import threading
 from time import time, sleep
 import traceback
@@ -22,6 +25,18 @@ from typing import (
 )
 import os
 import sys
+
+# Add the .hushcut_lib directory to sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+hushcut_lib_path = os.path.join(SCRIPT_DIR, ".hushcut_lib")
+if hushcut_lib_path not in sys.path:
+    sys.path.insert(0, hushcut_lib_path)
+
+# check if the path exists
+if not os.path.exists(hushcut_lib_path):
+    raise FileNotFoundError(".hushcut_lib directory not found.")
+
+
 import subprocess
 import argparse
 
@@ -56,6 +71,8 @@ from otio_as_bridge import (
     unify_edit_instructions,
 )
 
+from python_get_resolve import GetResolve
+
 # from project_orga import (
 #     map_media_pool_items_to_folders,
 #     MediaPoolItemFolderMapping,
@@ -64,10 +81,10 @@ from otio_as_bridge import (
 # )
 
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
 # GLOBALS
-TEMP_DIR: str = os.path.join(os.path.dirname(__file__), "..", "wav_files")
+TEMP_DIR: str = os.path.join(
+    os.path.dirname(os.path.abspath(sys.argv[0])), "..", "wav_files"
+)
 TEMP_DIR = os.path.abspath(TEMP_DIR)
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
@@ -79,6 +96,10 @@ MEDIA_POOL = None
 AUTH_TOKEN = None
 ENABLE_COMMAND_AUTH = False  # Master switch for auth on Python's command server
 GO_SERVER_PORT = 0
+PYTHON_LISTEN_PORT = 0
+SERVER_INSTANCE_HOLDER = []
+SHUTDOWN_EVENT = threading.Event()
+
 
 STANDALONE_MODE = False
 RESOLVE = None
@@ -188,58 +209,41 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
 
     global GO_SERVER_PORT
     if GO_SERVER_PORT == 0:
-        print(
-            "Python Error: Go server port not configured. Cannot send message to Go.",
-            flush=True,
-        )
+        print("Python Error: Go server port not configured. Cannot send message to Go.")
         return False
 
     # Use http.client for sending messages to Go
     conn = None
     try:
-        conn = http.client.HTTPConnection("localhost", GO_SERVER_PORT, timeout=5)
+        conn = HTTPConnection("localhost", GO_SERVER_PORT, timeout=5)
         headers = {"Content-Type": "application/json"}
 
         # Helper to serialize objects that might not be directly JSON serializable
         def fallback_serializer(obj):
             if hasattr(obj, "__dict__"):
                 return obj.__dict__
-            return str(obj) # Fallback to string representation
+            return str(obj)  # Fallback to string representation
 
         # Construct the message as expected by the Go backend
-        go_message = {
-            "Type": message_type,
-            "Payload": payload
-        }
+        go_message = {"Type": message_type, "Payload": payload}
         json_payload = json.dumps(go_message, default=fallback_serializer)
-        
+
         path = f"/msg?task_id={task_id}" if task_id else "/msg"
         conn.request("POST", path, body=json_payload, headers=headers)
         response = conn.getresponse()
 
         if response.status >= 200 and response.status < 300:
             print(
-                f"Python (to Go): Message type '{message_type}' sent. Task id: {task_id}. Go responded: {response.status}",
-                flush=True,
+                f"Python (to Go): Message type '{message_type}' sent. Task id: {task_id}. Go responded: {response.status}"
             )
             return True
         else:
             print(
-                f"Python (to Go): Error sending message type '{message_type}'. Go responded with status {response.status}: {response.read().decode()}",
-                flush=True,
+                f"Python (to Go): Error sending message type '{message_type}'. Go responded with status {response.status}: {response.read().decode()}"
             )
             return False
-    except http.client.HTTPException as e:
-        print(
-            f"Python (to Go): HTTP error sending message type '{message_type}': {e}",
-            flush=True,
-        )
-        return False
     except Exception as e:
-        print(
-            f"Python (to Go): General error sending message type '{message_type}': {e}",
-            flush=True,
-        )
+        print(f"Python (to Go): HTTP error sending message type '{message_type}': {e}")
         return False
     finally:
         if conn:
@@ -279,8 +283,7 @@ def get_resolve(task_id: str = "") -> None:
             print(f"Already in sys.path: {resolve_modules_path}")
 
     try:
-        from python_get_resolve import GetResolve
-
+        pass  # No direct import here, as bmd is now imported globally.
         # import DaVinciResolveScript as bmd
     except ImportError as e:
         resolve_import_error_msg(e, task_id)
@@ -1716,217 +1719,250 @@ def find_item_folder_by_id(item_id: str) -> Any | None:
 # Add this new global event
 go_server_ready_event = threading.Event()
 
+
 def wait_for_go_ready(go_server_port: int) -> bool:
     """
     Waits for the Go server to signal its readiness by successfully connecting to its /ready endpoint.
     """
-    print(f"Python Backend: Waiting for Go server to register...", flush=True)
+    print("Python Backend: Waiting for Go server to register...")
     # Wait for the event to be set by the /register endpoint
-    event_was_set = go_server_ready_event.wait(timeout=25) # 25 second timeout
+    event_was_set = go_server_ready_event.wait(timeout=25)  # 25 second timeout
     if not event_was_set:
-        print("Python Backend: Timed out waiting for Go server to register.", flush=True)
+        print("Python Backend: Timed out waiting for Go server to register.")
         return False
-    
-    print("Python Backend: Go server has registered.", flush=True)
+
+    print("Python Backend: Go server has registered.")
     return True
 
+
 class PythonCommandHandler(BaseHTTPRequestHandler):
+    """
+    Handles HTTP POST requests for registration, shutdown, and commands from the Go frontend.
+    """
+
     def _send_json_response(self, status_code, data_dict):
+        """Sends a JSON response with the given status code and data."""
         self.send_response(status_code)
         self.send_header("Content-type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(data_dict).encode("utf-8"))
 
     def do_POST(self):
-        global GO_SERVER_PORT
+        """Routes POST requests to the appropriate handler based on the URL path."""
+
+        # --- Route 1: /register ---
+        # Handles the initial registration from the Go application.
         if self.path == "/register":
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
             try:
-                data = json.loads(post_data.decode('utf-8'))
+                content_length = int(self.headers["Content-Length"])
+                post_data = self.rfile.read(content_length)
+                data = json.loads(post_data.decode("utf-8"))
                 port = data.get("go_server_port")
                 if port:
+                    global GO_SERVER_PORT
                     GO_SERVER_PORT = port
-                    print(f"Python Command Server: Registered Go server on port {port}", flush=True)
-                    self._send_json_response(200, {"status": "success", "message": "Go server registered."})
-                    go_server_ready_event.set() # Signal that Go is ready
-                else:
-                    self._send_json_response(400, {"status": "error", "message": "Missing 'go_server_port' in request."})
-            except json.JSONDecodeError:
-                self._send_json_response(400, {"status": "error", "message": "Invalid JSON."})
-            return
-        
-        # ... (rest of the do_POST method is unchanged)
-        global MAKE_NEW_TIMELINE
-        if not self.path == "/command":
-            self._send_json_response(
-                404, {"status": "error", "message": "Endpoint not found."}
-            )
-
-        if ENABLE_COMMAND_AUTH:
-            auth_header = self.headers.get("Authorization")
-            token_valid = False
-            if auth_header and auth_header.startswith("Bearer ") and AUTH_TOKEN:
-                received_token = auth_header.split(" ")[1]
-                if received_token == AUTH_TOKEN:
-                    token_valid = True
-
-            if not token_valid:
-                print(
-                    "Python Command Server: Unauthorized command attempt from Go.",
-                    flush=True,
-                )
-                self._send_json_response(
-                    401, {"status": "error", "message": "Unauthorized"}
-                )
-                return
-            print(
-                "Python Command Server: Go authenticated successfully for command.",
-                flush=True,
-            )
-        else:
-            print(
-                "Python Command Server: Command authentication is currently disabled.",
-                flush=True,
-            )
-
-        content_length = int(self.headers["Content-Length"])
-        post_data_bytes = self.rfile.read(content_length)
-        try:
-            data = json.loads(post_data_bytes.decode("utf-8"))
-            command = data.get("command")
-            params = data.get("params", {})
-
-            task_id = params.get("taskId")
-            callback_url = data.get("callbackUrl")
-
-            truncated_params: str = ""
-            if len(str(params)) > 100:
-                truncated_params = str(params)[:100] + "..."
-            else:
-                truncated_params = str(params)
-
-            print(
-                f"Python Command Server: Received command '{command}' with params: {truncated_params}",
-                flush=True,
-            )
-
-            response_payload = {}
-            # --- Implement your command handlers here ---
-            if command == "sync":
-                response_payload = {"status": "success", "message": "Command received."}
-                self._send_json_response(200, response_payload)
-                main(sync=True, task_id=task_id)
-                return
-            elif command == "makeFinalTimeline":
-                project_data_from_go_raw = params.get("projectData")
-                MAKE_NEW_TIMELINE = params.get("makeNewTimeline", False)
-
-                if not project_data_from_go_raw:
-                    # Handle case where no data is sent
-                    # (You might want to add a proper error response here)
-                    return
-
-                # Assuming project_data_from_go_raw is a dict
-                project_data_from_go = ProjectData(**project_data_from_go_raw)
-
-                response_payload = {
-                    "status": "success",
-                    "message": "Final timeline generation started.",
-                }
-                self._send_json_response(200, response_payload)
-
-                # FIX: Check for None before calling the function
-                if globalz.PROJECT_DATA:
-                    apply_edits_from_go(globalz.PROJECT_DATA, project_data_from_go)
-
-                else:
-                    # If no data exists yet, the incoming data becomes the new base
-                    globalz.PROJECT_DATA = project_data_from_go
-
-                main(sync=False, task_id=task_id)
-                return
-
-            elif command == "saveProject":
-                print("Python: Simulating project save...", flush=True)
-                response_payload = {
-                    "status": "success",
-                    "message": "Project save command received.",
-                }
-            elif command == "setPlayhead":
-                time_value = params.get("time")
-                if time_value is not None and setTimecode(time_value, task_id):
-                    response_payload = {
-                        "status": "success",
-                        "message": f"Playhead position set to {time_value}.",
-                    }
+                    print(f"Python Command Server: Registered Go server on port {port}")
+                    self._send_json_response(
+                        200, {"status": "success", "message": "Go server registered."}
+                    )
                 else:
                     self._send_json_response(
-                        400,
+                        400, {"status": "error", "message": "Missing 'go_server_port'."}
+                    )
+            except (json.JSONDecodeError, ValueError):
+                self._send_json_response(
+                    400, {"status": "error", "message": "Invalid or missing JSON body."}
+                )
+            return
+
+        # --- Route 2: /shutdown ---
+        # Handles the shutdown signal from the Go application. No request body is expected.
+        elif self.path == "/shutdown":
+            print("Python Command Server: Received shutdown signal from Go. Exiting.")
+            self._send_json_response(
+                200, {"status": "success", "message": "Shutdown acknowledged."}
+            )
+
+            # Use os.kill to send a SIGINT (Ctrl+C) signal to the current process.
+            # This is the most reliable way to interrupt the httpd.serve_forever() loop.
+            # It's done in a thread to allow the HTTP response to be sent first.
+            threading.Thread(target=lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+            return
+
+        # --- Route 3: /command ---
+        # Handles all functional commands like 'sync', 'makeFinalTimeline', etc.
+        elif self.path == "/command":
+            # --- Authentication (Placeholder) ---
+            # Your existing auth logic is preserved here.
+            # if ENABLE_COMMAND_AUTH: ...
+            if ENABLE_COMMAND_AUTH:
+                auth_header = self.headers.get("Authorization")
+                token_valid = False
+                if auth_header and auth_header.startswith("Bearer ") and AUTH_TOKEN:
+                    received_token = auth_header.split(" ")[1]
+                    if received_token == AUTH_TOKEN:
+                        token_valid = True
+
+                if not token_valid:
+                    print(
+                        "Python Command Server: Unauthorized command attempt from Go."
+                    )
+                    self._send_json_response(
+                        401, {"status": "error", "message": "Unauthorized"}
+                    )
+                    return
+                print(
+                    "Python Command Server: Go authenticated successfully for command."
+                )
+            else:
+                print(
+                    "Python Command Server: Command authentication is currently disabled."
+                )
+
+            # --- Command Processing ---
+            try:
+                content_length = int(self.headers["Content-Length"])
+                post_data_bytes = self.rfile.read(content_length)
+                data = json.loads(post_data_bytes.decode("utf-8"))
+                command = data.get("command")
+                params = data.get("params", {})
+                task_id = params.get("taskId")
+
+                # Your existing command handling logic
+                if command == "sync":
+                    self._send_json_response(
+                        200, {"status": "success", "message": "Sync command received."}
+                    )
+                    main(sync=True, task_id=task_id)
+                    return  # Important: return after handling a command
+
+                elif command == "makeFinalTimeline":
+                    project_data_from_go_raw = params.get("projectData")
+                    global MAKE_NEW_TIMELINE
+                    MAKE_NEW_TIMELINE = params.get("makeNewTimeline", False)
+
+                    if not project_data_from_go_raw:
+                        self._send_json_response(
+                            400, {"status": "error", "message": "Missing projectData."}
+                        )
+                        return
+
+                    project_data_from_go = ProjectData(**project_data_from_go_raw)
+                    self._send_json_response(
+                        200,
                         {
-                            "status": "error",
-                            "message": "Could not set playhead for current timeline.",
+                            "status": "success",
+                            "message": "Final timeline generation started.",
+                        },
+                    )
+
+                    if globalz.PROJECT_DATA:
+                        apply_edits_from_go(globalz.PROJECT_DATA, project_data_from_go)
+                    else:
+                        globalz.PROJECT_DATA = project_data_from_go
+
+                    main(sync=False, task_id=task_id)
+                    return
+
+                elif command == "saveProject":
+                    self._send_json_response(
+                        200,
+                        {
+                            "status": "success",
+                            "message": "Project save command received.",
                         },
                     )
                     return
-            else:
-                self._send_json_response(
-                    400, {"status": "error", "message": f"Unknown command: {command}"}
+
+                elif command == "setPlayhead":
+                    time_value = params.get("time")
+                    if time_value is not None and setTimecode(time_value, task_id):
+                        self._send_json_response(
+                            200,
+                            {
+                                "status": "success",
+                                "message": f"Playhead set to {time_value}.",
+                            },
+                        )
+                    else:
+                        self._send_json_response(
+                            400,
+                            {"status": "error", "message": "Could not set playhead."},
+                        )
+                    return
+
+                # IMPORTANT: The shutdown command is now handled by the /shutdown endpoint, not here.
+                # It has been removed from this section.
+
+                else:
+                    self._send_json_response(
+                        400,
+                        {"status": "error", "message": f"Unknown command: {command}"},
+                    )
+                    return
+
+            except (json.JSONDecodeError, ValueError):
+                print(
+                    "Python Command Server: Invalid JSON received from Go for /command."
                 )
-                return
+                self._send_json_response(
+                    400, {"status": "error", "message": "Invalid JSON format."}
+                )
+            except Exception as e:
+                print(f"Python Command Server: Error processing command: {e}")
+                print(traceback.format_exc())
+                self._send_json_response(
+                    500,
+                    {"status": "error", "message": f"Internal server error: {str(e)}"},
+                )
+            return
 
-            self._send_json_response(200, response_payload)
-
-        except json.JSONDecodeError:
-            print("Python Command Server: Invalid JSON received from Go.", flush=True)
+        # --- Fallback: Not Found ---
+        # If the path is not /register, /shutdown, or /command
+        else:
             self._send_json_response(
-                400,
-                {"status": "error", "message": "Invalid JSON format in request body."},
+                404, {"status": "error", "message": "Endpoint not found."}
             )
-        except Exception as e:
-            print(
-                f"Python Command Server: Error processing command '{command}': {e}",
-                flush=True,
-            )
-            full_trace = traceback.format_exc()
-            print(full_trace)
-            self._send_json_response(
-                500, {"status": "error", "message": f"Internal error: {str(e)}"}
-            )
+            return
 
 
-def run_python_command_server(listen_port: int):
-    server_address = ("localhost", listen_port)
-    httpd = HTTPServer(server_address, PythonCommandHandler)
-    print(
-        f"Python Command Server: Listening for Go commands on localhost:{listen_port}...",
-        flush=True,
-    )
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("Python Command Server: Shutting down.", flush=True)
-    httpd.server_close()
+def find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
 
 
 def init():
     global GO_SERVER_PORT
     global RESOLVE
     global FFMPEG
+    global PYTHON_LISTEN_PORT
+    global SERVER_INSTANCE_HOLDER
+
+    print("2")
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-gp", "--go-port", type=int, default=8080
+        "-gp", "--go-port", type=int, default=0
     )  # port to communicate with http server
     parser.add_argument(
-        "-lp", "--listen-on-port", type=int, default=8081
+        "-lp", "--listen-on-port", type=int, default=0
     )  # port to receive commands from go
     parser.add_argument("--auth-token", type=str)  # authorization token
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("-s", "--sync", action="store_true")
     parser.add_argument("--standalone", action="store_true")
-    parser.add_argument("--launch-go", action="store_true", help="Launch the Go Wails application after Python backend starts.")
-    parser.add_argument("--wails-dev", action="store_true", help="Launch the Go Wails application in development mode (wails dev).")
+    parser.add_argument(
+        "--launch-go",
+        action="store_true",
+        help="Launch the Go Wails application after Python backend starts.",
+    )
+    parser.add_argument(
+        "--wails-dev",
+        action="store_true",
+        help="Launch the Go Wails application in development mode (wails dev).",
+    )
     args = parser.parse_args()
 
     GO_SERVER_PORT = args.go_port
@@ -1937,13 +1973,20 @@ def init():
     # if args.auth-token:
     #     EXPECTED_GO_COMMAND_TOKEN = args.auth-token
     #     ENABLE_COMMAND_AUTH = True # Or make this a separate flag
-    #     print(f"Python Command Server: Will expect Go to authenticate commands with the shared secret.", flush=True)
+    #     print(f"Python Command Server: Will expect Go to authenticate commands with the shared secret.")
 
-    print(f"Python Backend: Go's server port: {args.go_port}", flush=True)
-    print(
-        f"Python Backend: Will listen for commands on port: {args.listen_on_port}",
-        flush=True,
-    )
+    print(f"Python Backend: Go's server port: {args.go_port}")
+
+    PYTHON_LISTEN_PORT = args.listen_on_port or find_free_port()
+    if not PYTHON_LISTEN_PORT:
+        PYTHON_LISTEN_PORT = find_free_port()
+        print(
+            f"Python Backend: No port specified, dynamically found and using free port: {PYTHON_LISTEN_PORT}"
+        )
+    else:
+        print(
+            f"Python Backend: Using specified port for command server: {PYTHON_LISTEN_PORT}"
+        )
 
     if args.standalone:
         global STANDALONE_MODE
@@ -1951,99 +1994,376 @@ def init():
         main()
         return
 
-    # Start Python's own HTTP server (for Go commands) in a separate thread
-    command_server_thread = threading.Thread(
-        target=run_python_command_server, args=(args.listen_on_port,), daemon=True
-    )
-    command_server_thread.start()
-
-    # Perform other Python initializations...
-    print("Python Backend: Internal initialization complete.", flush=True)
-        
-    if args.wails_dev:
-        print("Python Backend: Launching Go Wails application in development mode...", flush=True)
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-
-        # Check if 'wails' command is available
-        try:
-            subprocess.run(["wails", "version"], check=True, capture_output=True)
-        except FileNotFoundError:
-            print("Python Backend: Error: 'wails' command not found. Please ensure Wails CLI is installed and in your system's PATH.", flush=True)
-            sys.exit(1)
-        except subprocess.CalledProcessError as e:
-            print(f"Python Backend: Error running 'wails version': {e.stdout.decode()}{e.stderr.decode()}", flush=True)
-            sys.exit(1)
-
-        # Pass the Python command port via an environment variable for wails dev
-        env = os.environ.copy()
-        env["WAILS_PYTHON_PORT"] = str(args.listen_on_port)
-        wails_dev_command = ["wails", "dev"]
-        try:
-            # Use Popen to run in the background and not block the Python script
-            # Capture stdout/stderr to help diagnose issues
-            process = subprocess.Popen(wails_dev_command, cwd=project_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-            print(f"Python Backend: 'wails dev' launched with command: {wails_dev_command} in {project_root}", flush=True)
-
-            # Read and print output in a non-blocking way (for debugging)
-            def read_output(pipe, prefix):
-                for line in pipe:
-                    print(f"[{prefix}] {line.strip()}", flush=True)
-
-            threading.Thread(target=read_output, args=(process.stdout, "WAILS_STDOUT"), daemon=True).start()
-            threading.Thread(target=read_output, args=(process.stderr, "WAILS_STDERR"), daemon=True).start()
-
-            # Go application registers with Python, so no need for Python to wait for Go or signal back.
-            # The Python command server is already running and listening for Go's registration.
-            print("Python Backend: Go application launch initiated. Waiting for Go to register.", flush=True)
-
-        except Exception as e:
-            print(f"Python Backend: Error launching 'wails dev': {e}", flush=True)
-    else:
-        print("Python Backend: Launching Go Wails application...", flush=True)
-        go_app_path = ""
-        if sys.platform.startswith("darwin"):
-            # For macOS, check both the .app bundle path (production) and direct executable path (development)
-            app_bundle_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut.app", "Contents", "MacOS", "HushCut"))
-            dev_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut"))
-            print(f"Python Backend: Checking app bundle path: {app_bundle_path}", flush=True)
-            if os.path.exists(app_bundle_path):
-                print("Python Backend: App bundle path exists.", flush=True)
-                go_app_path = app_bundle_path
-            else:
-                print("Python Backend: App bundle path does NOT exist.", flush=True)
-            
-            print(f"Python Backend: Checking dev path: {dev_path}", flush=True)
-            if os.path.exists(dev_path):
-                print("Python Backend: Dev path exists.", flush=True)
-                go_app_path = dev_path
-            else:
-                print("Python Backend: Dev path does NOT exist.", flush=True)
-        elif sys.platform.startswith("win"):
-            go_app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut.exe"))
-        elif sys.platform.startswith("linux"):
-            go_app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "build", "bin", "HushCut"))
-
-        if not os.path.exists(go_app_path):
-            print(f"Python Backend: Error: Go Wails application not found at {go_app_path}", flush=True)
-        else:
-            go_command = [go_app_path, f"--python-port={args.listen_on_port}"]
-            try:
-                subprocess.Popen(go_command)
-                print(f"Python Backend: Go Wails application launched with command: {go_command}", flush=True)
-            except Exception as e:
-                print(f"Python Backend: Error launching Go Wails application: {e}", flush=True)
+    # Initialize the HTTP server for Go commands
+    server_address = ("127.0.0.1", PYTHON_LISTEN_PORT)
+    httpd = HTTPServer(server_address, PythonCommandHandler)
+    SERVER_INSTANCE_HOLDER.append(httpd)
     print(
-        "Python Backend: Running. Command server is active in a background thread.",
-        flush=True,
+        f"Python Command Server: Listening for Go commands on http://127.0.0.1:{PYTHON_LISTEN_PORT}"
     )
+
+    # Wait for Go to register, or launch Go if it doesn't register within a timeout.
+    if GO_SERVER_PORT == 0:
+        print("Python Backend: Go application did not yet start. Starting it...")
+        if args.wails_dev:
+            print(
+                "Python Backend: Launching Go Wails application in development mode..."
+            )
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
+
+            # Check if 'wails' command is available
+            try:
+                subprocess.run(["wails", "version"], check=True, capture_output=True)
+            except FileNotFoundError:
+                print(
+                    "Python Backend: Error: 'wails' command not found. Please ensure Wails CLI is installed and in your system's PATH."
+                )
+                sys.exit(1)
+            except subprocess.CalledProcessError as e:
+                print(
+                    f"Python Backend: Error running 'wails version': {e.stdout.decode()}{e.stderr.decode()}"
+                )
+                sys.exit(1)
+
+            # Pass the Python command port via an environment variable for wails dev
+            env = os.environ.copy()
+            env["WAILS_PYTHON_PORT"] = str(PYTHON_LISTEN_PORT)
+            if sys.platform.startswith("linux"):
+                env["GDK_BACKEND"] = "x11"
+            wails_dev_command = ["wails", "dev"]
+            try:
+                # Use Popen to run in the background and not block the Python script
+                # Capture stdout/stderr to help diagnose issues
+                process = subprocess.Popen(
+                    wails_dev_command,
+                    cwd=project_root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                print(
+                    f"Python Backend: 'wails dev' launched with command: {wails_dev_command} in {project_root}"
+                )
+
+                # Read and print output in a non-blocking way (for debugging)
+                def read_output(pipe, prefix):
+                    for line in pipe:
+                        print(f"[{prefix}] {line.strip()}")
+
+                threading.Thread(
+                    target=read_output,
+                    args=(process.stdout, "WAILS_STDOUT"),
+                    daemon=True,
+                ).start()
+                threading.Thread(
+                    target=read_output,
+                    args=(process.stderr, "WAILS_STDERR"),
+                    daemon=True,
+                ).start()
+
+                print(
+                    "Python Backend: Go application launch initiated. Waiting for Go to register."
+                )
+
+            except Exception as e:
+                print(f"Python Backend: Error launching 'wails dev': {e}")
+        else:
+            print("Python Backend: Launching Go Wails application...")
+            go_app_path = ""
+
+            # Define potential paths for the HushCut binary
+            # The first existing path found will be used
+            potential_paths = []
+
+            if sys.platform.startswith("darwin"):  # macOS
+                potential_paths = [
+                    # 1. Check current directory (same level as the script)
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut")),
+                    # 2. Check the .app bundle path (production)
+                    os.path.abspath(
+                        os.path.join(
+                            SCRIPT_DIR,
+                            "..",
+                            "..",
+                            "build",
+                            "bin",
+                            "HushCut.app",
+                            "Contents",
+                            "MacOS",
+                            "HushCut",
+                        )
+                    ),
+                    # 3. Check direct executable path (development build)
+                    os.path.abspath(
+                        os.path.join(SCRIPT_DIR, "..", "..", "build", "bin", "HushCut")
+                    ),
+                ]
+            elif sys.platform.startswith("win"):  # Windows
+                potential_paths = [
+                    # 1. Check current directory (same level as the script)
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut.exe")),
+                    # 2. Check build path
+                    os.path.abspath(
+                        os.path.join(
+                            SCRIPT_DIR, "..", "..", "build", "bin", "HushCut.exe"
+                        )
+                    ),
+                ]
+            elif sys.platform.startswith("linux"):  # Linux
+                potential_paths = [
+                    # 1. Check current directory (same level as the script)
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut")),
+                    # 2. Check build path
+                    os.path.abspath(
+                        os.path.join(SCRIPT_DIR, "..", "..", "build", "bin", "HushCut")
+                    ),
+                ]
+
+            # Find the first valid path
+            for path in potential_paths:
+                print(f"Python Backend: Checking for binary at: {path}")
+                if os.path.exists(path):
+                    go_app_path = path
+                    print(f"Python Backend: Found binary at: {go_app_path}")
+                    break
+                else:
+                    print(f"Python Backend: Binary not found at: {path}")
+
+            if not go_app_path:
+                print(
+                    "Python Backend: Error: Go Wails application 'HushCut' not found in any of the checked paths."
+                )
+            else:
+                go_command = [go_app_path, "--python-port", str(PYTHON_LISTEN_PORT)]
+                env = os.environ.copy()
+                if sys.platform.startswith("linux"):
+                    env["GDK_BACKEND"] = "x11"
+                try:
+                    subprocess.Popen(go_command, env=env)
+                    print(
+                        f"Python Backend: Go Wails application launched with command: {go_command} and env GDK_BACKEND={env.get('GDK_BACKEND')}"
+                    )
+                except Exception as e:
+                    print(f"Python Backend: Error launching Go Wails application: {e}")
+
+    # The main loop for the Python script to keep running and handling Resolve API calls.
+    # This loop will also allow the background HTTP server thread to process requests.
+    print("Python Backend: Running. Command server is active in a background thread.")
     try:
-        command_server_thread.join()  # Keep main thread alive while server thread is running
+        while not SHUTDOWN_EVENT.is_set():
+            # Handle any incoming requests. This will block until a request comes in.
+            # If no request comes in, it will block indefinitely. This is desired
+            # as the script should only process commands when they arrive.
+            httpd.handle_request()
+            # Small sleep to prevent busy-waiting if no requests are coming in
+            # and to allow Resolve's main loop to process other events.
+            sleep(0.01)
     except KeyboardInterrupt:
-        print("Python Backend: Main thread interrupted. Shutting down.", flush=True)
+        print("Python Backend: Keyboard interrupt detected. Shutting down.")
+        SHUTDOWN_EVENT.set()
+    except Exception as e:
+        print(f"FATAL ERROR in command server loop: {e}", file=sys.stderr)
+        traceback.print_exc()
+    finally:
+        print("Python Backend: Exiting main loop.")
+        # Graceful Shutdown
+        if SERVER_INSTANCE_HOLDER:
+            httpd = SERVER_INSTANCE_HOLDER[0]
+            print("Python Backend: Shutting down HTTP server...")
+            httpd.server_close()  # Close the server socket
 
-    print("Python Backend: Exiting.", flush=True)
+    print("Python Backend: Exiting.")
 
-    sys.exit(1)
+    # Wait for Go to register, or launch Go if it doesn't register within a timeout.
+    go_registered = False
+    start_time = time()
+    while time() - start_time < 10:  # 10-second timeout for Go registration
+        # Handle any incoming requests during the wait period
+        httpd.handle_request()
+        if GO_SERVER_PORT != 0:  # GO_SERVER_PORT is set by the /register endpoint
+            print("Python Backend: Go application registered successfully.")
+            go_registered = True
+            break
+        sleep(0.1)  # Check more frequently during the initial handshake
+
+    if not go_registered:
+        print(
+            "Python Backend: Go application did not register within timeout. Launching Go Wails application..."
+        )
+        if args.wails_dev:
+            print(
+                "Python Backend: Launching Go Wails application in development mode..."
+            )
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
+
+            # Check if 'wails' command is available
+            try:
+                subprocess.run(["wails", "version"], check=True, capture_output=True)
+            except FileNotFoundError:
+                print(
+                    "Python Backend: Error: 'wails' command not found. Please ensure Wails CLI is installed and in your system's PATH."
+                )
+                sys.exit(1)
+            except subprocess.CalledProcessError as e:
+                print(
+                    f"Python Backend: Error running 'wails version': {e.stdout.decode()}{e.stderr.decode()}"
+                )
+                sys.exit(1)
+
+            # Pass the Python command port via an environment variable for wails dev
+            env = os.environ.copy()
+            env["WAILS_PYTHON_PORT"] = str(PYTHON_LISTEN_PORT)
+            if sys.platform.startswith("linux"):
+                env["GDK_BACKEND"] = "x11"
+            wails_dev_command = ["wails", "dev"]
+            try:
+                # Use Popen to run in the background and not block the Python script
+                # Capture stdout/stderr to help diagnose issues
+                process = subprocess.Popen(
+                    wails_dev_command,
+                    cwd=project_root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                print(
+                    f"Python Backend: 'wails dev' launched with command: {wails_dev_command} in {project_root}"
+                )
+
+                # Read and print output in a non-blocking way (for debugging)
+                def read_output(pipe, prefix):
+                    for line in pipe:
+                        print(f"[{prefix}] {line.strip()}")
+
+                threading.Thread(
+                    target=read_output,
+                    args=(process.stdout, "WAILS_STDOUT"),
+                    daemon=True,
+                ).start()
+                threading.Thread(
+                    target=read_output,
+                    args=(process.stderr, "WAILS_STDERR"),
+                    daemon=True,
+                ).start()
+
+                print(
+                    "Python Backend: Go application launch initiated. Waiting for Go to register."
+                )
+
+            except Exception as e:
+                print(f"Python Backend: Error launching 'wails dev': {e}")
+        else:
+            print("Python Backend: Launching Go Wails application...")
+            go_app_path = ""
+
+            # Define potential paths for the HushCut binary
+            # The first existing path found will be used
+            potential_paths = []
+
+            if sys.platform.startswith("darwin"):  # macOS
+                potential_paths = [
+                    # 1. Check current directory (same level as the script)
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut")),
+                    # 2. Check the .app bundle path (production)
+                    os.path.abspath(
+                        os.path.join(
+                            SCRIPT_DIR,
+                            "..",
+                            "..",
+                            "build",
+                            "bin",
+                            "HushCut.app",
+                            "Contents",
+                            "MacOS",
+                            "HushCut",
+                        )
+                    ),
+                    # 3. Check direct executable path (development build)
+                    os.path.abspath(
+                        os.path.join(SCRIPT_DIR, "..", "..", "build", "bin", "HushCut")
+                    ),
+                ]
+            elif sys.platform.startswith("win"):  # Windows
+                potential_paths = [
+                    # 1. Check current directory (same level as the script)
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut.exe")),
+                    # 2. Check build path
+                    os.path.abspath(
+                        os.path.join(
+                            SCRIPT_DIR, "..", "..", "build", "bin", "HushCut.exe"
+                        )
+                    ),
+                ]
+            elif sys.platform.startswith("linux"):  # Linux
+                potential_paths = [
+                    # 1. Check current directory (same level as the script)
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut")),
+                    # 2. Check build path
+                    os.path.abspath(
+                        os.path.join(SCRIPT_DIR, "..", "..", "build", "bin", "HushCut")
+                    ),
+                ]
+
+            # Find the first valid path
+            for path in potential_paths:
+                print(f"Python Backend: Checking for binary at: {path}")
+                if os.path.exists(path):
+                    go_app_path = path
+                    print(f"Python Backend: Found binary at: {go_app_path}")
+                    break
+                else:
+                    print(f"Python Backend: Binary not found at: {path}")
+
+            if not go_app_path:
+                print(
+                    "Python Backend: Error: Go Wails application 'HushCut' not found in any of the checked paths."
+                )
+            else:
+                go_command = [go_app_path, "--python-port", str(PYTHON_LISTEN_PORT)]
+                env = os.environ.copy()
+                if sys.platform.startswith("linux"):
+                    env["GDK_BACKEND"] = "x11"
+                try:
+                    subprocess.Popen(go_command, env=env)
+                    print(
+                        f"Python Backend: Go Wails application launched with command: {go_command} and env GDK_BACKEND={env.get('GDK_BACKEND')}"
+                    )
+                except Exception as e:
+                    print(f"Python Backend: Error launching Go Wails application: {e}")
+
+    # The main loop for the Python script to keep running and handling Resolve API calls.
+    # This loop will also allow the background HTTP server thread to process requests.
+    print("Python Backend: Running. Command server is active in a background thread.")
+    try:
+        while not SHUTDOWN_EVENT.is_set():
+            # Handle any incoming requests. This will block until a request comes in.
+            # If no request comes in, it will block indefinitely. This is desired
+            # as the script should only process commands when they arrive.
+            httpd.handle_request()
+            # Small sleep to prevent busy-waiting if no requests are coming in
+            # and to allow Resolve's main loop to process other events.
+            sleep(0.01)
+    except KeyboardInterrupt:
+        print("Python Backend: Keyboard interrupt detected. Shutting down.")
+        SHUTDOWN_EVENT.set()
+    except Exception as e:
+        print(f"FATAL ERROR in command server loop: {e}", file=sys.stderr)
+        traceback.print_exc()
+    finally:
+        print("Python Backend: Exiting main loop.")
+        # Graceful Shutdown
+        if SERVER_INSTANCE_HOLDER:
+            httpd = SERVER_INSTANCE_HOLDER[0]
+            print("Python Backend: Shutting down HTTP server...")
+            httpd.server_close()  # Close the server socket
+
+    print("Python Backend: Exiting.")
 
 
 if __name__ == "__main__":

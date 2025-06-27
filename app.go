@@ -42,6 +42,12 @@ type App struct {
 	ffmpegSemaphore          chan struct{}
 	waveformSemaphore        chan struct{}
 	conversionTracker        sync.Map
+	httpClient               *http.Client
+
+	// --- NEW FIELDS FOR FFmpeg STATE ---
+	ffmpegMutex     sync.RWMutex  // Protects hasFfmpeg flag
+	ffmpegReadyChan chan struct{} // Used to signal when FFmpeg is ready
+	ffmpegOnce      sync.Once     // Ensures the ready channel is closed only once
 }
 
 // NewApp creates a new App application struct
@@ -59,6 +65,10 @@ func NewApp() *App {
 		ffmpegSemaphore:          make(chan struct{}, 8),
 		waveformSemaphore:        make(chan struct{}, 5),
 		conversionTracker:        sync.Map{}, // Initialize the new tracker
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		ffmpegReadyChan: make(chan struct{}),
 	}
 }
 
@@ -178,6 +188,50 @@ func binaryExists(path string) bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	var pythonPortArg int
+
+	// First, check for the environment variable (ideal for `wails dev`).
+	portStr := os.Getenv("WAILS_PYTHON_PORT")
+	if portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err == nil {
+			pythonPortArg = port
+			log.Printf("Wails App: Detected Python port %d from WAILS_PYTHON_PORT environment variable.", port)
+		}
+	}
+
+	// If not found via env var, check command-line arguments (for production).
+	// This allows the command line to override the env var if needed.
+	if pythonPortArg == 0 {
+		for i, arg := range os.Args {
+			// Handles "--python-port <value>"
+			if arg == "--python-port" && i+1 < len(os.Args) {
+				port, err := strconv.Atoi(os.Args[i+1])
+				if err == nil {
+					pythonPortArg = port
+					break // Port found
+				}
+			}
+			// Handles "--python-port=<value>"
+			if strings.HasPrefix(arg, "--python-port=") {
+				valueStr := strings.TrimPrefix(arg, "--python-port=")
+				port, err := strconv.Atoi(valueStr)
+				if err == nil {
+					pythonPortArg = port
+					break // Port found
+				}
+			}
+		}
+	}
+
+	if pythonPortArg != 0 {
+		log.Printf("Wails App: Detected --python-port %d. Will attempt to connect to existing Python backend.", pythonPortArg)
+		a.pythonCommandPort = pythonPortArg
+	} else {
+		log.Println("Wails App: No --python-port flag detected. Will launch and manage the Python backend.")
+	}
+
 	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
@@ -186,6 +240,7 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil || !binaryExists(a.ffmpegBinaryPath) {
 		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 
+		// TODO: enable this code when in production
 		// if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
 		// 	a.ffmpegBinaryPath = pathInSystem
 		// 	log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
@@ -206,6 +261,61 @@ func (a *App) startup(ctx context.Context) {
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
 
+}
+
+func moveFile(sourcePath, destPath string) error {
+	inputFile, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("couldn't open source file: %w", err)
+	}
+	defer inputFile.Close()
+
+	outputFile, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("couldn't open dest file: %w", err)
+	}
+	defer outputFile.Close()
+
+	_, err = io.Copy(outputFile, inputFile)
+	if err != nil {
+		return fmt.Errorf("writing to dest file failed: %w", err)
+	}
+
+	// The copy was successful, so now we delete the original file
+	err = os.Remove(sourcePath)
+	if err != nil {
+		// This is not a critical error if the copy succeeded, but good to log.
+		log.Printf("Warning: failed to remove original source file after copy: %s", sourcePath)
+	}
+	return nil
+}
+
+func (a *App) signalFfmpegReady() {
+	a.ffmpegOnce.Do(func() {
+		log.Println("Signaling that FFmpeg is now ready.")
+		close(a.ffmpegReadyChan)
+	})
+}
+
+func (a *App) waitForFfmpeg() error {
+	a.ffmpegMutex.RLock()
+	isReady := a.hasFfmpeg
+	a.ffmpegMutex.RUnlock()
+
+	if isReady {
+		return nil // FFmpeg already available, proceed.
+	}
+
+	// If not ready, block and wait for the signal.
+	log.Println("Task is waiting for FFmpeg to become available...")
+	select {
+	case <-a.ffmpegReadyChan:
+		log.Println("FFmpeg is now available. Resuming task.")
+		return nil
+	case <-a.ctx.Done():
+		log.Println("Application is shutting down; aborting wait for FFmpeg.")
+		return a.ctx.Err()
+	}
 }
 
 func (a *App) DownloadFFmpeg() error {
@@ -265,10 +375,10 @@ func (a *App) DownloadFFmpeg() error {
 	if err != nil {
 		return fmt.Errorf("could not create download file: %w", err)
 	}
-	defer out.Close()
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
+		out.Close()
 		return fmt.Errorf("could not write download to file: %w", err)
 	}
 	out.Close() // Close the file before extraction
@@ -278,8 +388,6 @@ func (a *App) DownloadFFmpeg() error {
 	case "darwin":
 		extractCmd = exec.Command("unzip", downloadPath, "-d", tempDir)
 	case "windows":
-		// Assuming 7z is available in PATH or bundled.
-		// For a production app, consider embedding a 7z Go library or ensuring 7z is present.
 		extractCmd = exec.Command("7z", "x", downloadPath, "-o"+tempDir)
 	case "linux":
 		extractCmd = exec.Command("tar", "-xf", downloadPath, "-C", tempDir)
@@ -292,14 +400,12 @@ func (a *App) DownloadFFmpeg() error {
 		return fmt.Errorf("failed to extract ffmpeg archive: %w", err)
 	}
 
-	// Find the extracted ffmpeg binary and move it to the install directory
+	// Find the extracted ffmpeg binary
 	var extractedFfmpegPath string
 	switch platform {
 	case "darwin":
 		extractedFfmpegPath = filepath.Join(tempDir, finalBinaryName)
 	case "windows":
-		// Find the ffmpeg.exe inside the extracted folder (e.g., ffmpeg-xxxx/bin/ffmpeg.exe)
-		// This requires listing directory contents.
 		entries, err := os.ReadDir(tempDir)
 		if err != nil {
 			return fmt.Errorf("failed to read temp directory after 7z extraction: %w", err)
@@ -310,11 +416,7 @@ func (a *App) DownloadFFmpeg() error {
 				break
 			}
 		}
-		if extractedFfmpegPath == "" {
-			return fmt.Errorf("could not find ffmpeg.exe in extracted windows archive")
-		}
 	case "linux":
-		// Find the ffmpeg binary inside the extracted folder (e.g., ffmpeg-release-amd64-static/ffmpeg)
 		entries, err := os.ReadDir(tempDir)
 		if err != nil {
 			return fmt.Errorf("failed to read temp directory after tar extraction: %w", err)
@@ -325,19 +427,19 @@ func (a *App) DownloadFFmpeg() error {
 				break
 			}
 		}
-		if extractedFfmpegPath == "" {
-			return fmt.Errorf("could not find ffmpeg in extracted linux archive")
-		}
+	}
+
+	if extractedFfmpegPath == "" || extractedFfmpegPath == tempDir {
+		return fmt.Errorf("could not find ffmpeg binary in extracted archive")
 	}
 
 	finalBinaryPath := filepath.Join(installDir, finalBinaryName)
 	log.Printf("Moving FFmpeg from %s to %s", extractedFfmpegPath, finalBinaryPath)
-	if err := os.Rename(extractedFfmpegPath, finalBinaryPath); err != nil {
+	if err := moveFile(extractedFfmpegPath, finalBinaryPath); err != nil {
 		return fmt.Errorf("failed to move ffmpeg binary: %w", err)
 	}
 
-	// Make the file executable
-	if platform != "windows" { // Windows doesn't need explicit chmod for executables
+	if platform != "windows" {
 		if err := os.Chmod(finalBinaryPath, 0755); err != nil {
 			return fmt.Errorf("could not make ffmpeg executable: %w", err)
 		}
@@ -346,6 +448,7 @@ func (a *App) DownloadFFmpeg() error {
 	// Update the app state
 	a.ffmpegBinaryPath = finalBinaryPath
 	a.hasFfmpeg = true
+	a.signalFfmpegReady()
 	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
 
 	log.Println("FFmpeg download and installation complete.")
@@ -356,6 +459,7 @@ func (a *App) shutdown(ctx context.Context) {
 	a.ctx = ctx
 	log.Println("Wails App: OnShutdown called.")
 
+	// Case 1: The Go app launched the Python process. We own it and can terminate it.
 	if a.pythonCmd != nil && a.pythonCmd.Process != nil {
 		log.Printf("Shutting down Python process with PID %d...", a.pythonCmd.Process.Pid)
 
@@ -368,6 +472,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 		if terminateErr != nil {
 			log.Printf("Failed to terminate Python process: %v", terminateErr)
+			// send http kill command here as a last resort
 			return
 		}
 
@@ -383,6 +488,21 @@ func (a *App) shutdown(ctx context.Context) {
 			if killErr := a.pythonCmd.Process.Kill(); killErr != nil {
 				log.Printf("Failed to kill Python process: %v", killErr)
 			}
+		}
+	} else if a.pythonReady {
+		log.Println("Signaling external Python backend to shut down...")
+
+		// Create a context with a short, 2-second timeout for this specific request.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Use the new, centralized helper function
+		_, err := a.sendRequestToPython(shutdownCtx, "POST", "/shutdown", nil)
+		if err != nil {
+			// Log the error, but don't block the shutdown process.
+			log.Printf("Failed to send shutdown signal to Python: %v", err)
+		} else {
+			log.Println("Successfully sent shutdown signal to Python backend.")
 		}
 	}
 }
@@ -600,6 +720,10 @@ func (a *App) DetectSilences(
 	clipStartSeconds float64,
 	clipEndSeconds float64,
 ) ([]SilencePeriod, error) {
+	if err := a.waitForFfmpeg(); err != nil {
+		return nil, err
+	}
+
 	if clipStartSeconds < 0 {
 		clipStartSeconds = 0
 	}
@@ -913,18 +1037,31 @@ func parseDuration(s string) (time.Duration, error) {
 }
 
 func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *int) error {
-	// 1. Register with the tracker using our established pattern
-	tracker := &ConversionTracker{
-		Done: make(chan error, 1),
-	}
+	tracker := &ConversionTracker{Done: make(chan error, 1)}
 	actualTracker, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker)
+
 	if loaded {
-		return <-actualTracker.(*ConversionTracker).Done
+		// If another goroutine is already working on this, just wait for its result.
+		log.Printf("StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
+		err := <-actualTracker.(*ConversionTracker).Done
+		log.Printf("StandardizeAudioToWav: Wait finished for %s.", filepath.Base(outputPath))
+		return err
 	}
+
+	// This goroutine is now the "owner" of the conversion task.
+	// We must ensure the Done channel is closed and the tracker entry is removed.
 	defer func() {
 		close(tracker.Done)
 		a.conversionTracker.Delete(outputPath)
+		log.Printf("StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
+
+	// 2. NOW, wait for FFmpeg to be ready.
+	if err := a.waitForFfmpeg(); err != nil {
+		// If waiting fails (e.g., app quits), signal the error to any waiters.
+		tracker.Done <- err
+		return err
+	}
 
 	if isValidWav(outputPath) {
 		tracker.Done <- nil
@@ -1159,6 +1296,10 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 }
 
 func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips []*NestedAudioTimelineItem) error {
+	if err := a.waitForFfmpeg(); err != nil {
+		return err
+	}
+
 	var filterComplex strings.Builder
 	var delayedStreams []string
 

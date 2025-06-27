@@ -196,7 +196,7 @@ function AppContent() {
     }
     console.log("syncing...")
     setBusy(true);
-    const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
+    //const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
 
     const conditionalSetProjectData = async (
       newData: main.ProjectDataPayload | null
@@ -238,25 +238,25 @@ function AppContent() {
           response.message
         );
         conditionalSetProjectData(response.data || null);
-        toast.dismiss(loadingToastId);
+        // toast.dismiss(loadingToastId);
       } else if (response && response.status !== "success") {
         console.error(
           "Sync failed (Python reported error, no global alert by Go):",
           response.message
         );
         setProjectData(null);
-        toast.error("Sync failed", {
-          id: loadingToastId,
-          description: response.message || "An error occurred during sync.",
-          duration: 5000,
-        });
+        // toast.error("Sync failed", {
+        //   id: loadingToastId,
+        //   description: response.message || "An error occurred during sync.",
+        //   duration: 5000,
+        // });
         setBusy(false);
       } else if (response && response.status === "success") {
         conditionalSetProjectData(response.data);
-        toast.success("Synced with DaVinci Resolve", {
-          id: loadingToastId,
-          duration: 1500,
-        });
+        // toast.success("Synced with DaVinci Resolve", {
+        //   id: loadingToastId,
+        //   duration: 1500,
+        // });
         setBusy(false);
       } else {
         console.error(
@@ -264,10 +264,10 @@ function AppContent() {
           response
         );
         setProjectData(null);
-        toast.error("Sync failed: Unexpected response format", {
-          id: loadingToastId,
-          duration: 5000,
-        });
+        // toast.error("Sync failed: Unexpected response format", {
+        //   id: loadingToastId,
+        //   duration: 5000,
+        // });
         setBusy(false);
       }
     } catch (err: any) {
@@ -275,16 +275,16 @@ function AppContent() {
       setProjectData(null);
 
       if (err && err.alertIssued) {
-        toast.dismiss(loadingToastId);
+        //toast.dismiss(loadingToastId);
       } else {
         const errorMessage =
           err?.message ||
           (typeof err === "string" ? err : "An unknown error occurred.");
-        toast.error("Sync Error", {
-          id: loadingToastId,
-          description: `${errorMessage}`,
-          duration: 5000,
-        });
+        // toast.error("Sync Error", {
+        //   id: loadingToastId,
+        //   description: `${errorMessage}`,
+        //   duration: 5000,
+        // });
       }
       setBusy(false);
     }
@@ -308,7 +308,7 @@ function AppContent() {
         if (port && port > 0) {
           console.log("App.tsx: HTTP Server Port received:", port);
           setHttpPort(port); // This will trigger a re-render
-          
+
           const ffmpegReady = await GetFFmpegStatus();
           if (!ffmpegReady) {
             console.log("no ffmpeg!");
@@ -373,7 +373,7 @@ function AppContent() {
     };
   }, []);
 
-  
+
 
   const syncTimeoutRef = useRef<number | null>(null);
   const syncMouseUpListenerRef = useRef<(() => void) | null>(null);
@@ -608,7 +608,7 @@ export default function App() {
   const [showFinalProgress, setShowFinalProgress] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [message, setMessage] = useState("");
-  
+
 
   const timeStartedRef = useRef<number | null>(null);
   const timeFinishedRef = useRef<number | null>(null);

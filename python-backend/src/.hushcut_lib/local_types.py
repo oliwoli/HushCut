@@ -1,4 +1,4 @@
-from typing import Any, List, Dict, Literal, NotRequired, Optional, TypedDict
+from typing import Any, List, Dict, Literal, Optional, TypedDict
 
 
 class ClipData(TypedDict):
@@ -35,7 +35,7 @@ class NestedAudioTimelineItem(TypedDict):
     duration: float
     edit_instructions: list[EditInstruction]
     source_channel: int
-    nested_items: NotRequired[list["NestedAudioTimelineItem"]]
+    nested_items: Optional[list["NestedAudioTimelineItem"]]
 
 
 class TimelineItem(TypedDict):
@@ -53,10 +53,10 @@ class TimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
-    source_channel: NotRequired[int]
-    link_group_id: NotRequired[int]
-    type: NotRequired[Literal["Compound", "Timeline"]]
-    nested_clips: NotRequired[list[NestedAudioTimelineItem]]
+    source_channel: Optional[int]
+    link_group_id: Optional[int]
+    type: Optional[Literal["Compound", "Timeline"]]
+    nested_clips: Optional[list[NestedAudioTimelineItem]]
 
 
 def make_empty_timeline_item() -> TimelineItem:
@@ -100,7 +100,7 @@ class FileSource(TypedDict):
 
 class FileData(TypedDict):
     properties: FileProperties
-    processed_audio_path: NotRequired[str]
+    processed_audio_path: Optional[str]
     silenceDetections: Optional[List[SilenceInterval]]
     timelineItems: list[TimelineItem]
     fileSource: FileSource

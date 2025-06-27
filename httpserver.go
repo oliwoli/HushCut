@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -70,6 +71,100 @@ type PythonCommandResponse struct {
 	AlertSeverity   string `json:"alertSeverity,omitempty"` // "info", "warning", "error"
 
 	AlertIssued bool `json:"alertIssued,omitempty"`
+}
+
+func (a *App) sendRequestToPython(ctx context.Context, method, path string, payload interface{}) ([]byte, error) {
+	if !a.pythonReady || a.pythonCommandPort == 0 {
+		return nil, fmt.Errorf("python backend is not ready")
+	}
+
+	url := fmt.Sprintf("http://localhost:%d%s", a.pythonCommandPort, path)
+
+	var reqBody io.Reader
+	// Marshal payload to JSON if it exists
+	if payload != nil {
+		jsonBody, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling payload for %s: %w", path, err)
+		}
+		reqBody = bytes.NewBuffer(jsonBody)
+		// Optional: Log payload for debugging. Be careful with sensitive data.
+		// log.Printf("Go -> Python [%s %s]: %s", method, path, string(jsonBody))
+	} else {
+		log.Printf("Go -> Python [%s %s]", method, path)
+	}
+
+	// Create request with context, which allows for per-request timeouts
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request for %s: %w", path, err)
+	}
+
+	// --- CENTRALIZED HEADER LOGIC ---
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// *** FUTURE AUTHORIZATION TOKEN GOES HERE ***
+	// When you're ready, you'll add the logic here, in one place.
+	// if a.authToken != "" {
+	//  req.Header.Set("Authorization", "Bearer " + a.authToken)
+	// }
+	// ---
+
+	// Use the single, shared httpClient from the App struct
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http client error for %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body from %s: %w", path, err)
+	}
+
+	// Check for non-successful status codes
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Python responded to %s with status %s. Body: %s", path, resp.Status, string(responseBody))
+		// Return the body along with the error, as it might contain a structured error message
+		return responseBody, fmt.Errorf("python server responded with non-200 status: %s", resp.Status)
+	}
+
+	return responseBody, nil
+}
+
+func (a *App) SendCommandToPython(commandName string, params map[string]interface{}) (*PythonCommandResponse, error) {
+	commandPayload := map[string]interface{}{
+		"command": commandName,
+		"params":  params,
+	}
+	if params == nil {
+		commandPayload["params"] = make(map[string]interface{})
+	}
+
+	// Create a context. The shared client's timeout will apply unless this context has a shorter one.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	responseBody, err := a.sendRequestToPython(ctx, "POST", "/command", commandPayload)
+	if err != nil {
+		// Even on a non-200 status, the body might contain a useful JSON error from Python.
+		var errResp PythonCommandResponse
+		if json.Unmarshal(responseBody, &errResp) == nil && errResp.Message != "" {
+			return &errResp, fmt.Errorf("python command '%s' failed: %s", commandName, errResp.Message)
+		}
+		// If unmarshalling fails or message is empty, return the original network error.
+		return nil, fmt.Errorf("failed to send command '%s' to python: %w", commandName, err)
+	}
+
+	var pyResp PythonCommandResponse
+	if err := json.Unmarshal(responseBody, &pyResp); err != nil {
+		return nil, fmt.Errorf("error unmarshalling successful python response for command '%s': %w. Body: %s", commandName, err, string(responseBody))
+	}
+
+	log.Printf("Go: Response from Python for command '%s': Status: '%s', Message: '%s'", commandName, pyResp.Status, pyResp.Message)
+	return &pyResp, nil
 }
 
 func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.HandlerFunc {
@@ -616,71 +711,6 @@ func (a *App) GetProjectDataPayloadType() ProjectDataPayload {
 		},
 		Files: nil,
 	}
-}
-
-func (a *App) SendCommandToPython(commandName string, params map[string]interface{}) (*PythonCommandResponse, error) {
-	if !a.pythonReady || a.pythonCommandPort == 0 { // Check general pythonReady flag
-		return nil, fmt.Errorf("python backend or its command server is not ready (port: %d, ready: %v)", a.pythonCommandPort, a.pythonReady)
-	}
-
-	url := fmt.Sprintf("http://localhost:%d/command", a.pythonCommandPort)
-	commandPayload := map[string]interface{}{
-		"command": commandName,
-		"params":  params, // Can be nil if no params
-	}
-	if params == nil {
-		commandPayload["params"] = make(map[string]interface{}) // Ensure params is at least an empty object
-	}
-
-	jsonBody, err := json.Marshal(commandPayload)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling Python command: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("error creating request for Python command: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// --- FUTURE: Add Authorization Token to call Python's command server ---
-	// globalEnableAuthToPython := false // This would be a config
-	// if globalEnableAuthToPython && a.sharedSecretForPython != "" {
-	//  req.Header.Set("Authorization", "Bearer " + a.sharedSecretForPython)
-	// }
-	// --- END FUTURE ---
-
-	log.Printf("Go: Sending command '%s' to Python at %s with payload: %s", commandName, url, string(jsonBody))
-
-	client := &http.Client{Timeout: 20 * time.Second} // Adjust timeout as needed
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("- %w", err)
-	}
-	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Go: Python command server responded with status %d for command '%s'. Body: %s", resp.StatusCode, commandName, string(responseBody))
-		// Attempt to parse Python's structured error
-		var errResp PythonCommandResponse
-		if json.Unmarshal(responseBody, &errResp) == nil && errResp.Message != "" {
-			return &errResp, fmt.Errorf("python command '%s' failed with status %d: %s", commandName, resp.StatusCode, errResp.Message)
-		}
-		return nil, fmt.Errorf("python command '%s' failed with status %d: %s", commandName, resp.StatusCode, string(responseBody))
-	}
-
-	var pyResp PythonCommandResponse
-	if err := json.Unmarshal(responseBody, &pyResp); err != nil {
-		return nil, fmt.Errorf("error unmarshalling Python response for command '%s': %w. Body: %s", commandName, err, string(responseBody))
-	}
-
-	log.Printf("Go: Response from Python for command '%s': Status: '%s', Message: '%s'", commandName, pyResp.Status, pyResp.Message)
-	return &pyResp, nil
 }
 
 func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your actual PythonCommandResponse type
