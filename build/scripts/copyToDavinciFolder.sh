@@ -26,7 +26,7 @@ cd "$PROJECT_ROOT"
 
 cp "python-backend/src/HushCut.py" "$DAVINCI_FOLDER/HushCut.py"
 cp "build/bin/python_backend" "$DAVINCI_FOLDER/python_backend"
-cp -r "python-backend/src/hushcut_lib" "$DAVINCI_FOLDER/hushcut_lib"
+cp -rfT "python-backend/src/hushcut_lib" "$DAVINCI_FOLDER/hushcut_lib"
 
 
 exit 0
