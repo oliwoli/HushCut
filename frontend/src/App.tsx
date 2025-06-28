@@ -1,8 +1,8 @@
 import React from "react";
-// import { scan } from "react-scan";
-// scan({
-//   enabled: true,
-// });
+import { scan } from "react-scan";
+scan({
+  enabled: true,
+});
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import deepEqual from "fast-deep-equal";
