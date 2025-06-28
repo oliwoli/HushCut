@@ -21,23 +21,43 @@ interface InfoDialogProps {
 }
 
 export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
-    useEffect(() => setMounted(true), [])
-    const [md, setMd] = useState('')
+    const [md, setMd] = useState('');
+    const [internalOpen, setInternalOpen] = useState(false); // Controls the Dialog's 'open' prop
+    const [dialogOpacity, setDialogOpacity] = useState(1); // Controls the DialogContent's opacity
 
+    useEffect(() => {
+        if (open) { // Parent wants to open
+            setInternalOpen(true);
+            setDialogOpacity(1);
+        } else { // Parent wants to close
+            // Start fading out immediately
+            setDialogOpacity(0);
+
+            // After 150ms (fade out duration), set internalOpen to false to trigger Radix's close animation
+            const fadeOutTimer = setTimeout(() => {
+                setInternalOpen(false);
+            }, 150);
+
+            return () => clearTimeout(fadeOutTimer);
+        }
+    }, [open]);
 
     useEffect(() => {
         fetch('/ffmpeg-notice.md')
             .then((res) => res.text())
-            .then(setMd)
-    }, [])
+            .then(setMd);
+    }, []);
 
-    console.log(md)
+    // Only render the Dialog if internalOpen is true
+    if (!internalOpen) return null;
 
-    const [mounted, setMounted] = useState(false)
-    if (!mounted) return null
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-xl md:max-w-2xl xl:max-w-5xl">
+        <Dialog open={internalOpen} onOpenChange={onOpenChange}>
+            <DialogContent
+                className="sm:max-w-xl md:max-w-2xl xl:max-w-5xl"
+                style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
+                disableRadixAnimations={dialogOpacity === 0}
+            >
                 <DialogHeader>
                     <DialogTitle>HushCut</DialogTitle>
                     <DialogDescription>
