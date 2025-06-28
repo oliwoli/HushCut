@@ -496,28 +496,24 @@ function AppContent() {
               )}
             </div>
             <div className="w-full px-1 bg-[#212126] rounded-2xl border-1 overflow-hidden shadow-xl">
-              <div className="p-5 space-y-2">
-                <SilenceControls key={currentClipId} />
-                <DavinciSettings />
+              <div className="p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between">
+                <div className="flex flex-wrap gap-x-4 gap-y-2 w-min">
+                  <SilenceControls key={currentClipId} />
+                </div>
                 {projectData && (
-                  <div className="flex justify-start mb-4">
+                  <div className="pt-5 pr-5 space-y-4">
                     <RemoveSilencesButton
                       projectData={projectData}
                       defaultDetectionParams={getDefaultDetectionParams()}
                     />
+                    <DavinciSettings />
                   </div>
                 )}
               </div>
             </div>
 
-            {/* <div className="flex space-y-8 w-full">
-              <div className="items-center space-y-2 mt-4">
-
-              </div>
-            </div> */}
           </div>
         </main>
-        <div id="dialog-portal-container" />
       </div>
     </>
   );

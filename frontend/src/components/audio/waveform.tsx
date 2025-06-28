@@ -51,7 +51,6 @@ interface SilencePeriod {
   end: number;
 }
 
-
 interface TimecodeDisplayProps {
   time: number;
   duration: number;

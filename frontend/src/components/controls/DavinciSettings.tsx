@@ -27,9 +27,9 @@ const _KeepSilenceSetting = React.memo(() => {
     const setKeepSilence = useGlobalStore(s => s.setKeepSilence);
 
     return (
-        <div className='space-y-2'>
+        <div className='space-y-2 mx-auto gap-2 justify-center'>
             <Label className="font-medium w-full text-stone-400">
-                Keep Silence (just cut)
+                Keep Silence
             </Label>
             <Switch checked={keepSilence} onCheckedChange={setKeepSilence} />
 
