@@ -1,7 +1,5 @@
 from typing import Any, Dict, Optional, Set, TypedDict
 
-import misc_utils
-
 from local_types import ProjectData
 
 
@@ -47,12 +45,18 @@ def _recursive_folder_scan(
 
             # At this point, item_media_id is a valid string and is relevant.
             # This item_media_id will be used as the key in item_folder_map.
-            
+
             properties = item.GetClipProperty()
             file_path_value = ""
             possible_path_keys = [
-                "File Path", "Path", "Full Path", "Filepath", "Media Path",
-                "Proxy Path" if isinstance(properties, dict) and properties.get("Proxy") == "On" else None,
+                "File Path",
+                "Path",
+                "Full Path",
+                "Filepath",
+                "Media Path",
+                "Proxy Path"
+                if isinstance(properties, dict) and properties.get("Proxy") == "On"
+                else None,
             ]
             possible_path_keys = [key for key in possible_path_keys if key is not None]
 
@@ -61,7 +65,7 @@ def _recursive_folder_scan(
                     if key in properties and properties[key]:
                         file_path_value = properties[key]
                         break
-            
+
             if not isinstance(file_path_value, str):
                 file_path_value = str(file_path_value)
 
@@ -106,7 +110,9 @@ def map_media_pool_items_to_folders(
         return item_folder_map
 
     if not project_data or not isinstance(project_data.get("files"), dict):
-        print("Error: project_data is missing or 'files' attribute is not a valid dictionary. No items will be mapped.")
+        print(
+            "Error: project_data is missing or 'files' attribute is not a valid dictionary. No items will be mapped."
+        )
         return item_folder_map
 
     # --- MODIFICATION START ---
@@ -116,36 +122,58 @@ def map_media_pool_items_to_folders(
     items_with_valid_media_id_count = 0
 
     for file_key, file_info in project_data["files"].items():
-        items_in_project_data_count +=1
-        if (isinstance(file_info, dict) and
-                isinstance(file_info.get("fileSource"), dict) and
-                "bmd_media_pool_item" in file_info["fileSource"]):
-            
+        items_in_project_data_count += 1
+        if (
+            isinstance(file_info, dict)
+            and isinstance(file_info.get("fileSource"), dict)
+            and "bmd_media_pool_item" in file_info["fileSource"]
+        ):
             bmd_item = file_info["fileSource"]["bmd_media_pool_item"]
-            # check if bmd_item is str "<BMDObject>"                
+            # check if bmd_item is str "<BMDObject>"
             if bmd_item is not None:
                 try:
                     media_id = bmd_item.GetMediaId()
-                    if media_id and isinstance(media_id, str): # Ensure it's a non-empty string
+                    if media_id and isinstance(
+                        media_id, str
+                    ):  # Ensure it's a non-empty string
                         relevant_media_ids.add(media_id)
                         items_with_valid_media_id_count += 1
                     else:
-                        item_name = bmd_item.GetName() if hasattr(bmd_item, 'GetName') else 'Unknown Name'
-                        print(f"Warning: Media item (name: '{item_name}', from project_data key: '{file_key}') is missing a valid MediaId. It cannot be tracked for folder mapping by ID.")
+                        item_name = (
+                            bmd_item.GetName()
+                            if hasattr(bmd_item, "GetName")
+                            else "Unknown Name"
+                        )
+                        print(
+                            f"Warning: Media item (name: '{item_name}', from project_data key: '{file_key}') is missing a valid MediaId. It cannot be tracked for folder mapping by ID."
+                        )
                 except Exception as e:
-                    item_name = bmd_item.GetName() if hasattr(bmd_item, 'GetName') else 'Unknown Name'
-                    print(f"Warning: Error getting MediaId for item (name: '{item_name}', from project_data key: '{file_key}'): {e}. It will be skipped.")
+                    item_name = (
+                        bmd_item.GetName()
+                        if hasattr(bmd_item, "GetName")
+                        else "Unknown Name"
+                    )
+                    print(
+                        f"Warning: Error getting MediaId for item (name: '{item_name}', from project_data key: '{file_key}'): {e}. It will be skipped."
+                    )
             else:
-                print(f"Warning: 'bmd_media_pool_item' is None for project_data key: '{file_key}'.")
+                print(
+                    f"Warning: 'bmd_media_pool_item' is None for project_data key: '{file_key}'."
+                )
         else:
-            print(f"Warning: Malformed file_info or missing 'fileSource'/'bmd_media_pool_item' for project_data key: '{file_key}'.")
-
+            print(
+                f"Warning: Malformed file_info or missing 'fileSource'/'bmd_media_pool_item' for project_data key: '{file_key}'."
+            )
 
     print(f"Processed {items_in_project_data_count} file entries from project_data.")
     if not relevant_media_ids:
-        print("No relevant media items (with valid MediaIDs) found in project_data. The map will be empty.")
+        print(
+            "No relevant media items (with valid MediaIDs) found in project_data. The map will be empty."
+        )
         return item_folder_map
-    print(f"Found {len(relevant_media_ids)} unique relevant MediaIDs to scan for in the Media Pool.")
+    print(
+        f"Found {len(relevant_media_ids)} unique relevant MediaIDs to scan for in the Media Pool."
+    )
     # --- MODIFICATION END ---
 
     media_pool = project.GetMediaPool()
@@ -235,17 +263,25 @@ def move_clips_to_temp_folder(
         bmd_mp_item = item["bmd_media_pool_item"]
         if not bmd_mp_item:
             continue
-        
+
         media_id_to_store = bmd_mp_item.GetMediaId()
-        
+
         if media_id_to_store:
-            success = bmd_mp_item.SetThirdPartyMetadata({"silence_detect_uuid": media_id_to_store})
+            success = bmd_mp_item.SetThirdPartyMetadata(
+                {"silence_detect_uuid": media_id_to_store}
+            )
             if success:
-                print(f"Set metadata for '{bmd_mp_item.GetName()}' with MediaID: {media_id_to_store}")
+                print(
+                    f"Set metadata for '{bmd_mp_item.GetName()}' with MediaID: {media_id_to_store}"
+                )
             else:
-                print(f"Warning: Failed to set metadata for clip '{bmd_mp_item.GetName()}' (MediaID: {media_id_to_store})")
+                print(
+                    f"Warning: Failed to set metadata for clip '{bmd_mp_item.GetName()}' (MediaID: {media_id_to_store})"
+                )
         else:
-            print(f"Warning: Clip '{bmd_mp_item.GetName()}' has no MediaID at metadata setting time. Skipping metadata set.")
+            print(
+                f"Warning: Clip '{bmd_mp_item.GetName()}' has no MediaID at metadata setting time. Skipping metadata set."
+            )
 
         if not item["file_path"]:
             clips_no_filepaths.append(item["bmd_media_pool_item"])

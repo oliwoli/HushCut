@@ -11,3 +11,5 @@ typings
 temp
 python-backend/build
 dist
+
+python-backend/wav_files
