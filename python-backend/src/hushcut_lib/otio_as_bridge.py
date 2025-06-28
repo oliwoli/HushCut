@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, List, Dict, Sequence, Tuple, Optional, cast
+from typing import Any, List, Dict, Tuple, Optional, cast
 
 # Assuming these are correctly defined in your project
 from hushcut_lib.local_types import TimelineItem, NestedAudioTimelineItem
@@ -329,24 +329,17 @@ def process_track_items(
 
 def unify_edit_instructions(
     items: List[TimelineItem],
-) -> Sequence[Tuple[float, Optional[float], bool]]:
+) -> List[Tuple[float, Optional[float], bool]]:
     """
-    Takes a list of linked items, finds all 'enabled' edit instructions,
-    normalizes them to be source-relative, and merges them into a single
-    list of active, enabled time ranges.
-
-    If no items have edit instructions, it returns a special signal `[(0.0, None, True)]`
-    to indicate the group is uncut.
+    Takes a list of linked items and unifies their edit instructions. It flattens
+    all intervals, preserving their enabled/disabled state, and merges them
+    such that any region covered by at least one 'enabled' clip is marked as enabled.
     """
     has_any_edits = any(item.get("edit_instructions") for item in items)
-
     if not has_any_edits:
-        # The "uncut" signal now includes a default 'enabled' status of True.
         return [(0.0, None, True)]
 
-    # We only care about intervals that are explicitly enabled.
-    # The logic is that "enabled" clips create the unified timeline.
-    enabled_intervals: List[Tuple[float, float]] = []
+    events = []
     for item in items:
         if item.get("edit_instructions"):
             base = item.get("source_start_frame", 0.0)
@@ -357,35 +350,73 @@ def unify_edit_instructions(
                 ):
                     rel_start = edit["source_start_frame"] - base
                     rel_end = edit["source_end_frame"] - base
-                    enabled_intervals.append((rel_start, rel_end))
+                    is_enabled = edit.get("enabled", True)
+                    # --- CHANGE: Create start/end "event points" with enabled status ---
+                    # Type: 1 for start, -1 for end
+                    events.append((rel_start, 1, is_enabled))
+                    events.append((rel_end, -1, is_enabled))
 
-    # If there were no enabled edits, return an empty list.
-    if not enabled_intervals:
+    if not events:
         return []
 
-    enabled_intervals.sort()
-    merged: List[Tuple[float, float]] = []
+    # Sort events by frame time, then by type (starts before ends)
+    events.sort(key=lambda x: (x[0], -x[1]))
 
-    current_start, current_end = enabled_intervals[0]
+    merged_segments = []
+    active_enabled_count = 0
+    active_disabled_count = 0
+    last_frame = events[0][0]
 
-    for next_start, next_end in enabled_intervals[1:]:
-        if next_start <= current_end + 0.01:
-            current_end = max(current_end, next_end)
+    for frame, type_val, is_enabled in events:
+        segment_duration = frame - last_frame
+        if segment_duration > 0:
+            # Determine the status of the time segment we just passed
+            is_segment_enabled = active_enabled_count > 0
+            is_segment_active = active_enabled_count > 0 or active_disabled_count > 0
+            if is_segment_active:
+                merged_segments.append((last_frame, frame, is_segment_enabled))
+
+        if type_val == 1:  # Start of a clip
+            if is_enabled:
+                active_enabled_count += 1
+            else:
+                active_disabled_count += 1
+        else:  # End of a clip
+            if is_enabled:
+                active_enabled_count -= 1
+            else:
+                active_disabled_count -= 1
+
+        last_frame = frame
+
+    if not merged_segments:
+        return []
+
+    final_edits = []
+    current_start, current_end, current_enabled = merged_segments[0]
+
+    for next_start, next_end, next_enabled in merged_segments[1:]:
+        # If the next segment is contiguous and has the same status, merge it
+        if next_start == current_end and next_enabled == current_enabled:
+            current_end = next_end  # Extend the end time
         else:
-            merged.append((current_start, current_end))
-            current_start, current_end = next_start, next_end
-    merged.append((current_start, current_end))
+            # Otherwise, finalize the current segment and start a new one
+            final_edits.append((current_start, current_end, current_enabled))
+            current_start, current_end, current_enabled = (
+                next_start,
+                next_end,
+                next_enabled,
+            )
+
+    # Append the very last processed segment
+    final_edits.append((current_start, current_end, current_enabled))
 
     min_duration_in_frames = 1.0
-
-    # --- CHANGE: Add 'True' to the final list, as all these are enabled segments ---
-    final_edits = [
-        (start, end, True)
-        for start, end in merged
+    return [
+        (start, end, enabled)
+        for start, end, enabled in final_edits
         if (end - start) >= min_duration_in_frames
     ]
-
-    return final_edits
 
 
 def unify_linked_items_in_project_data(input_otio_path: str) -> None:
@@ -394,7 +425,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     based on a discrete frame grid, and overwrites the project data.
     This ensures perfect sync and no gaps between edited clips.
     """
-    # (No changes to the initial data loading and track processing)
     project_data = getattr(globalz, "PROJECT_DATA", None)
     if not project_data or "timeline" not in project_data:
         logging.error("Could not initialize or find project data.")
@@ -455,10 +485,8 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         if not group_items:
             continue
 
+        # This function now returns the correctly processed, granular edit data
         unified_edits = unify_edit_instructions(group_items)
-
-        # --- CHANGE: REMOVED the flawed logic for 'original_enabled_flag' ---
-        # The enabled status is now correctly handled by `unify_edit_instructions`.
 
         group_timeline_anchor = min(
             (item.get("start_frame", float("inf")) for item in group_items),
@@ -470,7 +498,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             )
             continue
 
-        # This check still works correctly with the new return type.
         is_uncut = not unified_edits or (unified_edits and unified_edits[0][1] is None)
 
         for item in group_items:
@@ -480,8 +507,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             if is_uncut:
                 source_end = item.get("source_end_frame", base_source_offset)
                 if source_end > base_source_offset:
-                    # --- CHANGE: Correctly determine enabled status for uncut clips ---
-                    # It's safe to assume the item's first instruction represents its state.
                     is_item_enabled = bool(
                         item.get("edit_instructions")
                         and item["edit_instructions"][0].get("enabled", True)
@@ -498,7 +523,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             else:
                 timeline_playhead = round(group_timeline_anchor)
 
-                # --- CHANGE: Unpack the new 'is_enabled' boolean from the unified result ---
+                # Unpack the correct boolean for each specific segment
                 for rel_start, rel_end, is_enabled in unified_edits:
                     source_duration = cast(float, rel_end) - rel_start
                     timeline_duration = round(source_duration)
@@ -518,8 +543,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                             "source_end_frame": source_end,
                             "start_frame": timeline_start,
                             "end_frame": timeline_end,
-                            # --- CHANGE: Use the correct 'is_enabled' flag ---
-                            "enabled": is_enabled,
+                            "enabled": is_enabled,  # Use the correct, granular flag
                         }
                     )
                     timeline_playhead = timeline_end
@@ -528,3 +552,8 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             logging.info(
                 f"Updated item '{item['id']}' in group {link_id} with {len(new_edit_instructions)} unified edit(s)."
             )
+
+    # current_dir = os.path.dirname(os.path.abspath(__file__))
+    # debug_json_path = os.path.join(current_dir, "debug_project_data.json")
+    # print(f"exporting to {debug_json_path}")
+    # export_to_json(globalz.PROJECT_DATA, debug_json_path)

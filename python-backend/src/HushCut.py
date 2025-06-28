@@ -1622,7 +1622,8 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
 
                     if actual_key in disabled_keys:
                         bmd_item = item_dict["bmd_item"]
-                        bmd_item.SetClipEnabled(False)
+                        # bmd_item.SetClipEnabled(False)
+                        bmd_item.SetClipColor("Violet")
                         disabled_count += 1
                 print(f"Updated status for {disabled_count} clip(s).")
             else:
