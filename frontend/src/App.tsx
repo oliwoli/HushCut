@@ -144,25 +144,27 @@ function AppContent() {
       setCurrentClipId(null);
       return;
     }
-    if (!currTimecode) return;
+    if (currTimecode) {
+      // 1. Convert the current timecode to frames
+      const currentFrame = currTimecode.frameCount;
 
-    // 1. Convert the current timecode to frames
-    const currentFrame = currTimecode.frameCount;
-
-    // 2. Find the clip that contains the current frame
-    // A clip "contains" the frame if the frame is between its start and end markers.
-    const clipAtTimecode = audioItems.find(
-      (item) =>
-        currentFrame >= item.start_frame && currentFrame < item.end_frame
-    );
-
-    // 3. Update the current clip ID
-    if (clipAtTimecode) {
+      // 2. Find the clip that contains the current frame
+      // A clip "contains" the frame if the frame is between its start and end markers.
+      const clipAtTimecode = audioItems.find(
+        (item) =>
+          currentFrame >= item.start_frame && currentFrame < item.end_frame
+      );
+      if (!clipAtTimecode) return;
+      // 3. Update the current clip ID
       const newClipId = clipAtTimecode.id || clipAtTimecode.processed_file_name;
       // Only update state if the ID has actually changed to prevent re-renders
       if (newClipId && newClipId !== currentClipId) {
         setCurrentClipId(newClipId);
       }
+    } else {
+      setCurrentClipId(
+        audioItems[0]?.id || audioItems[0]?.processed_file_name || null
+      );
     }
   }, [currTimecode, audioItems, timelineFps]);
 

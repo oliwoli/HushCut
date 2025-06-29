@@ -50,7 +50,7 @@ const _TitleBar = () => {
   return (
     <div className="select-none">
       <div id="draggable" className="select-none">
-        <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-[10] mb-20">
+        <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-[10]">
           <div className="flex items-center space-x-2">
             <Button
               size={"sm"}
