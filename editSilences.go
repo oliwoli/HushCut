@@ -141,7 +141,7 @@ func CreateEditsWithOptionalSilence(
 	}
 
 	// 5) Final sound *after* last silence
-	framesAfter := round(clipData.EndFrame) - tlCursor + 1
+	framesAfter := round(clipData.EndFrame) - tlCursor
 	emit(int(framesAfter), true)
 
 	return edits
