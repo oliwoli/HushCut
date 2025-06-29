@@ -500,7 +500,7 @@ function AppContent() {
                 <div className="flex flex-wrap gap-x-4 gap-y-2 w-min">
                   <SilenceControls key={currentClipId} />
                 </div>
-                {projectData && (
+                {projectData && projectData.timeline?.audio_track_items?.length > 0 && (
                   <div className="pt-5 pr-5 space-y-4">
                     <RemoveSilencesButton
                       projectData={projectData}
@@ -530,9 +530,32 @@ interface FinalTimelineProps {
 
 export function FinalTimelineProgress({ open, progressPercentage, message, totalTime, onOpenChange }: FinalTimelineProps) {
   const displayMessage = progressPercentage === 100 ? "Done" : message;
+
+  const [internalOpen, setInternalOpen] = useState(false);
+  const [dialogOpacity, setDialogOpacity] = useState(1);
+
+  useEffect(() => {
+    if (open) {
+      setInternalOpen(true);
+      setDialogOpacity(1);
+    } else {
+      setDialogOpacity(0);
+      const fadeOutTimer = setTimeout(() => {
+        setInternalOpen(false);
+      }, 150); // Match transition duration
+      return () => clearTimeout(fadeOutTimer);
+    }
+  }, [open]);
+
+  if (!internalOpen) return null;
+
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="maybe-glass">
+    <Drawer open={internalOpen} onOpenChange={onOpenChange}>
+      <DrawerContent
+        className="maybe-glass"
+        style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
+        disableRadixAnimations={dialogOpacity === 0}
+      >
         <div className="max-w-full p-4 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
           <DrawerTitle className="text-2xl sm:text-4xl md:text-6xl mt-12 font-medium">{displayMessage}</DrawerTitle>
           {Number.isFinite(progressPercentage) && (

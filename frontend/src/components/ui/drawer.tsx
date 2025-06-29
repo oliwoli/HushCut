@@ -36,13 +36,17 @@ function DrawerClose({
 
 function DrawerOverlay({
   className,
+  disableRadixAnimations,
   ...props
-}: React.ComponentProps<typeof DrawerPrimitive.Overlay>) {
+}: React.ComponentProps<typeof DrawerPrimitive.Overlay> & { disableRadixAnimations?: boolean }) {
   return (
     <DrawerPrimitive.Overlay
       data-slot="drawer-overlay"
       className={cn(
-        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
+        "fixed inset-0 z-50 bg-black/50",
+        {
+          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0": !disableRadixAnimations,
+        },
         className
       )}
       {...props}
@@ -53,14 +57,15 @@ function DrawerOverlay({
 function DrawerContent({
   className,
   children,
+  disableRadixAnimations,
   ...props
-}: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+}: React.ComponentProps<typeof DrawerPrimitive.Content> & { disableRadixAnimations?: boolean }) {
   return (
     <DrawerPortal data-slot="drawer-portal">
-      <DrawerOverlay />
+      <DrawerOverlay disableRadixAnimations={disableRadixAnimations} />
       <DrawerPrimitive.Content
         data-slot="drawer-content"
-        style={{ '--vaul-animation-duration': '5ms' } as React.CSSProperties} // Or any desired duration
+        style={{ '--vaul-animation-duration': disableRadixAnimations ? '0ms' : '100ms' } as React.CSSProperties}
         className={cn(
           "group/drawer-content bg-background fixed z-50 flex h-auto flex-col",
           "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[80vh] data-[vaul-drawer-direction=top]:rounded-b-lg data-[vaul-drawer-direction=top]:border-b",

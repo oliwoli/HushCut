@@ -24,6 +24,24 @@ const GlobalAlertDialog = () => {
     message: "",
   });
 
+  // START of workaround
+  const [internalOpen, setInternalOpen] = useState(false);
+  const [dialogOpacity, setDialogOpacity] = useState(1);
+
+  useEffect(() => {
+    if (alertOpen) {
+      setInternalOpen(true);
+      setDialogOpacity(1);
+    } else {
+      setDialogOpacity(0);
+      const fadeOutTimer = setTimeout(() => {
+        setInternalOpen(false);
+      }, 150); // Match transition duration
+      return () => clearTimeout(fadeOutTimer);
+    }
+  }, [alertOpen]);
+  // END of workaround
+
   const isBusy = useSyncBusyState(s => s.isBusy);
   const setBusy = useSyncBusyState(s => s.setBusy);
   const isBusyRef = useRef(isBusy);
@@ -76,9 +94,14 @@ const GlobalAlertDialog = () => {
     }
   };
 
+  if (!internalOpen) return null;
+
   return (
-    <AlertDialog open={alertOpen} onOpenChange={handleOpenChange}>
-      <AlertDialogContent>
+    <AlertDialog open={internalOpen} onOpenChange={handleOpenChange}>
+      <AlertDialogContent
+        style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
+        disableRadixAnimations={dialogOpacity === 0}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{alertData.title}</AlertDialogTitle>
           <AlertDialogDescription>{alertData.message}</AlertDialogDescription>
