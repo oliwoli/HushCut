@@ -11,13 +11,26 @@ import {
 } from "@/components/ui/dropdown-menu"
 
 
-import { memo, useState } from "react";
+import { memo, useState, useEffect } from "react";
 import { BrowserOpenURL } from "@wails/runtime/runtime";
 
 import { useUiStore } from "@/stores/uiStore";
 
 const _TitleBar = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(true);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [dropdownVisible, setDropdownVisible] = useState(false);
+  const [dropdownOpacity, setDropdownOpacity] = useState(1);
+
+  useEffect(() => {
+    if (dropdownOpen) {
+      setDropdownVisible(true);
+      setDropdownOpacity(1);
+    } else {
+      setDropdownOpacity(0);
+      setDropdownVisible(false);
+    }
+  }, [dropdownOpen]);
 
   // This function will handle the logic
   const handlePinClick = () => {
@@ -66,7 +79,7 @@ const _TitleBar = () => {
           </div>
           <h1 className="text-sm font-normal text-neutral-200">HushCut</h1>
           <div className="flex items-center">
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={setDropdownOpen}>
               <DropdownMenuTrigger asChild>
                 <Button
                   size="icon"
@@ -75,19 +88,26 @@ const _TitleBar = () => {
                   <Ellipsis className="h-8 w-8 text-xl scale-150 " />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="mr-1" align="end">
-                {/* <DropdownMenuLabel>Menu</DropdownMenuLabel> */}
-                {/* <DropdownMenuSeparator /> */}
-                <DropdownMenuItem onSelect={() => setInfoDialogOpen(true)}>
-                  <Info className="mr-2 h-4 w-4" />
-                  <span>Info</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={handleDonateClick}>
-                  <Heart className="mr-2 h-4 w-4" />
-                  <span className="flex-grow">Donate</span>
-                  <ExternalLink className="ml-4 h-4 w-4 opacity-70" />
-                </DropdownMenuItem>
-              </DropdownMenuContent>
+              {dropdownVisible && (
+                <DropdownMenuContent
+                  className="mr-1"
+                  align="end"
+                  style={{ opacity: dropdownOpacity, transition: 'opacity 150ms ease-in-out' }}
+                  disableRadixAnimations={dropdownOpacity === 0}
+                >
+                  {/* <DropdownMenuLabel>Menu</DropdownMenuLabel> */}
+                  {/* <DropdownMenuSeparator /> */}
+                  <DropdownMenuItem onSelect={() => setInfoDialogOpen(true)}>
+                    <Info className="mr-2 h-4 w-4" />
+                    <span>Info</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleDonateClick}>
+                    <Heart className="mr-2 h-4 w-4" />
+                    <span className="flex-grow">Donate</span>
+                    <ExternalLink className="ml-4 h-4 w-4 opacity-70" />
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              )}
             </DropdownMenu>
           </div>
         </div>

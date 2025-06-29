@@ -298,14 +298,14 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   };
 
   const buttonDisabled = isProcessingClick;
-  const currentButtonText = isProcessingClick ? "Processing..." : "Remove Silences";
+  const currentButtonText = isProcessingClick ? "Processing..." : (keepSilence ? "Cut to Silences" : "Remove Silences");
 
   return (
     <Button
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       disabled={buttonDisabled}
-      className={`bg-stone-700/10 shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
+      className={`bg-stone-700/10 w-3xs shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       <span className="items-center align-middle flex text-xl gap-4 font-[50]">
         <AudioWaveformIcon size={32} className="scale-150 text-gray-500" />

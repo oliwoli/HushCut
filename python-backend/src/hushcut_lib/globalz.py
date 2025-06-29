@@ -1,4 +1,4 @@
-from local_types import ProjectData
+from hushcut_lib.local_types import ProjectData
 from typing import Optional
 
 PROJECT_DATA: Optional[ProjectData] = None

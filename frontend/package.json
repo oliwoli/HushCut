@@ -55,6 +55,7 @@
     "@types/smpte-timecode": "^1.2.5",
     "@vitejs/plugin-react": "^4.5.0",
     "babel-plugin-react-compiler": "19.1.0-rc.2",
+    "eslint": "^9.30.0",
     "eslint-plugin-react-hooks": "^6.0.0-rc.1",
     "tw-animate-css": "^1.3.0",
     "typescript": "^5.8.3",

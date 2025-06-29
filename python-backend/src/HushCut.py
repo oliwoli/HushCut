@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 import json
+import http.client
 from http.client import HTTPConnection
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -25,36 +26,35 @@ from typing import (
 )
 import os
 import sys
-
-# Add the .hushcut_lib directory to sys.path
-SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-hushcut_lib_path = os.path.join(SCRIPT_DIR, ".hushcut_lib")
-if hushcut_lib_path not in sys.path:
-    sys.path.insert(0, hushcut_lib_path)
-
-# check if the path exists
-if not os.path.exists(hushcut_lib_path):
-    raise FileNotFoundError(".hushcut_lib directory not found.")
-
-
 import subprocess
 import argparse
-
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import atexit
+import urllib.parse
 from uuid import uuid4
 import uuid
 
-from edit_silence import (
+# Add the hushcut_lib directory to sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+# hushcut_lib_path = os.path.join(SCRIPT_DIR, "hushcut_lib")
+# if hushcut_lib_path not in sys.path:
+#     sys.path.insert(0, hushcut_lib_path)
+
+# # check if the path exists
+# if not os.path.exists(hushcut_lib_path):
+#     raise FileNotFoundError("hushcut_lib directory not found.")
+
+
+from hushcut_lib.edit_silence import (
     create_edits_with_optional_silence,
     ClipData,
     SilenceInterval,
     EditInstruction,
 )
 
-import misc_utils
+import hushcut_lib.misc_utils as misc_utils
 
-from local_types import (
+from hushcut_lib.local_types import (
     NestedAudioTimelineItem,
     Timeline,
     TimelineItem,
@@ -63,15 +63,15 @@ from local_types import (
     AudioFromVideo,
 )
 
-import globalz
+import hushcut_lib.globalz as globalz
 
-from otio_as_bridge import (
+from hushcut_lib.otio_as_bridge import (
     unify_linked_items_in_project_data,
     populate_nested_clips,
     unify_edit_instructions,
 )
 
-from python_get_resolve import GetResolve
+from hushcut_lib.python_get_resolve import GetResolve
 
 # from project_orga import (
 #     map_media_pool_items_to_folders,
@@ -1126,7 +1126,7 @@ def apply_edits_from_go(
     the essential data from the frontend without side effects.
     """
     print("Applying edit instructions from Go...")
-    pprint.pprint(source_project)
+    # pprint.pprint(source_project)
 
     # Create an efficient lookup map of the audio items sent from Go.
     source_audio_items = source_project.get("timeline", {}).get("audio_track_items", [])
@@ -1392,6 +1392,10 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     TRACKER.complete_task("append")
 
+    execution_time = time() - script_start_time
+    # TODO: send this to the frontend, alongside other statistics like cuts made, total silence duration or silences removed (seconds)
+    print(f"it took {round(execution_time, 2)}s to complete")
+
     response_payload = {
         "status": "success",
         "message": "Edit successful!",
@@ -1419,10 +1423,23 @@ class ClipInfo(TypedDict):
     trackIndex: int
 
 
+class AppendedClipInfo(TypedDict):
+    clip_info: Dict
+    link_key: Tuple[int, int]
+    enabled: bool
+    auto_linked: bool  # Flag to track optimization
+
+
 def _append_clips_to_timeline(
     timeline: Any, media_pool: Any, timeline_items: List[TimelineItem]
-) -> Tuple[List[Tuple[Dict, Tuple[int, int]]], List[Any]]:
-    clips_to_process: List[Tuple[Dict, Tuple[int, int]]] = []
+) -> Tuple[List[AppendedClipInfo], List[Any]]:
+    """
+    Groups clips, prepares a SINGLE batch of instructions for the API with a
+    mix of optimized (auto-linked) and standard clips, then makes one API call.
+    """
+    grouped_clips: Dict[Tuple[int, int], List[AppendedClipInfo]] = {}
+
+    # This initial grouping logic remains the same
     for item in timeline_items:
         link_id = item.get("link_group_id")
         if link_id is None:
@@ -1437,9 +1454,6 @@ def _append_clips_to_timeline(
             source_start = edit.get("source_start_frame", 0)
             source_end = source_start + duration_frames
 
-            if not item["bmd_item"] or isinstance(item["bmd_item"], str):
-                raise TypeError("Could not get timeline item from DaVinci Script API")
-
             if not item.get("bmd_mpi"):
                 item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
 
@@ -1447,43 +1461,85 @@ def _append_clips_to_timeline(
                 "mediaPoolItem": item["bmd_mpi"],
                 "startFrame": source_start,
                 "endFrame": source_end,
-                "recordFrame": round(edit.get("start_frame", 0)),
+                "recordFrame": record_frame,
                 "trackIndex": item["track_index"],
                 "mediaType": media_type,
             }
             link_key = (link_id, i)
-            clips_to_process.append((clip_info_for_api, link_key))
+            appended_clip: AppendedClipInfo = {
+                "clip_info": clip_info_for_api,
+                "link_key": link_key,
+                "enabled": edit.get("enabled", True),
+                "auto_linked": False,
+            }
+            grouped_clips.setdefault(link_key, []).append(appended_clip)
 
-    if not clips_to_process:
+    if not grouped_clips:
         return [], []
 
-    # Sort and extract the clean list for the API
-    clips_to_process.sort(key=lambda item_tuple: item_tuple[0].get("recordFrame", 0))
-    final_clip_infos_for_api = [item_tuple[0] for item_tuple in clips_to_process]
+    # --- REFACTORED LOGIC: Build a single API batch ---
+    final_api_batch: List[Dict] = []
+    all_processed_clips: List[AppendedClipInfo] = []
 
-    print(f"Appending {len(final_clip_infos_for_api)} clip segments...")
-    appended_bmd_items: List[Any] = (
-        media_pool.AppendToTimeline(final_clip_infos_for_api) or []
-    )
+    for link_key, group in grouped_clips.items():
+        is_optimizable = False
+        if len(group) == 2:
+            clip1, clip2 = group
+            mpi1 = clip1["clip_info"]["mediaPoolItem"]
+            mpi2 = clip2["clip_info"]["mediaPoolItem"]
+            path1 = mpi1.GetClipProperty("File Path") if mpi1 else None
+            path2 = mpi2.GetClipProperty("File Path") if mpi2 else None
 
-    # Return the processed data and the API result for the wrapper to handle.
-    return clips_to_process, appended_bmd_items
+            if (
+                {c["clip_info"]["mediaType"] for c in group} == {1, 2}
+                and clip1["clip_info"]["trackIndex"] == 1
+                and clip2["clip_info"]["trackIndex"] == 1
+                and (path1 is not None and path1 == path2)
+            ):
+                is_optimizable = True
+
+        if is_optimizable:
+            print(f"Optimizing append for link group {link_key} on Track 1.")
+            # Mark both original clips as auto-linked for the next step
+            for clip in group:
+                clip["auto_linked"] = True
+
+            # Prepare a single, optimized instruction for the API call
+            optimized_clip_info = group[0]["clip_info"].copy()
+            del optimized_clip_info["mediaType"]
+            del optimized_clip_info["trackIndex"]
+            final_api_batch.append(optimized_clip_info)
+        else:
+            # If not optimizable, add the original clip_info for each clip
+            for clip in group:
+                final_api_batch.append(clip["clip_info"])
+
+        # Always add the full, original clip info to our source-of-truth list
+        all_processed_clips.extend(group)
+
+    all_processed_clips.sort(key=lambda item: item["clip_info"].get("recordFrame", 0))
+
+    # --- Make a single, unified API call ---
+    print(f"Appending {len(final_api_batch)} total clip instructions to timeline...")
+    appended_bmd_items: List[Any] = media_pool.AppendToTimeline(final_api_batch) or []
+
+    return all_processed_clips, appended_bmd_items
 
 
 def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
-    global MEDIA_POOL
-    global TIMELINE
-    global PROJECT
+    """
+    Appends clips to the timeline, using an optimized auto-linking method where
+    possible, and then manually links any remaining clips.
+    """
+    global MEDIA_POOL, TIMELINE, PROJECT
 
-    if not globalz.PROJECT_DATA:
-        return
-    project_data = globalz.PROJECT_DATA
-    if not project_data.get("timeline"):
+    if not globalz.PROJECT_DATA or not globalz.PROJECT_DATA.get("timeline"):
         print("Error: Project data is missing or malformed.")
         return
 
+    project_data = globalz.PROJECT_DATA
+
     if not PROJECT:
-        # Assuming PROJECT is accessible via globalz or another mechanism
         print("Error: Could not get current project.")
         return
 
@@ -1497,32 +1553,45 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
         "video_track_items", []
     ) + project_data["timeline"].get("audio_track_items", [])
 
-    # === STEP 1: PRE-SCAN TO DETERMINE HIGHEST TRACK INDICES ===
     max_indices = {"video": 0, "audio": 0}
     for item in timeline_items:
         track_type = item.get("track_type")
-        track_index = item["track_index"]
+        track_index = item.get("track_index", 1)
         if track_type in max_indices:
             max_indices[track_type] = max(max_indices[track_type], track_index)
 
-    # === STEP 2: CREATE A NEW TIMELINE OR GET THE ACTIVE ONE ===
     timeline = None
     if create_new_timeline:
         print("Creating a new timeline...")
         timeline_name = f"linked_timeline_{uuid4().hex}"
         timeline = media_pool.CreateEmptyTimeline(timeline_name)
         if timeline:
-            timeline.SetStartTimecode(
-                globalz.PROJECT_DATA["timeline"]["start_timecode"]
-            )
+            timeline.SetStartTimecode(project_data["timeline"]["start_timecode"])
     else:
         timeline = TIMELINE
-        if not timeline:
-            return
-        bmd_tl_items = [item["bmd_item"] for item in timeline_items]
-        timeline.DeleteClips(bmd_tl_items)
+        if timeline:
+            # --- FIX: Robustly clear all tracks on the existing timeline ---
+            print("Clearing all clips from existing timeline...")
+            all_clips_to_delete = []
 
-    # Crucial check to ensure we have a valid timeline object to work with
+            # Iterate through all video tracks that might have content
+            for i in range(1, timeline.GetTrackCount("video") + 1):
+                clips_in_track = timeline.GetItemListInTrack("video", i)
+                if clips_in_track:
+                    all_clips_to_delete.extend(clips_in_track)
+
+            # Iterate through all audio tracks that might have content
+            for i in range(1, timeline.GetTrackCount("audio") + 1):
+                clips_in_track = timeline.GetItemListInTrack("audio", i)
+                if clips_in_track:
+                    all_clips_to_delete.extend(clips_in_track)
+
+            if all_clips_to_delete:
+                print(f"Deleting {len(all_clips_to_delete)} existing clips...")
+                timeline.DeleteClips(all_clips_to_delete)
+            else:
+                print("Timeline is already empty.")
+
     if not timeline:
         print("Error: Could not get a valid timeline. Aborting operation.")
         return
@@ -1530,103 +1599,130 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
     for track_type, required_count in max_indices.items():
         current_count = timeline.GetTrackCount(track_type)
         tracks_to_add = required_count - current_count
-
         if tracks_to_add > 0:
             print(
-                f"Timeline has {current_count} {track_type} track(s), adding {tracks_to_add} more..."
+                f"Timeline has {current_count} {track_type} tracks, adding {tracks_to_add} more..."
             )
             for _ in range(tracks_to_add):
                 timeline.AddTrack(track_type)
-        else:
-            print(f"Timeline already has enough {track_type} tracks ({current_count}).")
 
     print(f"Operating on timeline: '{timeline.GetName()}'")
     TIMELINE = timeline
 
+    # === STEP 4: APPEND, VERIFY, AND LINK CLIPS ===
     success = False
     num_retries = 4
     sleep_time_between = 2.5
-    TRACKER.update_task_progress("append", 1.0, message="Adding Clips to Timeline")
     for attempt in range(1, num_retries + 1):
-        # The internal function returns our "source of truth" and the API's response
         processed_clips, bmd_items_from_api = _append_clips_to_timeline(
-            timeline, media_pool, timeline_items
+            TIMELINE, media_pool, timeline_items
         )
         TRACKER.complete_task("append")
         if not processed_clips:
             success = True
             break
 
-        # Use the list of clips we INTENDED to create for verification
-        expected_clip_infos = [item[0] for item in processed_clips]
-        if _verify_timeline_state(timeline, expected_clip_infos, attempt):
-            TRACKER.complete_task("verify")
-            print("Verification successful. Proceeding to link.")
+        expected_clip_infos = [item["clip_info"] for item in processed_clips]
 
-            # 1. Build a lookup map from the verified "source of truth"
-            link_key_lookup: Dict[Tuple[int, int, int], Tuple[int, int]] = {}
-            for clip_info, link_key in processed_clips:
+        if _verify_timeline_state(TIMELINE, expected_clip_infos, attempt):
+            TRACKER.complete_task("verify")
+            print("Verification successful. Proceeding to modify and link.")
+
+            auto_linked_keys: set[Tuple[int, int]] = {
+                clip["link_key"] for clip in processed_clips if clip.get("auto_linked")
+            }
+            if auto_linked_keys:
+                print(
+                    f"Identified {len(auto_linked_keys)} auto-linked groups to skip for manual linking."
+                )
+
+            link_key_lookup: Dict[Tuple[Optional[int], int, int], Tuple[int, int]] = {}
+            for appended_clip in processed_clips:
+                clip_info, link_key = (
+                    appended_clip["clip_info"],
+                    appended_clip["link_key"],
+                )
                 lookup_key = (
-                    clip_info["mediaType"],
+                    clip_info.get("mediaType"),
                     clip_info["trackIndex"],
                     clip_info["recordFrame"],
                 )
                 link_key_lookup[lookup_key] = link_key
 
-            # 2. Get all clips that are actually on the timeline
-            actual_items = []
-            actual_items.extend(get_items_by_tracktype("video", timeline))
-            actual_items.extend(get_items_by_tracktype("audio", timeline))
+            actual_items: list[TimelineItem] = []
+            actual_items.extend(get_items_by_tracktype("video", TIMELINE))
+            actual_items.extend(get_items_by_tracktype("audio", TIMELINE))
 
-            # 3. Group the actual BMD objects using the lookup map
+            disabled_keys = {
+                (
+                    p_clip["clip_info"]["mediaType"],
+                    p_clip["clip_info"]["trackIndex"],
+                    p_clip["clip_info"]["recordFrame"],
+                )
+                for p_clip in processed_clips
+                if not p_clip["enabled"]
+            }
+            if disabled_keys:
+                disabled_count = 0
+                for item_dict in actual_items:
+                    media_type = 1 if item_dict["track_type"] == "video" else 2
+                    actual_key = (
+                        media_type,
+                        item_dict["track_index"],
+                        item_dict["start_frame"],
+                    )
+                    if actual_key in disabled_keys:
+                        bmd_item = item_dict["bmd_item"]
+                        bmd_item.SetClipColor("Violet")
+                        disabled_count += 1
+                print(f"Updated status for {disabled_count} clip(s).")
+
             link_groups: Dict[Tuple[int, int], List[Any]] = {}
             for item_dict in actual_items:
                 media_type = 1 if item_dict["track_type"] == "video" else 2
-                # Create the key for this actual clip
-                actual_key = (
+                # Note: For auto-linked clips, multiple actual items might map back
+                # via different mediaTypes to the same original recordFrame.
+                # The lookup key must be specific.
+                lookup_key = (
                     media_type,
                     item_dict["track_index"],
                     item_dict["start_frame"],
                 )
-                # Find its correct link_key from our map
-                link_key = link_key_lookup.get(actual_key)
-
+                link_key = link_key_lookup.get(lookup_key)
                 if link_key:
-                    if link_key not in link_groups:
-                        link_groups[link_key] = []
-                    # Append the actual BMD object to the correct group
-                    link_groups[link_key].append(item_dict["bmd_item"])
+                    link_groups.setdefault(link_key, []).append(item_dict["bmd_item"])
 
-            # 4. Perform the linking
-            length_link_groups = len(link_groups.items())
-            index = 1
-            for group_key, clips_to_link in link_groups.items():
-                if len(clips_to_link) >= 2:
-                    print(
-                        f"Linking {len(clips_to_link)} clips for group {group_key}..."
-                    )
+            print("Performing manual linking for necessary clips...")
+            groups_to_link = {
+                k: v for k, v in link_groups.items() if k not in auto_linked_keys
+            }
 
-                    timeline.SetClipsLinked(clips_to_link, True)
-                if index % 10 == 1:
-                    percentage = (index / length_link_groups) * 100
-                    TRACKER.update_task_progress("link", percentage, "Linking clips...")
-                index += 1
+            if not groups_to_link:
+                print("No clips required manual linking.")
+            else:
+                length_link_groups = len(groups_to_link)
+                index = 1
+                for group_key, clips_to_link in groups_to_link.items():
+                    if len(clips_to_link) >= 2:
+                        print(f"  - Manually linking group: {group_key}")
+                        TIMELINE.SetClipsLinked(clips_to_link, True)
+
+                    if index % 10 == 1:
+                        percentage = (index / length_link_groups) * 100
+                        TRACKER.update_task_progress(
+                            "link", percentage, "Linking clips..."
+                        )
+                    index += 1
+
             TRACKER.complete_task("link")
-
             print("✅ Operation completed successfully.")
             success = True
             break
         else:
             print(f"Attempt {attempt} failed. Rolling back changes...")
-            verify_percentage = (attempt / num_retries) * 100
-            TRACKER.update_task_progress(
-                "verify", verify_percentage, "Verification failed. Retrying..."
-            )
             if bmd_items_from_api:
-                timeline.DeleteClips(bmd_items_from_api, delete_gaps=False)
-
+                TIMELINE.DeleteClips(bmd_items_from_api, delete_gaps=False)
             if attempt < num_retries:
-                print("Waiting a moment before retrying...")
                 sleep(sleep_time_between)
                 sleep_time_between += 1.5
 
@@ -1733,6 +1829,57 @@ def wait_for_go_ready(go_server_port: int) -> bool:
 
     print("Python Backend: Go server has registered.")
     return True
+
+
+def signal_go_ready(go_server_port: int):
+    """
+    Sends an HTTP GET request to the Go server to signal readiness.
+    Retries a few times in case the Go server isn't immediately available.
+    """
+    ready_url = f"http://localhost:{go_server_port}/ready"
+    parsed_url = urllib.parse.urlparse(ready_url)
+
+    # Ensure hostname and port are not None
+    host = parsed_url.hostname or "localhost"
+    port = parsed_url.port or 80  # Default to port 80 if none
+
+    max_retries = 5
+    retry_delay_seconds = 2
+
+    print(f"Python Backend: Attempting to signal Go server at {ready_url}")
+
+    for attempt in range(max_retries):
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            conn.request("GET", parsed_url.path)
+            response = conn.getresponse()
+            status = response.status
+            body = response.read().decode()
+
+            if 200 <= status < 300:
+                print(
+                    f"Python Backend: Successfully signaled Go server. Status: {status}"
+                )
+                print(f"Python Backend: Go server response: {body}")
+                conn.close()
+                return True
+            else:
+                raise Exception(f"Unexpected status code: {status}")
+
+        except Exception as e:
+            print(
+                f"Python Backend: Error signaling Go (attempt {attempt + 1}/{max_retries}): {e}"
+            )
+            if attempt < max_retries - 1:
+                print(f"Python Backend: Retrying in {retry_delay_seconds} seconds...")
+                time.sleep(retry_delay_seconds)
+            else:
+                print(
+                    f"Python Backend: Failed to signal Go server after {max_retries} attempts."
+                )
+                return False
+
+    return False
 
 
 class PythonCommandHandler(BaseHTTPRequestHandler):
@@ -1903,7 +2050,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
 
             except (json.JSONDecodeError, ValueError):
                 print(
-                    "Python Command Server: Invalid JSON received from Go for /command."
+                    f"Python Command Server: Invalid JSON received from Go for /command. for command {command}"
                 )
                 self._send_json_response(
                     400, {"status": "error", "message": "Invalid JSON format."}
@@ -2148,6 +2295,17 @@ def init():
                     )
                 except Exception as e:
                     print(f"Python Backend: Error launching Go Wails application: {e}")
+    else:
+        # assume python process has been started by go application, signal readiness
+        if not signal_go_ready(args.go_port):
+            print(
+                "Python Backend: CRITICAL - Could not signal main readiness to Go application."
+            )
+        # Consider how to handle this - maybe try to stop the command_server_thread or sys.exit(1)
+        else:
+            print(
+                "Python Backend: Successfully signaled main readiness to Go application."
+            )
 
     # The main loop for the Python script to keep running and handling Resolve API calls.
     # This loop will also allow the background HTTP server thread to process requests.

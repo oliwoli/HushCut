@@ -1,5 +1,5 @@
 import math
-from local_types import SilenceInterval, EditInstruction, ClipData
+from hushcut_lib.local_types import SilenceInterval, EditInstruction, ClipData
 
 
 # --- Helper functions (merge_intervals, map_source_to_timeline) ---
