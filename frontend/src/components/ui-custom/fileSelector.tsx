@@ -7,6 +7,7 @@ import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { EventsOn } from "@wails/runtime/runtime";
 import { Progress } from "../ui/progress";
 import { AlignJustifyIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
+import { useClipStore } from "@/stores/clipStore";
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -84,6 +85,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
   const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
   const [isFetchingWaveform, setIsFetchingWaveform] = useState(true);
   const isLoading = isConverting || isFetchingWaveform;
+  const isModified = useClipStore(s => Object.prototype.hasOwnProperty.call(s.parameters, item.id));
 
   const isNested = !!item.type;
 
@@ -202,16 +204,18 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
               <SimulatedWaveform />
           )}
         </div>
-        <div className="relative z-10 h-full flex flex-col justify-end p-2 bg-gradient-to-t from-black/50 via-black/20 to-transparent">
+        <div className="relative z-10 h-full flex flex-col justify-end p-2 pb-[0.285rem] bg-gradient-to-t from-black/50 via-black/20 to-transparent">
           <div className="flex items-center space-x-1.5">
             {isNested && (
               <LayersIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
             )}
             {!isNested && (
-              <AudioLinesIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
+              <AudioLinesIcon className={cn("text-sm h-[14px] text-stone-400 p-0 mr-1")} />
             )}
-            {/* <ClipLinkIcon className="text-zinc-400" /> */}
-            <p className="font-medium text-xs text-zinc-200/90 truncate">{item.name}</p>
+            <div className="flex items-baseline space-x-1">
+              <p className="font-medium text-xs text-zinc-200/90 truncate">{item.name}</p>
+              <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}>*</span>
+            </div>
           </div>
         </div>
       </button>
