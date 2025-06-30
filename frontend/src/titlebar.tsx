@@ -1,5 +1,5 @@
 import { CloseApp, SetWindowAlwaysOnTop } from "@wails/go/main/App";
-import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart } from "lucide-react";
+import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart, CircleIcon } from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import { memo, useState, useEffect } from "react";
 import { BrowserOpenURL } from "@wails/runtime/runtime";
 
 import { useUiStore } from "@/stores/uiStore";
+import { useSyncBusyState } from "./stores/appSync";
 
 const _TitleBar = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(true);
@@ -31,6 +32,8 @@ const _TitleBar = () => {
       setDropdownVisible(false);
     }
   }, [dropdownOpen]);
+
+  const isBusy = useSyncBusyState(s => s.isBusy);
 
   // This function will handle the logic
   const handlePinClick = () => {
@@ -77,7 +80,17 @@ const _TitleBar = () => {
               />
             </Button>
           </div>
-          <h1 className="text-sm font-normal text-neutral-200">HushCut</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-sm font-normal text-neutral-200">HushCut</h1>
+            {isBusy ? (
+              <CircleIcon
+                size={8}
+                className="fill-yellow-200/80 stroke-0 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50"
+              />) :
+
+              <CircleIcon size={8} className="fill-teal-600 stroke-0" />
+            }
+          </div>
           <div className="flex items-center">
             <DropdownMenu onOpenChange={setDropdownOpen}>
               <DropdownMenuTrigger asChild>

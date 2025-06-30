@@ -268,11 +268,19 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       if (dataToSend) {
         console.log("Click: Making final timeline...");
         const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
-        // ... (rest of your response handling logic) ...
+        if (response.alertIssued) {
+          console.warn(
+            "Sync operation resulted in an alert (issued by Go). Message:",
+            response.message
+          );
+        }
+        //else { console.log("eh") }
+        //setBusy(false);
         if (!response || response.status === "error") {
           const errMessage = response?.message || "Unknown error occurred in timeline generation.";
           console.error("Click: Timeline generation failed:", errMessage);
           console.error(errMessage);
+          setBusy(false);
           return;
         }
         console.log("Click: 'HushCut Silences' process finished successfully.");
