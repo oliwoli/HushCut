@@ -2,15 +2,12 @@
 
 import { ClipStore, defaultParameters, useClipParameter, useClipStore } from '@/stores/clipStore';
 import { Link, Unlink } from 'lucide-react';
-import React, { useCallback, useEffect, useState } from 'react';
-import { useDebounce } from 'use-debounce';
-import { shallow } from 'zustand/shallow';
+import React, { useCallback, useState } from 'react';
 
 // Import your reusable UI components
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { useStoreWithEqualityFn } from 'zustand/traditional';
 import ResetButton from './ResetButton';
 
 
@@ -53,43 +50,29 @@ const _MinDurationControl = React.memo(() => {
 
 const _PaddingControl = React.memo(() => {
     const currentClipId = useClipStore(s => s.currentClipId);
-
-    const { paddingLeft, paddingRight, setParameter, setAllParameters } = useStoreWithEqualityFn(
-        useClipStore,
-        (s: ClipStore) => {
-            const activeClipParams = currentClipId ? s.parameters[currentClipId] : undefined;
-
-            return {
-                paddingLeft: activeClipParams?.paddingLeft ?? defaultParameters.paddingLeft,
-                paddingRight: activeClipParams?.paddingRight ?? defaultParameters.paddingRight,
-                setParameter: s.setParameter,
-                setAllParameters: s.setAllParameters,
-            };
-        },
-        shallow
-    );
-
-    // `paddingLocked` is local UI state, perfect for `useState`.
-    const [paddingLocked, setPaddingLinked] = useState(true);
+    const [paddingLeft, setPaddingLeft] = useClipParameter('paddingLeft');
+    const [paddingRight, setPaddingRight] = useClipParameter('paddingRight');
+    const [paddingLocked, setPaddingLocked] = useClipParameter('paddingLocked');
 
     const handlePaddingChange = useCallback((side: 'left' | 'right', value: number) => {
-        if (!currentClipId) return;
         const clampedValue = Math.max(0, value);
         if (paddingLocked) {
-            setAllParameters(currentClipId, { paddingLeft: clampedValue, paddingRight: clampedValue });
+            setPaddingLeft(clampedValue);
+            setPaddingRight(clampedValue);
         } else {
-            setParameter(currentClipId, side === 'left' ? 'paddingLeft' : 'paddingRight', clampedValue);
+            if (side === 'left') {
+                setPaddingLeft(clampedValue);
+            } else {
+                setPaddingRight(clampedValue);
+            }
         }
-    }, [currentClipId, paddingLocked, setParameter, setAllParameters]);
+    }, [paddingLocked, setPaddingLeft, setPaddingRight]);
 
     const resetPadding = useCallback(() => {
-        if (!currentClipId) return;
-        setAllParameters(currentClipId, {
-            paddingLeft: defaultParameters.paddingLeft,
-            paddingRight: defaultParameters.paddingRight,
-        });
-        setPaddingLinked(true);
-    }, [currentClipId, setAllParameters]);
+        setPaddingLeft(defaultParameters.paddingLeft);
+        setPaddingRight(defaultParameters.paddingRight);
+        setPaddingLocked(true);
+    }, [setPaddingLeft, setPaddingRight, setPaddingLocked]);
 
     const isDisabled = !currentClipId;
 
@@ -110,7 +93,7 @@ const _PaddingControl = React.memo(() => {
                                 className="w-32"
                                 disabled={isDisabled}
                             />
-                            <Button variant="ghost" size="icon" onClick={() => setPaddingLinked((l) => !l)} className="text-zinc-500 hover:text-zinc-300 text-center" disabled={isDisabled}>
+                            <Button variant="ghost" size="icon" onClick={() => setPaddingLocked(!paddingLocked)} className="text-zinc-500 hover:text-zinc-300 text-center" disabled={isDisabled}>
                                 {paddingLocked ? <Link className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
                             </Button>
                         </div>

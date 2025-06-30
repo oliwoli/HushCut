@@ -54,6 +54,7 @@ export const defaultParameters = {
   paddingLeft: 0.5,
   paddingRight: 0.5,
   minContent: 0.15,
+  paddingLocked: true,
 };
 
 export interface ClipParameters {
@@ -62,6 +63,7 @@ export interface ClipParameters {
   paddingLeft: number;
   paddingRight: number;
   minContent: number;
+  paddingLocked: boolean;
 }
 
 // Export the main store interface
