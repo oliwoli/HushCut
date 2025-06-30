@@ -16,6 +16,7 @@ import {
   MixdownCompoundClips,
   ProcessProjectAudio,
   SyncWithDavinci,
+  MakeFinalTimeline,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus } from "@wails/go/main/App";
@@ -23,7 +24,7 @@ import { EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveform";
-import RemoveSilencesButton from "./lib/PythonRunner";
+import RemoveSilencesButton, { deriveAllClipDetectionParams, prepareProjectDataWithEdits } from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
 import { useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
@@ -125,6 +126,8 @@ function AppContent() {
   const setBusy = useSyncBusyState(s => s.setBusy);
   const currentClipId = useClipStore(s => s.currentClipId);
   const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
 
@@ -260,7 +263,7 @@ function AppContent() {
         // });
         setBusy(false);
       } else if (response && response.status === "success") {
-        conditionalSetProjectData(response.data);
+        await conditionalSetProjectData(response.data);
         // toast.success("Synced with DaVinci Resolve", {
         //   id: loadingToastId,
         //   duration: 1500,
@@ -399,6 +402,63 @@ function AppContent() {
     }
   };
 
+  useEffect(() => {
+    if (!isBusy && pendingSelection) {
+      setCurrentClipId(pendingSelection);
+      console.log("Applying pending selection:", pendingSelection);
+      setPendingSelection(null);
+    }
+  }, [isBusy, pendingSelection, setCurrentClipId]);
+
+  useEffect(() => {
+    if (!isBusy && pendingRemoveSilences) {
+      console.log("Executing pending Remove Silences action.");
+      // Trigger the actual action here
+      handleRemoveSilencesAction();
+      setPendingRemoveSilences(false);
+    }
+  }, [isBusy, pendingRemoveSilences]);
+
+  const handleRemoveSilencesAction = async () => {
+    if (!projectData) {
+      console.error("Cannot run Remove Silences: projectData is null.");
+      return;
+    }
+    // This logic is duplicated from PythonRunner.tsx's handleClick
+    // It's necessary here because App.tsx is responsible for triggering the action
+    // after a pending state.
+    const clipStoreState = useClipStore.getState();
+    const timelineItems = projectData?.timeline?.audio_track_items ?? [];
+    const currentClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
+    const keepSilence = useGlobalStore.getState().keepSilence;
+
+    try {
+      const dataToSend = await prepareProjectDataWithEdits(
+        projectData,
+        currentClipParams,
+        keepSilence,
+        getDefaultDetectionParams()
+      );
+
+      if (dataToSend) {
+        console.log("Executing pending: Making final timeline...");
+        const makeNewTimeline = useGlobalStore.getState().makeNewTimeline;
+        const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
+        if (!response || response.status === "error") {
+          const errMessage = response?.message || "Unknown error occurred in timeline generation.";
+          console.error("Executing pending: Timeline generation failed:", errMessage);
+          // TODO: Add error toast
+          return;
+        }
+        console.log("Executing pending: 'HushCut Silences' process finished successfully.");
+        // TODO: Add success toast
+      }
+    } catch (error) {
+      console.error("Executing pending: Error during 'HushCut Silences' process:", error);
+      // TODO: Add error toast
+    }
+  };
+
   const handleFocusWithDragDelay = () => {
     // First, cancel any previously pending sync, just in case.
     cancelPendingSync();
@@ -447,6 +507,11 @@ function AppContent() {
 
 
   const handleAudioClipSelection = (selectedItemId: string) => {
+    if (isBusy) {
+      setPendingSelection(selectedItemId);
+      console.log("App is busy, pending selection set to:", selectedItemId);
+      return;
+    }
     setCurrentClipId(selectedItemId);
     console.log(
       "FileSelector onFileChange: currentClipId set to:",
@@ -513,6 +578,7 @@ function AppContent() {
                     <RemoveSilencesButton
                       projectData={projectData}
                       defaultDetectionParams={getDefaultDetectionParams()}
+                      onPendingAction={() => setPendingRemoveSilences(true)}
                     />
                     <DavinciSettings />
                   </div>

@@ -44,13 +44,11 @@ export function deriveAllClipDetectionParams(
 interface PythonRunnerProps {
   projectData: main.ProjectDataPayload;
   defaultDetectionParams: DetectionParams; // Renamed for clarity
-  onScriptLog?: (line: string) => void;
-  onScriptDone?: (message: string) => void;
-  onScriptError?: (error: any) => void;
+  onPendingAction: () => void; // New prop for pending action
 }
 
 // Helper function
-async function prepareProjectDataWithEdits(
+export async function prepareProjectDataWithEdits(
   projectDataInput: main.ProjectDataPayload,
   allClipParams: Record<string, DetectionParams>,
   keepSilenceSegments: boolean,
@@ -168,9 +166,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const {
     projectData: initialProjectData,
     defaultDetectionParams,
-    onScriptLog,
-    onScriptDone,
-    onScriptError,
+    onPendingAction,
   } = props;
 
   // Zustand state
@@ -192,18 +188,6 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     console.log("Invalidating processedData due to initialProjectData change.");
     cacheRef.current = null;
   }, [initialProjectData]);
-
-  // Effect for Wails event listeners remains the same
-  useEffect(() => {
-    const logHandler = (line: string) => { if (onScriptLog) onScriptLog(line); };
-    const doneHandler = (message: string) => { if (onScriptDone) onScriptDone(message); };
-    const unsubscribeLog = EventsOn("python:log", logHandler as (data: unknown) => void);
-    const unsubscribeDone = EventsOn("python:done", doneHandler as (data: unknown) => void);
-    return () => {
-      unsubscribeLog();
-      unsubscribeDone();
-    };
-  }, [onScriptLog, onScriptDone]);
 
   // useCallback is still useful, but its dependencies are simpler.
   const handleAction = useCallback(async (isClick: boolean) => {
@@ -256,12 +240,12 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       console.error(`Action (${isClick ? 'Click' : 'Hover'}): Error during processing:`, error);
       // Invalidate cache on error to prevent using faulty data
       cacheRef.current = null;
-      if (isClick && onScriptError) onScriptError(error);
+      if (isClick) console.error(error);
     } finally {
       if (isClick) setIsProcessingClick(false);
       else setIsProcessingHover(false);
     }
-  }, [initialProjectData, keepSilence, defaultDetectionParams, onScriptError]); // Dependencies are now simpler
+  }, [initialProjectData, keepSilence, defaultDetectionParams]); // Dependencies are now simpler
 
   const handleMouseEnter = () => {
     if (isProcessingHover || isProcessingClick) return;
@@ -270,6 +254,12 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
 
   const handleClick = async () => {
     if (isProcessingClick) return;
+    const isBusy = useSyncBusyState.getState().isBusy;
+    if (isBusy) {
+      props.onPendingAction();
+      console.log("App is busy, deferring Remove Silences action.");
+      return;
+    }
     setBusy(true);
 
     try {
@@ -282,16 +272,15 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
         if (!response || response.status === "error") {
           const errMessage = response?.message || "Unknown error occurred in timeline generation.";
           console.error("Click: Timeline generation failed:", errMessage);
-          if (onScriptError) onScriptError(errMessage);
+          console.error(errMessage);
           return;
         }
         console.log("Click: 'HushCut Silences' process finished successfully.");
-        if (onScriptDone) onScriptDone("'HushCut Silences' process completed successfully.");
       }
     } catch (error) {
       console.error("Click: Error during 'HushCut Silences' process:", error);
       const errorMessage = typeof error === "string" ? error : (error as Error).message || "An unknown error occurred.";
-      if (onScriptError) onScriptError(errorMessage);
+      console.error(errorMessage);
     } finally {
       setBusy(false);
     }
