@@ -6,7 +6,7 @@ import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { EventsOn } from "@wails/runtime/runtime";
 import { Progress } from "../ui/progress";
-import { AlignJustifyIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
+import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
 import { useClipStore } from "@/stores/clipStore";
 
 // Icon for the empty state
@@ -204,7 +204,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
               <SimulatedWaveform />
           )}
         </div>
-        <div className="relative z-10 h-full flex flex-col justify-end p-2 pb-[0.285rem] bg-gradient-to-t from-black/50 via-black/20 to-transparent">
+        <div className="relative z-10 h-full flex flex-col justify-end p-2 pl-1 pb-[0.450rem] bg-gradient-to-t from-black/50 via-black/20 to-transparent">
           <div className="flex items-center space-x-1.5">
             {isNested && (
               <LayersIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
@@ -214,7 +214,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
             )}
             <div className="flex items-baseline space-x-1">
               <p className="font-medium text-xs text-zinc-200/90 truncate">{item.name}</p>
-              <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}>*</span>
+              <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="p-0 m-0 ml-[-4px] mb-[2px]" /></span>
             </div>
           </div>
         </div>
