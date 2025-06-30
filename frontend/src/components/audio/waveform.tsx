@@ -739,7 +739,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       return (
         <button
           onClick={toggleSkipRegions}
-          className={`p-1.5 rounded flex items-center text-xs ${skipClass}`}
+          className={`p-1.5 rounded flex items-center text-xs ${skipClass} whitespace-normal [@media(min-width:30rem)]:whitespace-nowrap`}
           title={skipTitle}
         >
           <RedoDotIcon size={21} className="mr-1" />
@@ -777,8 +777,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           ref={minimapContainerRef}
           className="h-[40px] w-full bg-[#212126] border-0 border-t-0 rounded-none box-border overflow-hidden shadow-inner shadow-stone-900/50"
         ></div>
-        <div className="flex items-center">
-          <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
+        <div className="flex items-center gap-1">
+          <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">
             <button
               onClick={handlePlayPause}
               disabled={isLoading || !duration}
@@ -799,10 +799,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
               />
             )}
           </div>
-          <div className="flex justify-end pr-4 w-full gap-2 font-mono text-sm">
-            <AudioWaveformIcon className="text-gray-500" /><span>{silenceData?.length}</span>
-            <span className="text-gray-600">|</span>
-            <span className="flex space-x-0.5 gap-0.5">
+          <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm">
+            <AudioWaveformIcon size={21} className="text-gray-500" /><span>{silenceData?.length}</span>
+            <span className="text-gray-600 invisible sm:visible">|</span>
+            <span className="hidden sm:flex space-x-0 gap-1">
               {formatDuration(totalSilenceDuration).map((part, index) => (
                 <React.Fragment key={index}>
                   <span className="text-white">{part.value}</span>

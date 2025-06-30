@@ -33,8 +33,8 @@ type CacheKey struct {
 	PaddingLeftSeconds        float64 `json:"paddingLeftSeconds"`
 	PaddingRightSeconds       float64 `json:"paddingRightSeconds"`
 	MinContentDuration        float64 `json:"minContentDuration"`
-	ClipStartSeconds          float64
-	ClipEndSeconds            float64
+	ClipStartSeconds          float64 `json:"clipStartSeconds"`
+	ClipEndSeconds            float64 `json:"clipEndSeconds"`
 }
 
 type WaveformCacheKey struct {
