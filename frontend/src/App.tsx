@@ -154,13 +154,19 @@ function AppContent() {
         (item) =>
           currentFrame >= item.start_frame && currentFrame < item.end_frame
       );
-      if (!clipAtTimecode) return;
-      // 3. Update the current clip ID
-      const newClipId = clipAtTimecode.id || clipAtTimecode.processed_file_name;
-      // Only update state if the ID has actually changed to prevent re-renders
-      if (newClipId && newClipId !== currentClipId) {
-        setCurrentClipId(newClipId);
+      if (clipAtTimecode) {
+        // 3. Update the current clip ID
+        const newClipId = clipAtTimecode.id || clipAtTimecode.processed_file_name;
+        // Only update state if the ID has actually changed to prevent re-renders
+        if (newClipId && newClipId !== currentClipId) {
+          setCurrentClipId(newClipId);
+        }
+      } else if (!currentClipId) {
+        setCurrentClipId(
+          audioItems[0]?.id || audioItems[0]?.processed_file_name || null
+        );
       }
+
     } else {
       setCurrentClipId(
         audioItems[0]?.id || audioItems[0]?.processed_file_name || null
