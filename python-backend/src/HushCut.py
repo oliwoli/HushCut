@@ -105,6 +105,9 @@ STANDALONE_MODE = False
 RESOLVE = None
 FFMPEG = "ffmpeg"
 MAKE_NEW_TIMELINE = True
+MAX_RETRIES = 100
+created_timelines = {}
+
 
 
 class ProgressTracker:
@@ -1388,7 +1391,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     TRACKER.complete_task("prepare")
     TRACKER.update_task_progress("append", 1.0, "Adding Clips to Timeline")
 
-    append_and_link_timeline_items(MAKE_NEW_TIMELINE)
+    append_and_link_timeline_items(MAKE_NEW_TIMELINE, task_id)
 
     TRACKER.complete_task("append")
 
@@ -1526,7 +1529,9 @@ def _append_clips_to_timeline(
     return all_processed_clips, appended_bmd_items
 
 
-def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
+def append_and_link_timeline_items(
+    create_new_timeline: bool = True, task_id=""
+) -> None:
     """
     Appends clips to the timeline, using an optimized auto-linking method where
     possible, and then manually links any remaining clips.
@@ -1559,14 +1564,36 @@ def append_and_link_timeline_items(create_new_timeline: bool = True) -> None:
         track_index = item.get("track_index", 1)
         if track_type in max_indices:
             max_indices[track_type] = max(max_indices[track_type], track_index)
+    og_tl_name = project_data["timeline"]["name"]
 
     timeline = None
     if create_new_timeline:
         print("Creating a new timeline...")
-        timeline_name = f"linked_timeline_{uuid4().hex}"
-        timeline = media_pool.CreateEmptyTimeline(timeline_name)
-        if timeline:
-            timeline.SetStartTimecode(project_data["timeline"]["start_timecode"])
+        
+        if og_tl_name not in created_timelines:
+            created_timelines[og_tl_name] = 1
+        
+        retries = 0
+        while retries < MAX_RETRIES:
+            index = created_timelines[og_tl_name]
+            timeline_name = f"{og_tl_name}-hc-{index:02d}"
+            timeline = media_pool.CreateEmptyTimeline(timeline_name)
+            
+            if timeline:
+                timeline.SetStartTimecode(project_data["timeline"]["start_timecode"])
+                created_timelines[og_tl_name] += 1
+                break 
+            else:
+                created_timelines[og_tl_name] += 1
+                retries += 1
+        
+        if not timeline:
+            send_result_with_alert(
+                task_id=task_id,
+                alert_message=f"Could not create new timeline after {MAX_RETRIES} attempts.",
+                alert_title="DaVinci Error",
+            )
+            return
     else:
         timeline = TIMELINE
         if timeline:
