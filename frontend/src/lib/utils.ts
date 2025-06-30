@@ -99,3 +99,38 @@ export function secToFrames(seconds: number, fps: number): number {
   }
   return Math.ceil(seconds * fps);
 }
+
+export interface DurationPart {
+  value: number;
+  unit: string;
+}
+
+export const formatDuration = (totalSeconds: number): DurationPart[] => {
+  if (totalSeconds < 1) {
+    return [{ value: 0, unit: "sec" }];
+  }
+  if (totalSeconds < 60) {
+    return [{ value: Math.round(totalSeconds), unit: "sec" }];
+  }
+
+  const days = Math.floor(totalSeconds / (3600 * 24));
+  const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+
+  const parts: DurationPart[] = [];
+  if (days > 0) {
+    parts.push({ value: days, unit: `day${days > 1 ? "s" : ""}` });
+  }
+  if (hours > 0) {
+    parts.push({ value: hours, unit: `hr${hours > 1 ? "s" : ""}` });
+  }
+  if (minutes > 0) {
+    parts.push({ value: minutes, unit: "min" });
+  }
+  if (seconds > 0) {
+    parts.push({ value: seconds, unit: "sec" });
+  }
+
+  return parts.slice(0, 2);
+};

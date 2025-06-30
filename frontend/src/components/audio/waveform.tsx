@@ -1,4 +1,4 @@
-import { LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react";
+import { AudioWaveformIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
@@ -16,7 +16,7 @@ import { useWaveformData } from "@/hooks/useWaveformData";
 import Timecode, { FRAMERATE } from "smpte-timecode";
 
 import { SetDavinciPlayhead } from "@wails/go/main/App";
-import { secToFrames } from "@/lib/utils";
+import { secToFrames, formatDuration } from "@/lib/utils";
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -104,6 +104,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   );
 
   const { silenceData } = useSilenceData(activeClip, projectFrameRate || null);
+  const totalSilenceDuration = useMemo(() => {
+    if (!silenceData) return 0;
+    return silenceData.reduce((acc, curr) => acc + (curr.end - curr.start), 0);
+  }, [silenceData]);
 
   const clipOriginalStartSeconds =
     activeClip.sourceStartFrame / projectFrameRate;
@@ -773,27 +777,41 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           ref={minimapContainerRef}
           className="h-[40px] w-full bg-[#212126] border-0 border-t-0 rounded-none box-border overflow-hidden shadow-inner shadow-stone-900/50"
         ></div>
-
-        <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
-          <button
-            onClick={handlePlayPause}
-            disabled={isLoading || !duration}
-            className="text-gray-400 hover:text-amber-50"
-          >
-            {isPlaying ? (
-              <PauseIcon size={34} className="p-1.5" />
-            ) : (
-              <PlayIcon size={34} className="p-1.5" />
+        <div className="flex items-center">
+          <div className="w-full items-center flex justify-start py-2 gap-2 p-1">
+            <button
+              onClick={handlePlayPause}
+              disabled={isLoading || !duration}
+              className="text-gray-400 hover:text-amber-50"
+            >
+              {isPlaying ? (
+                <PauseIcon size={34} className="p-1.5" />
+              ) : (
+                <PlayIcon size={34} className="p-1.5" />
+              )}
+            </button>
+            {!isLoading && duration > 0 && <SkipButton />}
+            {!isLoading && duration > 0 && (
+              <TimecodeDisplay
+                time={displayedTime}
+                duration={duration}
+                frameRate={projectFrameRate}
+              />
             )}
-          </button>
-          {!isLoading && duration > 0 && <SkipButton />}
-          {!isLoading && duration > 0 && (
-            <TimecodeDisplay
-              time={displayedTime}
-              duration={duration}
-              frameRate={projectFrameRate}
-            />
-          )}
+          </div>
+          <div className="flex justify-end pr-4 w-full gap-2 font-mono text-sm">
+            <AudioWaveformIcon className="text-gray-500" /><span>{silenceData?.length}</span>
+            <span className="text-gray-600">|</span>
+            <span className="flex space-x-0.5 gap-0.5">
+              {formatDuration(totalSilenceDuration).map((part, index) => (
+                <React.Fragment key={index}>
+                  <span className="text-white">{part.value}</span>
+                  <span className="text-gray-400">{part.unit}</span>
+                  {index < formatDuration(totalSilenceDuration).length - 1 && " "}
+                </React.Fragment>
+              ))}
+            </span>
+          </div>
         </div>
       </div>
     </>
