@@ -44,7 +44,6 @@ export function useWaveformData(
         const totalSamplesInClip = clipDuration * ASSUMED_SAMPLE_RATE;
         let dynamicSamplesPerPixel = Math.ceil(totalSamplesInClip / TARGET_PEAK_COUNT);
         dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, dynamicSamplesPerPixel);
-        console.log("dynamic samples per pixel for clip: ", dynamicSamplesPerPixel)
         
         setError(null); // Clear previous errors
 

@@ -411,7 +411,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
       ws.on("ready", () => {
         setIsLoading(false);
-        if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount) {
+        if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount > activeClip.startFrame) {
           const clipTime =
             (currTimecode.frameCount - activeClip.startFrame) /
             projectFrameRate;
@@ -442,9 +442,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           }
         } else {
           //console.log(`max tc: ${maxTimecode.frameCount}, curr tc: ${currTimecode.frameCount}`)
+          // ws.setTime(0);
+          //setTimecode(Timecode(activeClip.startFrame, projectFrameRate as FRAMERATE, false));
           currentTimeRef.current = 0;
           setDisplayedTime(0);
-          lastRenderedFrameRef.current = -1
+          lastRenderedFrameRef.current = -1;
         }
       });
       ws.on("play", () => {
