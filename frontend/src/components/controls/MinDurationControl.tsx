@@ -48,6 +48,7 @@ const _MinDurationControl: React.FC<MinDurationControlProps> = () => {
                         step={0.001}
                         value={[immediateValue]}
                         onValueChange={(vals) => setImmediateValue(vals[0])}
+                        onDoubleClick={resetMinDuration}
                         className="w-[128px] max-w-[128px] min-w-[128px]"
                         disabled={isDisabled}
                     />

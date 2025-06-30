@@ -53,7 +53,7 @@ export const defaultParameters = {
   minDuration: 0.5,
   paddingLeft: 0.5,
   paddingRight: 0.5,
-  minContent: 0.15,
+  minContent: 0.2,
   paddingLocked: true,
 };
 

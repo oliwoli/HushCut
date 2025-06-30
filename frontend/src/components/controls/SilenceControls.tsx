@@ -34,6 +34,7 @@ const _MinDurationControl = React.memo(() => {
                         min={0} max={5} step={0.001}
                         value={[minDuration]}
                         onValueChange={(vals) => setMinDuration(vals[0])}
+                        onDoubleClick={resetMinDuration}
                         className="w-[128px] max-w-[128px] min-w-[128px]"
                         disabled={isDisabled}
                     />
@@ -90,6 +91,7 @@ const _PaddingControl = React.memo(() => {
                                 min={0} max={1} step={0.01}
                                 value={[paddingLeft]}
                                 onValueChange={(vals) => handlePaddingChange("left", vals[0])}
+                                onDoubleClick={() => handlePaddingChange("left", defaultParameters.paddingLeft)}
                                 className="w-32"
                                 disabled={isDisabled}
                             />
@@ -107,6 +109,7 @@ const _PaddingControl = React.memo(() => {
                                 min={0} max={1} step={0.05}
                                 value={[paddingRight]}
                                 onValueChange={(vals) => handlePaddingChange("right", vals[0])}
+                                onDoubleClick={() => handlePaddingChange("right", defaultParameters.paddingRight)}
                                 className="w-32"
                                 disabled={isDisabled}
                                 dir='rtl'
@@ -144,6 +147,7 @@ const _MinContentControl = React.memo(() => {
                         min={0} max={5} step={0.001}
                         value={[minContent]}
                         onValueChange={(vals) => setMinContent(vals[0])}
+                        onDoubleClick={() => setMinContent(defaultParameters.minContent)}
                         className="w-[128px] max-w-[128px] min-w-[128px]"
                         disabled={isDisabled}
                     />
