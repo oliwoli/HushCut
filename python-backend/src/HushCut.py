@@ -71,7 +71,7 @@ from hushcut_lib.otio_as_bridge import (
     unify_edit_instructions,
 )
 
-from hushcut_lib.python_get_resolve import GetResolve
+
 
 # from project_orga import (
 #     map_media_pool_items_to_folders,
@@ -272,32 +272,53 @@ def resolve_import_error_msg(e: Exception, task_id: str = "") -> None:
     return None
 
 
+
+
+
+
+def GetResolve() -> Union[Any, None]:
+    try:
+        import DaVinciResolveScript as bmd
+    except ImportError:
+        # This block should ideally not be reached if sys.path is correctly set by get_resolve()
+        # but kept as a fallback for unexpected scenarios.
+        print("Unable to find module DaVinciResolveScript. Please ensure it's installed and discoverable.")
+        return None
+    return bmd.scriptapp("Resolve")
+
+
 def get_resolve(task_id: str = "") -> None:
     global RESOLVE
-    script_api_dir: str | None = os.getenv("RESOLVE_SCRIPT_API")
-    if script_api_dir:
-        resolve_modules_path = os.path.join(script_api_dir, "Modules")
-        if resolve_modules_path not in sys.path:
-            sys.path.insert(
-                0, resolve_modules_path
-            )  # Prepend to ensure it's checked first
-            print(f"Added to sys.path: {resolve_modules_path}")
-        else:
-            print(f"Already in sys.path: {resolve_modules_path}")
+    resolve_modules_path: str = ""
+    if sys.platform.startswith("darwin"):
+        resolve_modules_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
+    elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
+        resolve_modules_path = os.path.join(os.getenv("PROGRAMDATA"), "Blackmagic Design", "DaVinci Resolve", "Support", "Developer", "Scripting", "Modules")
+    elif sys.platform.startswith("linux"):
+        resolve_modules_path = "/opt/resolve/Developer/Scripting/Modules/"
+
+    if resolve_modules_path and resolve_modules_path not in sys.path:
+        sys.path.insert(0, resolve_modules_path)
+        print(f"Added to sys.path: {resolve_modules_path}")
+    else:
+        print(f"Already in sys.path: {resolve_modules_path}")
 
     try:
-        pass  # No direct import here, as bmd is now imported globally.
-        # import DaVinciResolveScript as bmd
+        # Attempt to import after modifying sys.path
+        import DaVinciResolveScript as bmd
     except ImportError as e:
-        resolve_import_error_msg(e, task_id)
-        return None
-    except FileNotFoundError as e:
         resolve_import_error_msg(e, task_id)
         return None
     except Exception as e:
         resolve_import_error_msg(e, task_id)
         return None
-    resolve_obj = GetResolve()
+    print("was able to import DaVinciResolveScript")
+    resolve_obj = bmd.scriptapp("Resolve")
+    if not resolve_obj:
+        try:
+            resolve_obj = resolve
+        except Exception as e:
+            print("could not get resolve_obj by calling resolve var directly.")
 
     if not resolve_obj:
         resolve_import_error_msg(
@@ -1254,7 +1275,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     if not RESOLVE:
         task_id = task_id or ""
         get_resolve(task_id)
-    print("hello?")
     if not RESOLVE:
         globalz.PROJECT_DATA = {}
         alert_title = "DaVinci Resolve Error"
@@ -2255,7 +2275,7 @@ def init():
             if sys.platform.startswith("darwin"):  # macOS
                 potential_paths = [
                     # 1. Check current directory (same level as the script)
-                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut")),
+                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut.app", "Contents", "MacOS", "HushCut")),
                     # 2. Check the .app bundle path (production)
                     os.path.abspath(
                         os.path.join(
