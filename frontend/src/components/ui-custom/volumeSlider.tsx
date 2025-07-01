@@ -43,7 +43,7 @@ export function _LogSlider({
   const setIsThresholdDragging = useGlobalStore(s => s.setIsThresholdDragging);
 
   return (
-    <div className="flex items-center h-[287px] select-none mt-[5px]">
+    <div className="flex items-center h-[260px] select-none pb-[5px] pt-0">
       <SliderPrimitive.Root
         orientation="vertical"
         min={actualMinDb}
@@ -70,13 +70,13 @@ export function _LogSlider({
           )}
           onDoubleClick={onDoubleClick}
         >
-          <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-2 bg-zinc-500 shadow-2xl pointer-events-none left-1/2 transform -translate-x-1/2" />
+          <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-3 bg-zinc-500 shadow-2xl pointer-events-none left-1/2 transform -translate-x-1/2" />
         </SliderPrimitive.Thumb>
       </SliderPrimitive.Root>
 
       <div className="relative h-66 bottom-0 bg-zinc-950/80 border-1 border-black drop-shadow-zinc-700 drop-shadow-xs w-1 z-0 right-[18px] rounded-xs"></div>
 
-      <div className="relative h-[87%] ml-0 top-[2px] right-3 font-mono">
+      <div className="relative h-full mb-[5px] ml-0 top-[2px] right-3 font-mono">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {
           const dB = actualMinDb + i;
           const pct =

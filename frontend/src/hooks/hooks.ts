@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useDebounce } from "use-debounce";
 
 export const useWindowFocus = (
     onFocus: () => void,
@@ -35,4 +36,40 @@ export const useWindowFocus = (
             window.removeEventListener("blur", handleBlur);
         };
     }, [onFocus, onBlur, options?.fireOnMount, throttleMs]);
+};
+
+export interface Dimensions {
+  width: number;
+  height: number;
+}
+
+export const useResizeObserver = <T extends HTMLElement>(
+  ref: React.RefObject<T | null>,
+  debounceMs: number = 300
+): Dimensions | null => {
+  const [dimensions, setDimensions] = useState<Dimensions | null>(null);
+  const [debouncedDimensions] = useDebounce(dimensions, debounceMs);
+
+  useEffect(() => {
+    const observeTarget = ref.current;
+    if (!observeTarget) {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (!entries || entries.length === 0) {
+        return;
+      }
+      const { width, height } = entries[0].contentRect;
+      setDimensions({ width, height });
+    });
+
+    resizeObserver.observe(observeTarget);
+
+    return () => {
+      resizeObserver.unobserve(observeTarget);
+    };
+  }, [ref]);
+
+  return debouncedDimensions;
 };

@@ -16,7 +16,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
     const isModified = useIsClipModified();
 
     return (
-        <div className="flex flex-col space-y-1 items-center">
+        <div className="flex flex-col space-y-1 items-center h-full">
             <LogSlider
                 defaultDb={threshold}
                 onGainChange={setThreshold}
@@ -26,7 +26,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                 }}
 
             />
-            <div className="flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300 px-3">
+            <div className="h-[40px] flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300 px-3">
                 <p className="text-base/tight">
                     Silence
                     <br />

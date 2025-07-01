@@ -17,6 +17,7 @@ import Timecode, { FRAMERATE } from "smpte-timecode";
 
 import { SetDavinciPlayhead } from "@wails/go/main/App";
 import { secToFrames, formatDuration } from "@/lib/utils";
+import { useResizeObserver } from "@/hooks/hooks";
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -159,6 +160,12 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const currentTimeRef = useRef(0);
   const [displayedTime, setDisplayedTime] = useState(0);
 
+  // Reset current time when activeClip changes
+  useEffect(() => {
+    currentTimeRef.current = 0;
+    setDisplayedTime(0);
+  }, [activeClip]);
+
   const currTimelineFrameRef = useRef<number | null>(null);
   const lastRenderedFrameRef = useRef(-1);
 
@@ -278,12 +285,28 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const panStartXRef = useRef(0); // To store initial mouse X position
   const panInitialScrollLeftRef = useRef(0); // To store initial scrollLeft of the waveform
   const originalCursorRef = useRef(""); // To store the original cursor style
+  const scrollPositionRef = useRef(0);
+  const prevAudioUrlRef = useRef<string | undefined>(undefined);
+  const isNewClipRef = useRef(false);
+
+  const dimensions = useResizeObserver(waveformContainerRef)
 
   useEffect(() => {
+    const audioUrlChanged = prevAudioUrlRef.current !== audioUrl;
+
     if (wavesurferRef.current) {
+      if (!audioUrlChanged) { // Only save scroll if it's the same clip being resized
+        scrollPositionRef.current = wavesurferRef.current.getScroll();
+      } else { // If audioUrl changed, reset scroll position
+        scrollPositionRef.current = 0;
+        isNewClipRef.current = true; // Mark as new clip
+      }
       wavesurferRef.current.destroy();
       wavesurferRef.current = null;
     }
+    // Update prevAudioUrlRef for the next render
+    prevAudioUrlRef.current = audioUrl;
+
     if (addRegionsTimeoutRef.current) {
       clearTimeout(addRegionsTimeoutRef.current);
       addRegionsTimeoutRef.current = null;
@@ -348,7 +371,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       mediaControls: false,
       autoCenter: false,
       autoScroll: true,
-      hideScrollbar: false,
+      hideScrollbar: true,
       minPxPerSec: 15,
     };
     const handleGlobalMouseMove = (event: MouseEvent) => {
@@ -409,6 +432,18 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       );
       wavesurferRef.current = ws;
 
+      // Restore time and scroll if it's a resize of the same clip
+      if (!audioUrlChanged) {
+        if (currentTimeRef.current > 0) {
+          ws.setTime(currentTimeRef.current);
+        }
+        if (scrollPositionRef.current > 0) {
+          ws.setScroll(scrollPositionRef.current);
+        }
+        setDisplayedTime(currentTimeRef.current);
+        lastRenderedFrameRef.current = getFrameFromTime(currentTimeRef.current, projectFrameRate);
+      }
+
       ws.on("ready", () => {
         setIsLoading(false);
         if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount > activeClip.startFrame) {
@@ -447,6 +482,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           currentTimeRef.current = 0;
           setDisplayedTime(0);
           lastRenderedFrameRef.current = -1;
+        }
+
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: activeClip.name,
+            artist: 'mhm',
+            album: 'HushCut App',
+            artwork: [
+              { src: 'logo512.png', sizes: '512x512', type: 'image/png' }
+            ]
+          });
         }
       });
       ws.on("play", () => {
@@ -614,7 +660,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         wavesurferRef.current = null;
       }
     };
-  }, [audioUrl, peakData]);
+  }, [audioUrl, peakData, dimensions]);
+
 
   const updateSilenceRegions = useCallback(
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
@@ -752,32 +799,34 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   }, [toggleSkipRegions, skipClass, skipTitle]);
 
   return (
-    <>
-      <div
-        ref={waveformContainerRef}
-        className="h-[260px] w-full mt-2 bg-[#212126] border-1 rounded-md box-border overflow-hidden relative"
-      >
-        <canvas className="absolute inset-0 z-0" />
+    <div className="h-full flex flex-col">
+      <div className="flex-grow min-h-0">
+        <div
+          ref={waveformContainerRef}
+          className="h-full w-full bg-[#212126] border-1 rounded-md box-border overflow-hidden relative"
+        >
+          <canvas className="absolute inset-0 z-0" />
 
-        {/* Threshold overlay line */}
-        {isThresholdDragging && (
-          <div
-            className="absolute w-full h-[1px] rounded-full bg-teal-500 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.9)]"
-            style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
-          />
-        )}
+          {/* Threshold overlay line */}
+          {isThresholdDragging && (
+            <div
+              className="absolute w-full h-[1px] rounded-full bg-teal-500 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.9)]"
+              style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
+            />
+          )}
 
-        {isLoading && (
-          <div className="absolute inset-0 flex items-end justify-end p-5 bg-gray-800/20 bg-opacity-50 text-white/60 z-10">
-            <LoaderCircleIcon className="text-gray-500/40 animate-spin" />
-          </div>
-        )}
+          {isLoading && (
+            <div className="absolute inset-0 flex items-end justify-end p-5 bg-gray-800/20 bg-opacity-50 text-white/60 z-10">
+              <LoaderCircleIcon className="text-gray-500/40 animate-spin" />
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="shadow-xl rounded-md border-1 mt-1 overflow-hidden">
+      <div className="shadow-xl rounded-md border-1 mt-1 overflow-hidden flex-shrink-0">
         <div
           ref={minimapContainerRef}
-          className="h-[40px] w-full bg-[#212126] border-0 border-t-0 rounded-none box-border overflow-hidden shadow-inner shadow-stone-900/50"
+          className="max-h-[40px] w-full bg-[#212126] border-0 border-t-0 rounded-none box-border overflow-hidden shadow-inner shadow-stone-900/50"
         ></div>
         <div className="flex items-center gap-1">
           <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">
@@ -816,7 +865,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 };
 

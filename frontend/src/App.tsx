@@ -531,28 +531,29 @@ function AppContent() {
         }}
       >
         <header className="flex items-center justify-between"></header>
-        <main className="flex-1 gap-8 max-w-screen select-none space-y-0">
+        <main className="flex flex-col max-w-screen select-none h-full">
           {currentActiveClip?.id && (
-            <FileSelector
-              audioItems={projectData?.timeline.audio_track_items}
-              currentFileId={currentClipId}
-              onFileChange={handleAudioClipSelection}
-              fps={projectData?.timeline.fps}
-              disabled={
-                !httpPort ||
-                !projectData?.timeline?.audio_track_items ||
-                projectData.timeline.audio_track_items.length === 0
-              }
-              className="w-full mt-1 overflow-visible"
-            />
+            <div className="flex-shrink-0 px-3">
+              <FileSelector
+                audioItems={projectData?.timeline.audio_track_items}
+                currentFileId={currentClipId}
+                onFileChange={handleAudioClipSelection}
+                fps={projectData?.timeline.fps}
+                disabled={
+                  !httpPort ||
+                  !projectData?.timeline?.audio_track_items ||
+                  projectData.timeline.audio_track_items.length === 0
+                }
+                className="w-full mt-1 overflow-visible"
+              />
+            </div>
           )}
-          <div className="flex flex-col space-y-6 px-3">
-            {/* Group Threshold, Min Duration, and Padding */}
-            <div className="flex flex-row space-x-3 items-start">
+          <div className="flex flex-col space-y-4 px-3 flex-grow min-h-0 py-2">
+            <div className="flex flex-row space-x-3 items-start h-1/2">
               {currentClipId && (
                 <>
                   <ThresholdControl key={currentClipId} />
-                  <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible">
+                  <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                     {httpPort &&
                       currentActiveClip &&
                       projectData &&
@@ -568,8 +569,8 @@ function AppContent() {
                 </>
               )}
             </div>
-            <div className="w-full px-1 bg-[#212126] rounded-2xl border-1 overflow-hidden shadow-xl">
-              <div className="p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between">
+            <div className="w-full px-1 bg-[#212126] rounded-2xl border-1 overflow-hidden shadow-xl h-1/2 flex flex-col">
+              <div className="p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
                 <div className="flex flex-wrap gap-x-4 gap-y-2 w-min">
                   <SilenceControls key={currentClipId} />
                 </div>
@@ -585,7 +586,6 @@ function AppContent() {
                 )}
               </div>
             </div>
-
           </div>
         </main>
       </div>
