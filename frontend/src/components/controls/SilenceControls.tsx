@@ -106,7 +106,7 @@ const _PaddingControl = React.memo(() => {
                     <div className="flex flex-col space-y-1 w-full">
                         <div className="flex items-center space-x-2">
                             <Slider
-                                min={0} max={1} step={0.05}
+                                min={0} max={1} step={0.01}
                                 value={[paddingRight]}
                                 onValueChange={(vals) => handlePaddingChange("right", vals[0])}
                                 onDoubleClick={() => handlePaddingChange("right", defaultParameters.paddingRight)}
