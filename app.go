@@ -733,6 +733,9 @@ func (a *App) DetectSilences(
 
 	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
 	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)
+	if minSilenceDurationSeconds < 0.005 {
+		minSilenceDurationSeconds = 0.005
+	}
 	minSilenceDurationForFFmpeg := fmt.Sprintf("%f", minSilenceDurationSeconds)
 
 	filterGraph := fmt.Sprintf("atrim=start=%.6f:end=%.6f,silencedetect=n=%s:d=%s",

@@ -138,11 +138,11 @@ const _MinContentControl = React.memo(() => {
 
     return (
         <div className='space-y-1'>
-            <Label className="font-medium w-52 text-stone-400 pt-4">
+            <Label className="font-medium w-52 text-stone-400">
                 Minimum Content Duration
             </Label>
             <div className="flex items-center space-x-5">
-                <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
+                <div className="flex w-56 items-center space-x-2" aria-disabled={isDisabled}>
                     <Slider
                         min={0} max={5} step={0.001}
                         value={[minContent]}
@@ -165,10 +165,15 @@ const _MinContentControl = React.memo(() => {
 
 export const SilenceControls = () => {
     return (
-        <div className="space-y-6 w-full p-5">
-            <_MinDurationControl />
-            <_PaddingControl />
-            <_MinContentControl />
+        <div className="w-full px-5 pt-7 flex flex-col gap-6 [@media(min-width:1024px)]:flex-row [@media(min-width:1024px)]:items-start [@media(min-width:1024px)]:gap-5">
+            <div className="flex flex-col gap-6">
+                <_MinDurationControl />
+                <_PaddingControl />
+            </div>
+
+            <div className="flex-1 mt-2 [@media(min-width:1024px)]:mt-0">
+                <_MinContentControl />
+            </div>
         </div>
     );
-}
+};

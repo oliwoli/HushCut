@@ -22,39 +22,69 @@ function Slider({
   )
 
   return (
-    <SliderPrimitive.Root
-      data-slot="slider"
-      defaultValue={defaultValue}
-      value={value}
-      min={min}
-      max={max}
-      className={cn(
-        "relative flex w-full touch-none items-center select-none data-[disabled]:opacity-50 data-[orientation=vertical]:h-full data-[orientation=vertical]:min-h-44 data-[orientation=vertical]:w-auto data-[orientation=vertical]:flex-col",
-        className
-      )}
-      {...props}
-    >
-      <SliderPrimitive.Track
-        data-slot="slider-track"
+    <div className="relative px-0 py-2 h-full">
+      {/* Left inner border */}
+
+      {/* Right inner border */}
+      <SliderPrimitive.Root
+        data-slot="slider"
+        defaultValue={defaultValue}
+        value={value}
+        min={min}
+        max={max}
         className={cn(
-          "bg-zinc-950/80 relative rounded-full data-[orientation=horizontal]:h-1 data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5 border-1 border-black"
+          "relative flex w-full touch-none items-center select-none data-[disabled]:opacity-50 data-[orientation=vertical]:h-full data-[orientation=vertical]:min-h-44 data-[orientation=vertical]:w-auto data-[orientation=vertical]:flex-col px-1",
+          className
         )}
+        {...props}
       >
-        <SliderPrimitive.Range
-          data-slot="slider-range"
+        <SliderPrimitive.Track
+          data-slot="slider-track"
           className={cn(
-            "bg-transparent absolute data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full"
+            "bg-black relative rounded-full data-[orientation=horizontal]:h-[6px] data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-1.5 border-1 border-zinc-800"
           )}
-        />
-      </SliderPrimitive.Track>
-      {Array.from({ length: _values.length }, (_, index) => (
+        >
+          <SliderPrimitive.Range
+            data-slot="slider-range"
+            className={cn(
+              "bg-transparent absolute data-[orientation=horizontal]:h-full data-[orientation=vertical]:w-full"
+            )}
+          />
+        </SliderPrimitive.Track>
+        {/* Markings Container */}
+        <div className="absolute inset-0 flex justify-center items-center">
+          <div className="relative h-full" style={{ width: '87.6%' }}> {/* Adjust width here to fine-tune scale */}
+            {Array.from({ length: 11 }, (_, i) => {
+              const markValue = min + ((max - min) / 10) * (i);
+              const percentage = ((markValue - min) / (max - min)) * 100;
+
+              return (
+                <div
+                  key={i}
+                  className={cn(
+                    "absolute h-[8px] w-[1px] z-0", // Markings below thumb
+                    markValue === (min + max) / 2 ? "bg-zinc-300" : "bg-zinc-600" // Lighter color for 50% mark
+                  )}
+                  style={{
+                    left: `${percentage}%`,
+                    top: "-13px", // Position above the track with a gap
+                    transform: "translateX(-50%)", // Only horizontal centering
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
-          key={index}
-          className="border-zinc-950 transition-[color,box-shadow] border-t-zinc-800 bg-zinc-300 ring-ring/50 block size-4 shrink-0 rounded-[3px] border hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 w-3 h-6"
-        />
-      ))}
-    </SliderPrimitive.Root>
+          className="border-zinc-950 transition-[color,box-shadow] border-t-zinc-800 border-b-2 bg-zinc-700 ring-ring/50 block size-4 shrink-0 rounded-[3px] border hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 w-4 h-7 z-10 overflow-hidden" // Ensure thumb is on top
+        >
+          <div className="absolute top-1/2 left-1/2 -translate-y-1/2 h-[80%] rounded-[1px] w-[8px] bg-zinc-600 shadow-2xl pointer-events-none transform -translate-x-1/2 z-1 blur-[1px]" />
+          <div className="absolute top-1/2 -translate-y-1/2 h-[80%] w-[2px] bg-zinc-100 pointer-events-none left-1/2 transform -translate-x-1/2 z-2 rounded-full" />
+        </SliderPrimitive.Thumb>
+      </SliderPrimitive.Root>
+    </div >
+
   )
 }
 

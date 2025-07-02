@@ -24,7 +24,7 @@ function Slider({
 
   return (
     <div className="flex items-center gap-2">
-      <MinusCircleIcon size={15} />
+      <MinusCircleIcon size={15} className="opacity-80" />
 
       <SliderPrimitive.Root
         data-slot="slider"
@@ -55,11 +55,11 @@ function Slider({
           <SliderPrimitive.Thumb
             data-slot="slider-thumb"
             key={index}
-            className="border-none border-t-zinc-800 bg-zinc-300 ring-ring/50 block size-4 shrink-0  focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 w-1 h-6"
+            className="border-none border-t-zinc-800 bg-zinc-300 ring-ring/50 block size-4 shrink-0  focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 w-1 h-4"
           />
         ))}
       </SliderPrimitive.Root>
-      <PlusCircleIcon size={15} />
+      <PlusCircleIcon size={15} className="opacity-80" />
 
     </div>
   )

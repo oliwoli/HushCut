@@ -70,7 +70,7 @@ export function _LogSlider({
           )}
           onDoubleClick={onDoubleClick}
         >
-          <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-3 bg-zinc-500 shadow-2xl pointer-events-none left-1/2 transform -translate-x-1/2" />
+          <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-3 bg-zinc-500 pointer-events-none left-1/2 transform -translate-x-1/2" />
         </SliderPrimitive.Thumb>
       </SliderPrimitive.Root>
 

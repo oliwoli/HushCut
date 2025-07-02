@@ -718,9 +718,18 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
       const currentRegionsPlugin = regionsPluginRef.current;
       if (!currentRegionsPlugin) return;
-      currentRegionsPlugin.clearRegions();
       const regionsContainerEl = (currentRegionsPlugin as any)
         .regionsContainer as HTMLElement | undefined;
+
+      if (regionsContainerEl?.parentElement) {
+        if (sDataToProcess && sDataToProcess.length > 500) {
+          regionsContainerEl.classList.add("performance-mode");
+        } else {
+          regionsContainerEl.classList.remove("performance-mode");
+        }
+      }
+
+      currentRegionsPlugin.clearRegions();
       if (regionsContainerEl) {
         regionsContainerEl.innerHTML = "";
       }
@@ -868,7 +877,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     });
   }, [toggleSkipRegions, skipClass, skipTitle]);
 
-  const sliderClassName = "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out " + ((isMouseInWaveform || isPanningRef.current) ? "opacity-100" : "opacity-0 pointer-events-none");
+  const sliderClassName = "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out";
 
   return (
     <div className="h-full flex flex-col">
@@ -876,12 +885,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         <div
           ref={waveformContainerRef}
           className="h-full w-full bg-[#212126] border-1 border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative"
-          onMouseEnter={() => setIsMouseInWaveform(true)}
-          onMouseLeave={() => setIsMouseInWaveform(false)}
+
         >
           <canvas className="absolute inset-0 z-0" />
 
-          <div className={sliderClassName}>
+          <div className={`${sliderClassName} p-1 ${!isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
             <ZoomSlider
               min={1}
               max={150}
@@ -921,7 +929,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             <button
               onClick={handlePlayPause}
               disabled={isLoading || !duration}
-              className="text-gray-400 hover:text-amber-50"
+              className="text-gray-400 hover:text-amber-50 focus-visible:outline-0 focus-visible:text-amber-50"
             >
               {isPlaying ? (
                 <PauseIcon size={34} className="p-1.5" />
