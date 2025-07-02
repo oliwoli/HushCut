@@ -4,7 +4,6 @@ import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js";
-import ZoomPlugin from "wavesurfer.js/dist/plugins/zoom.esm.js";
 
 import { useClipParameter, useGlobalStore, useTimecodeStore } from "@/stores/clipStore";
 
@@ -18,6 +17,7 @@ import Timecode, { FRAMERATE } from "smpte-timecode";
 import { SetDavinciPlayhead } from "@wails/go/main/App";
 import { secToFrames, formatDuration } from "@/lib/utils";
 import { useResizeObserver } from "@/hooks/hooks";
+import { ZoomSlider } from "@/components/ui/zoomSlider";
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -338,8 +338,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
     const wsMinimap = Minimap.create({
       container: minimapContainerRef.current,
-      waveColor: "#666666",
-      progressColor: "#666666",
+      waveColor: "#444444",
+      progressColor: "#444444",
       height: 40,
       dragToSeek: true,
       cursorWidth: 2,
@@ -591,14 +591,14 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           if (!ws) return;
 
           // The exponential zoom factor. Adjust for sensitivity.
-          const zoomFactor = Math.exp(-e.deltaY * 0.005);
+          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
 
           const currentZoom = ws.options.minPxPerSec || 15;
           const newZoom = currentZoom * zoomFactor;
 
           // Set min and max zoom levels
           const maxZoom = 150; // or whatever max you prefer
-          const minZoom = 2;
+          const minZoom = 1;
           const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
           if (finalZoom == currentZoom) return;
@@ -623,6 +623,37 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
     // --- Event listeners for the MINIMAP plugin instance ---
     if (wsMinimap) {
+      const minimapWrapper = minimapContainerRef.current;
+      if (minimapWrapper) {
+        minimapWrapper.addEventListener("wheel", (e) => {
+          // Only prevent default and zoom if it's a vertical scroll gesture
+          if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+
+          e.preventDefault();
+
+          const ws = wavesurferRef.current;
+          if (!ws) return;
+
+          // The exponential zoom factor. Adjust for sensitivity.
+          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
+
+          const currentZoom = ws.options.minPxPerSec || 15;
+          const newZoom = currentZoom * zoomFactor;
+
+          // Set min and max zoom levels
+          const maxZoom = 150; // or whatever max you prefer
+          const minZoom = 1;
+          const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
+
+          if (finalZoom == currentZoom) return;
+
+          ws.zoom(finalZoom);
+
+          // We still trigger this to update the silence regions, which is debounced.
+          setZoomTrigger((p) => p + 1);
+        });
+      }
+
       const onMinimapDrag = (relativeX: number) => {
         const mainWs = wavesurferRef.current;
         if (!mainWs) return;
@@ -753,10 +784,29 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   }, [silenceData, isLoading, updateSilenceRegions, duration, activeClip]);
 
   useEffect(() => {
-    if (silenceDataRef.current) {
-      updateSilenceRegions(silenceDataRef.current);
+    const ws = wavesurferRef.current;
+    if (ws) {
+      const currentZoom = ws.options.minPxPerSec || 15;
+      setZoomLevel(currentZoom);
     }
   }, [debouncedZoomTrigger]);
+
+  const [isMouseInWaveform, setIsMouseInWaveform] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
+
+  const handleZoom = (newZoom: number) => {
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+
+    const minZoom = 1;
+    const maxZoom = 150;
+    const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
+
+    if (finalZoom !== ws.options.minPxPerSec) {
+      ws.zoom(finalZoom);
+      setZoomTrigger((p) => p + 1);
+    }
+  };
 
   const handlePlayPause = useCallback(() => {
     if (wavesurferRef.current && !isLoading) wavesurferRef.current.playPause();
@@ -818,14 +868,32 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     });
   }, [toggleSkipRegions, skipClass, skipTitle]);
 
+  const sliderClassName = "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out " + ((isMouseInWaveform || isPanningRef.current) ? "opacity-100" : "opacity-0 pointer-events-none");
+
   return (
     <div className="h-full flex flex-col">
       <div className="flex-grow min-h-0">
         <div
           ref={waveformContainerRef}
-          className="h-full w-full bg-[#212126] border-1 rounded-md box-border overflow-hidden relative"
+          className="h-full w-full bg-[#212126] border-1 border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative"
+          onMouseEnter={() => setIsMouseInWaveform(true)}
+          onMouseLeave={() => setIsMouseInWaveform(false)}
         >
           <canvas className="absolute inset-0 z-0" />
+
+          <div className={sliderClassName}>
+            <ZoomSlider
+              min={1}
+              max={150}
+              step={1}
+              value={[zoomLevel]}
+              onValueChange={(value) => {
+                setZoomLevel(value[0]);
+                handleZoom(value[0]);
+              }}
+              className="w-18 sm:w-24"
+            />
+          </div>
 
           {/* Threshold overlay line */}
           {isThresholdDragging && (
@@ -843,10 +911,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         </div>
       </div>
 
-      <div className="shadow-xl rounded-md border-1 mt-1 overflow-hidden flex-shrink-0">
+      <div className="rounded-none border-0 mt-0 pt-1 overflow-hidden flex-shrink-0">
         <div
           ref={minimapContainerRef}
-          className="max-h-[40px] w-full bg-[#212126] border-0 border-t-0 rounded-none box-border overflow-hidden shadow-inner shadow-stone-900/50"
+          className="max-h-[40px] w-full bg-transparent border-0 border-t-0 rounded-b-xs box-border overflow-hidden shadow-inner shadow-stone-900/50"
         ></div>
         <div className="flex items-center gap-1">
           <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">

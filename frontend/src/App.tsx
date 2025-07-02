@@ -548,9 +548,9 @@ function AppContent() {
               />
             </div>
           )}
-          <div className="flex flex-col space-y-4 px-3 flex-grow min-h-0 py-2">
+          <div className="flex flex-col space-y-1 px-3 flex-grow min-h-0 py-2">
             {currentClipId && (
-              <div className="flex flex-row space-x-3 items-start h-1/2">
+              <div className="flex flex-row space-x-3 items-start h-[calc(70%-150px)] min-h-[300px] max-h-[600px]">
                 <ThresholdControl key={currentClipId} />
                 <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                   {httpPort &&
@@ -567,7 +567,7 @@ function AppContent() {
                 </div>
               </div>
             )}
-            <div className="w-full h-min px-1 bg-[#212126] rounded-2xl border-1 overflow-hidden shadow-xl h-1/2 flex flex-col">
+            <div className="w-full px-1 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 overflow-hidden shadow-xl h-1/2 flex flex-col">
               <div className="p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
                 <div className="flex flex-wrap gap-x-4 gap-y-2 w-min">
                   <SilenceControls key={currentClipId} />

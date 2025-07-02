@@ -106,13 +106,10 @@ body {
 }
 
 div[part="minimap-overlay"] {
-  background-color: rgba(148, 148, 148, 0.197) !important;
-  border-left: 2px solid rgba(0, 0, 0, 0.46);
-  border-right: 2px solid rgba(0, 0, 0, 0.46);
-  border-top: none;
-  border-bottom: none;
+  background-color: #ebebeb !important;
+  mix-blend-mode: overlay;
   /* transition: none !important; */
-  z-index: 100 !important;
+  z-index: 10 !important;
 }
 
 /* ::part(region)::before {
