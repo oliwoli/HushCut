@@ -85,7 +85,7 @@ body {
 ::part(region) {
   pointer-events: unset !important;
   box-sizing: border-box;
-  /* box-shadow: inset 0px 6px 15px 5px rgba(0, 0, 0, 0.15); */
+  box-shadow: inset 0px 6px 15px 5px rgba(0, 0, 0, 0.15);
   border: 1px solid rgb(155, 0, 0);
   border-top: none;
   border-bottom: none;
@@ -93,10 +93,11 @@ body {
 }
 
 /* stripped-down style for performance mode */
-.performance-mode::part(region) {
+.performance-mode ::part(region) {
   box-shadow: none !important;
   border: none;
   border: none !important;
+  background-color: rgba(138, 0, 0, 0.358) !important;
 }
 
 * {

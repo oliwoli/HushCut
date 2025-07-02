@@ -721,11 +721,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const regionsContainerEl = (currentRegionsPlugin as any)
         .regionsContainer as HTMLElement | undefined;
 
-      if (regionsContainerEl?.parentElement) {
+      if (waveformContainerRef.current) {
         if (sDataToProcess && sDataToProcess.length > 500) {
-          regionsContainerEl.classList.add("performance-mode");
+          waveformContainerRef.current.classList.add("performance-mode");
         } else {
-          regionsContainerEl.classList.remove("performance-mode");
+          waveformContainerRef.current.classList.remove("performance-mode");
         }
       }
 

@@ -72,7 +72,6 @@ from hushcut_lib.otio_as_bridge import (
 )
 
 
-
 # from project_orga import (
 #     map_media_pool_items_to_folders,
 #     MediaPoolItemFolderMapping,
@@ -107,7 +106,6 @@ FFMPEG = "ffmpeg"
 MAKE_NEW_TIMELINE = True
 MAX_RETRIES = 100
 created_timelines = {}
-
 
 
 class ProgressTracker:
@@ -272,17 +270,15 @@ def resolve_import_error_msg(e: Exception, task_id: str = "") -> None:
     return None
 
 
-
-
-
-
 def GetResolve() -> Union[Any, None]:
     try:
         import DaVinciResolveScript as bmd
     except ImportError:
         # This block should ideally not be reached if sys.path is correctly set by get_resolve()
         # but kept as a fallback for unexpected scenarios.
-        print("Unable to find module DaVinciResolveScript. Please ensure it's installed and discoverable.")
+        print(
+            "Unable to find module DaVinciResolveScript. Please ensure it's installed and discoverable."
+        )
         return None
     return bmd.scriptapp("Resolve")
 
@@ -293,7 +289,15 @@ def get_resolve(task_id: str = "") -> None:
     if sys.platform.startswith("darwin"):
         resolve_modules_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
     elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
-        resolve_modules_path = os.path.join(os.getenv("PROGRAMDATA"), "Blackmagic Design", "DaVinci Resolve", "Support", "Developer", "Scripting", "Modules")
+        resolve_modules_path = os.path.join(
+            os.getenv("PROGRAMDATA"),
+            "Blackmagic Design",
+            "DaVinci Resolve",
+            "Support",
+            "Developer",
+            "Scripting",
+            "Modules",
+        )
     elif sys.platform.startswith("linux"):
         resolve_modules_path = "/opt/resolve/Developer/Scripting/Modules/"
 
@@ -313,45 +317,19 @@ def get_resolve(task_id: str = "") -> None:
         resolve_import_error_msg(e, task_id)
         return None
     print("was able to import DaVinciResolveScript")
+
     resolve_obj = bmd.scriptapp("Resolve")
     if not resolve_obj:
         try:
             resolve_obj = resolve
         except Exception as e:
-            print("could not get resolve_obj by calling resolve var directly.")
-
-    if not resolve_obj:
-        resolve_import_error_msg(
-            e=Exception("Failed to import DaVinci Resolve Python API.", task_id)
-        )
-        return None
+            print(f"could not get resolve_obj by calling resolve var directly. {e}")
+            resolve_import_error_msg(
+                e=Exception("Failed to import DaVinci Resolve Python API.", task_id)
+            )
+            return None
 
     RESOLVE = resolve_obj
-
-
-# export timeline to XML
-def export_timeline_to_xml(timeline: Any, file_path: str) -> None:
-    """
-    Export the current timeline to an XML file.
-
-    Args:
-        timeline (Any): The timeline object to export.
-        file_path (str): The path where the XML file will be saved.
-    """
-    global RESOLVE
-    if not timeline:
-        print("No timeline to export.")
-        return
-
-    if not RESOLVE:
-        return
-
-    # Assuming the Resolve API has a method to export timelines
-    success = timeline.Export(file_path, RESOLVE.EXPORT_FCP_7_XML)
-    if success:
-        print(f"Timeline exported successfully to {file_path}")
-    else:
-        print("Failed to export timeline.")
 
 
 # export timeline to XML
@@ -1267,6 +1245,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
     global TRACKER
 
     script_start_time: float = time()
+    print("running main function...")
 
     if not sync:
         TRACKER.start_new_run(globalz.TASKS, task_id)
@@ -1276,6 +1255,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         task_id = task_id or ""
         get_resolve(task_id)
     if not RESOLVE:
+        print("could not get resolve object")
         globalz.PROJECT_DATA = {}
         alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
@@ -1288,6 +1268,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         return False
 
     if not RESOLVE.GetProjectManager():
+        print("no project")
         PROJECT = None
         alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
@@ -1589,24 +1570,24 @@ def append_and_link_timeline_items(
     timeline = None
     if create_new_timeline:
         print("Creating a new timeline...")
-        
+
         if og_tl_name not in created_timelines:
             created_timelines[og_tl_name] = 1
-        
+
         retries = 0
         while retries < MAX_RETRIES:
             index = created_timelines[og_tl_name]
             timeline_name = f"{og_tl_name}-hc-{index:02d}"
             timeline = media_pool.CreateEmptyTimeline(timeline_name)
-            
+
             if timeline:
                 timeline.SetStartTimecode(project_data["timeline"]["start_timecode"])
                 created_timelines[og_tl_name] += 1
-                break 
+                break
             else:
                 created_timelines[og_tl_name] += 1
                 retries += 1
-        
+
         if not timeline:
             send_result_with_alert(
                 task_id=task_id,
@@ -2275,7 +2256,11 @@ def init():
             if sys.platform.startswith("darwin"):  # macOS
                 potential_paths = [
                     # 1. Check current directory (same level as the script)
-                    os.path.abspath(os.path.join(SCRIPT_DIR, "HushCut.app", "Contents", "MacOS", "HushCut")),
+                    os.path.abspath(
+                        os.path.join(
+                            SCRIPT_DIR, "HushCut.app", "Contents", "MacOS", "HushCut"
+                        )
+                    ),
                     # 2. Check the .app bundle path (production)
                     os.path.abspath(
                         os.path.join(
