@@ -20,13 +20,13 @@ import {
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus } from "@wails/go/main/App";
-import { EventsOn } from "@wails/runtime";
+import { EventsEmit, EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveform";
 import RemoveSilencesButton, { deriveAllClipDetectionParams, prepareProjectDataWithEdits } from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
-import { useWindowFocus } from "./hooks/hooks";
+import { usePrevious, useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
 import { createPortal } from "react-dom";
@@ -120,7 +120,28 @@ function supportsRealBackdrop() {
 // });
 
 function AppContent() {
+  const [ffmpegReady, setFFmpegReady] = useState<boolean | null>(null)
+  const prevFfmpegReady = usePrevious(ffmpegReady);
 
+  useEffect(() => {
+    // Don't do anything until the initial status check is complete.
+    if (ffmpegReady === null) {
+      return;
+    }
+
+    // This condition elegantly handles two scenarios:
+    // 1. The initial check finds FFmpeg is ready (null -> true).
+    // 2. The user downloads FFmpeg (false -> true).
+    if (ffmpegReady === true && prevFfmpegReady !== true) {
+      console.log("FFmpeg is ready, calling handleSync.");
+      handleSync();
+    }
+    // This handles the case where the initial check finds FFmpeg is NOT ready.
+    else if (ffmpegReady === false && prevFfmpegReady === null) {
+      console.log("Initial FFmpeg check failed, calling handleSync to show alert.");
+      handleSync();
+    }
+  }, [ffmpegReady, prevFfmpegReady]);
 
   const isBusy = useSyncBusyState(s => s.isBusy);
   const setBusy = useSyncBusyState(s => s.setBusy);
@@ -206,8 +227,42 @@ function AppContent() {
       return;
     }
     console.log("syncing...")
-    setBusy(true);
+    if (ffmpegReady == null) {
+      const isFfmpegReady = await GetFFmpegStatus();
+      setFFmpegReady(isFfmpegReady);
+      return
+    }
+
+    if (!ffmpegReady) {
+      console.log("no ffmpeg! (handle sync");
+
+      EventsEmit("showAlert", {
+        title: "FFmpeg Not Found",
+        message: "FFmpeg is required for certain features. Would you like to download it now?",
+        actions: [
+          {
+            label: "Download",
+            onClick: async () => {
+              // This logic is moved from the old toast action.
+              // We can still use toast for in-progress/success feedback.
+              toast.info("Downloading FFmpeg...");
+              try {
+                await DownloadFFmpeg();
+                toast.success("FFmpeg downloaded successfully!");
+                setFFmpegReady(true);
+              } catch (err) {
+                toast.error("Failed to download FFmpeg: " + err);
+                setFFmpegReady(false);
+              }
+            },
+          },
+        ],
+      });
+      return;
+    }
+
     //const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
+    setBusy(true);
 
     const conditionalSetProjectData = async (
       newData: main.ProjectDataPayload | null
@@ -309,6 +364,7 @@ function AppContent() {
     document.body.classList.add(hasBlur ? "has-blur" : "no-blur");
   }, []);
 
+
   useEffect(() => {
     const getInitialServerInfo = async () => {
       if (initialInitDone.current) return;
@@ -320,24 +376,35 @@ function AppContent() {
           console.log("App.tsx: HTTP Server Port received:", port);
           setHttpPort(port); // This will trigger a re-render
 
-          const ffmpegReady = await GetFFmpegStatus();
-          if (!ffmpegReady) {
+          const isFfmpegReady = await GetFFmpegStatus();
+          setFFmpegReady(isFfmpegReady);
+          console.log("is ffmpeg ready: ", isFfmpegReady)
+
+          if (!isFfmpegReady) {
             console.log("no ffmpeg!");
-            alert("no ffmpeg!")
-            toast.warning("FFmpeg is missing. Would you like to download it?", {
-              duration: Infinity,
-              action: {
-                label: "Download",
-                onClick: async () => {
-                  toast.info("Downloading FFmpeg...");
-                  try {
-                    await DownloadFFmpeg();
-                    toast.success("FFmpeg downloaded successfully!");
-                  } catch (err) {
-                    toast.error("Failed to download FFmpeg: " + err);
-                  }
+            // --- REPLACEMENT HAPPENS HERE ---
+            // Old toast.warning call is removed and replaced with EventsEmit.
+            EventsEmit("showAlert", {
+              title: "FFmpeg Not Found",
+              message: "FFmpeg is required for certain features. Would you like to download it now?",
+              actions: [
+                {
+                  label: "Download",
+                  onClick: async () => {
+                    // This logic is moved from the old toast action.
+                    // We can still use toast for in-progress/success feedback.
+                    toast.info("Downloading FFmpeg...");
+                    try {
+                      await DownloadFFmpeg();
+                      toast.success("FFmpeg downloaded successfully!");
+                      setFFmpegReady(true);
+                    } catch (err) {
+                      toast.error("Failed to download FFmpeg: " + err);
+                      setFFmpegReady(false);
+                    }
+                  },
                 },
-              },
+              ],
             });
           }
           const pyReady = await GetPythonReadyStatus();
@@ -567,7 +634,7 @@ function AppContent() {
                 </div>
               </div>
             )}
-            <div className="w-full px-1 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 overflow-hidden shadow-xl h-1/2 flex flex-col">
+            <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 overflow-hidden shadow-xl h-min flex flex-col">
               <div className="p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
                 <div className="flex flex-wrap gap-x-4 gap-y-2 w-min">
                   <SilenceControls key={currentClipId} />

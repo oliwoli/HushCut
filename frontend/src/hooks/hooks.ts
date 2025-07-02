@@ -1,6 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { useDebounce } from "use-debounce";
 
+export function usePrevious<T>(value: T): T | undefined {
+  // Create a ref to store the value. The ref can hold a value of type T,
+  // or be undefined on the first render.
+  const ref = useRef<T>(undefined);
+
+  // The useEffect hook runs *after* the render cycle.
+  // This means ref.current will hold the value from the previous render
+  // when the component body executes.
+  useEffect(() => {
+    // Update the ref's current value to the new value for the *next* render.
+    ref.current = value;
+  }, [value]); // This effect should re-run whenever the value changes.
+
+  // Return the value from the previous render.
+  return ref.current;
+}
+
+
+
 export const useWindowFocus = (
     onFocus: () => void,
     onBlur: () => void,

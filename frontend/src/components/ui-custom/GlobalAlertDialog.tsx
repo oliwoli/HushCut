@@ -3,6 +3,7 @@ import { EventsOn } from "@wails/runtime";
 import {
   AlertDialog,
   AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -12,9 +13,16 @@ import {
 
 import { useSyncBusyState } from "@/stores/appSync";
 
+interface AlertAction {
+  label: string;
+  onClick: () => void;
+  // Optional: Add other props like `className` if you want more customization
+}
+
 interface AlertData {
   title: string;
   message: string;
+  actions?: AlertAction[]; // Add actions array to the interface
 }
 
 const GlobalAlertDialog = () => {
@@ -24,7 +32,6 @@ const GlobalAlertDialog = () => {
     message: "",
   });
 
-  // START of workaround
   const [internalOpen, setInternalOpen] = useState(false);
   const [dialogOpacity, setDialogOpacity] = useState(1);
 
@@ -40,7 +47,6 @@ const GlobalAlertDialog = () => {
       return () => clearTimeout(fadeOutTimer);
     }
   }, [alertOpen]);
-  // END of workaround
 
   const isBusy = useSyncBusyState(s => s.isBusy);
   const setBusy = useSyncBusyState(s => s.setBusy);
@@ -54,34 +60,27 @@ const GlobalAlertDialog = () => {
   }, [isBusy]);
 
   useEffect(() => {
-    const handler = (data: any) => {
-      const maxRetries = 5;
-      const retryDelay = 30;
-      let retries = 0;
+    // --- THIS IS THE KEY CHANGE ---
+    // The handler now takes full control of the busy state.
+    const handler = (data: AlertData) => {
+      // 1. Set the app to busy *when the event is received*.
+      setBusy(true);
 
-      const waitUntilBusy = () => {
-        if (isBusyRef.current) {
-          setAlertData({
-            title: data.title || "No title",
-            message: data.message || "No message",
-          });
-          setAlertOpen(true);
-        } else if (retries < maxRetries) {
-          retries++;
-          alertTimerRef.current = setTimeout(waitUntilBusy, retryDelay);
-        } else {
-          console.warn("showAlert event received, but app is not busy. Ignoring after retries.");
-        }
-      };
-      waitUntilBusy();
+      // 2. Set the alert data and open it.
+      setAlertData({
+        title: data.title || "No title",
+        message: data.message || "No message",
+        actions: data.actions || [],
+      });
+      setAlertOpen(true);
     };
 
     const unsubscribe = EventsOn("showAlert", handler);
     return () => {
       if (unsubscribe) unsubscribe();
-      if (alertTimerRef.current) clearTimeout(alertTimerRef.current);
+      // No need for the timer ref anymore if you remove the retry logic
     };
-  }, [isBusy]);
+  }, []); // The handler no longer needs dependencies
 
   // Dialog open/close logic
   const handleOpenChange = (isOpen: boolean) => {
@@ -107,7 +106,12 @@ const GlobalAlertDialog = () => {
           <AlertDialogDescription>{alertData.message}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogAction>Continue</AlertDialogAction>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          {alertData.actions && alertData.actions.map((action, index) => (
+            <AlertDialogAction key={index} onClick={action.onClick}>
+              {action.label}
+            </AlertDialogAction>
+          ))}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

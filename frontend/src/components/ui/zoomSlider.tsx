@@ -4,27 +4,34 @@ import * as SliderPrimitive from "@radix-ui/react-slider"
 import { cn } from "@/lib/utils"
 import { MinusCircleIcon, PlusCircleIcon } from "lucide-react"
 
+interface ZoomSliderProps {
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+}
+
 function Slider({
   className,
   defaultValue,
   value,
   min = 0,
   max = 100,
+  onZoomIn,
+  onZoomOut,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & ZoomSliderProps) {
   const _values = React.useMemo(
     () =>
       Array.isArray(value)
         ? value
         : Array.isArray(defaultValue)
-          ? defaultValue
-          : [min, max],
+        ? defaultValue
+        : [min, max],
     [value, defaultValue, min, max]
-  )
+  );
 
   return (
     <div className="flex items-center gap-2">
-      <MinusCircleIcon size={15} className="opacity-80" />
+      <MinusCircleIcon size={15} className="opacity-80" onClick={onZoomOut} />
 
       <SliderPrimitive.Root
         data-slot="slider"
@@ -59,10 +66,9 @@ function Slider({
           />
         ))}
       </SliderPrimitive.Root>
-      <PlusCircleIcon size={15} className="opacity-80" />
-
+      <PlusCircleIcon size={15} className="opacity-80" onClick={onZoomIn} />
     </div>
-  )
+  );
 }
 
 export { Slider as ZoomSlider }

@@ -722,7 +722,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         .regionsContainer as HTMLElement | undefined;
 
       if (waveformContainerRef.current) {
-        if (sDataToProcess && sDataToProcess.length > 500) {
+        if (sDataToProcess && sDataToProcess.length > 200) {
           waveformContainerRef.current.classList.add("performance-mode");
         } else {
           waveformContainerRef.current.classList.remove("performance-mode");
@@ -877,7 +877,23 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     });
   }, [toggleSkipRegions, skipClass, skipTitle]);
 
-  const sliderClassName = "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out";
+  const sliderClassName =
+    "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out";
+
+  const maxZoomSteps = 10;
+  const handleZoomInClick = () => {
+    const currentZoom = zoomLevel;
+    const newZoom = Math.min(150, currentZoom + 150 / maxZoomSteps);
+    handleZoom(newZoom);
+    setZoomLevel(newZoom);
+  };
+
+  const handleZoomOutClick = () => {
+    const currentZoom = zoomLevel;
+    const newZoom = Math.max(1, currentZoom - 150 / maxZoomSteps);
+    handleZoom(newZoom);
+    setZoomLevel(newZoom);
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -885,11 +901,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         <div
           ref={waveformContainerRef}
           className="h-full w-full bg-[#212126] border-1 border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative"
-
         >
           <canvas className="absolute inset-0 z-0" />
 
-          <div className={`${sliderClassName} p-1 ${!isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+          <div
+            className={`${sliderClassName} p-1 ${!isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"
+              }`}
+          >
             <ZoomSlider
               min={1}
               max={150}
@@ -899,6 +917,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                 setZoomLevel(value[0]);
                 handleZoom(value[0]);
               }}
+              onZoomIn={handleZoomInClick}
+              onZoomOut={handleZoomOutClick}
               className="w-18 sm:w-24"
             />
           </div>
@@ -947,14 +967,16 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             )}
           </div>
           <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm">
-            <AudioWaveformIcon size={21} className="text-gray-500" /><span>{silenceData?.length}</span>
+            <AudioWaveformIcon size={21} className="text-gray-500" />
+            <span>{silenceData?.length}</span>
             <span className="text-gray-600 invisible sm:visible">|</span>
             <span className="hidden sm:flex space-x-0 gap-1">
               {formatDuration(totalSilenceDuration).map((part, index) => (
                 <React.Fragment key={index}>
                   <span className="text-white">{part.value}</span>
                   <span className="text-gray-400">{part.unit}</span>
-                  {index < formatDuration(totalSilenceDuration).length - 1 && " "}
+                  {index < formatDuration(totalSilenceDuration).length - 1 &&
+                    " "}
                 </React.Fragment>
               ))}
             </span>
