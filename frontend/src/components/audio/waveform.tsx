@@ -423,13 +423,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
     try {
       const ws = WaveSurfer.create(wsOptions);
-      ws.registerPlugin(
-        ZoomPlugin.create({
-          scale: 0.01,
-          maxZoom: 180,
-          exponentialZooming: true,
-        })
-      );
       wavesurferRef.current = ws;
 
       // Restore time and scroll if it's a resize of the same clip
@@ -575,10 +568,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
 
-      ws.on("zoom", () => {
-        setZoomTrigger((prev) => prev + 1);
-      });
-
       ws.on("error", (err: Error | string) => {
         console.error("WaveSurfer error:", err);
         setIsLoading(false);
@@ -591,6 +580,37 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         originalCursorRef.current = scrollWrapper.style.cursor;
 
         scrollWrapper.addEventListener("mousedown", handleWaveformMouseDown);
+
+        scrollWrapper.addEventListener("wheel", (e) => {
+          // Only prevent default and zoom if it's a vertical scroll gesture
+          if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+
+          e.preventDefault();
+
+          const ws = wavesurferRef.current;
+          if (!ws) return;
+
+          // The exponential zoom factor. Adjust for sensitivity.
+          const zoomFactor = Math.exp(-e.deltaY * 0.005);
+
+          const currentZoom = ws.options.minPxPerSec || 15;
+          const newZoom = currentZoom * zoomFactor;
+
+          // Set min and max zoom levels
+          const maxZoom = 150; // or whatever max you prefer
+          const minZoom = 2;
+          const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
+
+          if (finalZoom == currentZoom) return;
+
+          ws.zoom(finalZoom);
+
+          // We still trigger this to update the silence regions, which is debounced.
+          setZoomTrigger((p) => p + 1);
+
+          // If it's primarily a horizontal scroll, we don't call preventDefault(),
+          // allowing the browser's native horizontal scroll to work.
+        });
       }
     } catch (error: any) {
       console.error(
