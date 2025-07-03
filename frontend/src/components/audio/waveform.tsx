@@ -292,6 +292,12 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const dimensions = useResizeObserver(waveformContainerRef)
 
   useEffect(() => {
+    if (!cutAudioSegmentUrl) return;
+    if (!peakData) return;
+    console.log("cut audio segment URL: ", cutAudioSegmentUrl);
+    console.log("peak data? ", peakData.peaks);
+
+
     const audioUrlChanged = prevAudioUrlRef.current !== audioUrl;
 
     if (wavesurferRef.current) {
@@ -713,7 +719,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         wavesurferRef.current = null;
       }
     };
-  }, [audioUrl, peakData]);
+  }, [audioUrl, cutAudioSegmentUrl, peakData]);
 
   useEffect(() => {
     const ws = wavesurferRef.current;

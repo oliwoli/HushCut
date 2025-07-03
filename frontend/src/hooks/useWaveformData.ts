@@ -23,76 +23,75 @@ export function useWaveformData(
 
 
     useEffect(() => {
-        // This is the same logic from your main component's useEffect
+        setIsLoading(true);
         if (
-        activeClip &&
-        fps &&
-        httpPort &&
-        typeof activeClip.sourceStartFrame === "number" &&
-        typeof activeClip.sourceEndFrame === "number"
+            !activeClip ||
+            !fps ||
+            !httpPort ||
+            typeof activeClip.sourceStartFrame !== "number" ||
+            typeof activeClip.sourceEndFrame !== "number"
         ) {
-        const clipStartSeconds = activeClip.sourceStartFrame / fps;
-        const clipEndSeconds = activeClip.sourceEndFrame / fps;
-
-        if (clipEndSeconds <= clipStartSeconds) {
             setPeakData(null);
             setCutAudioSegmentUrl(null);
-            setError("Invalid clip segment duration.");
+            setError(null);
+            setIsLoading(false);
             return;
         }
-        const clipDuration = clipEndSeconds - clipStartSeconds;
-        const totalSamplesInClip = clipDuration * ASSUMED_SAMPLE_RATE;
-        let dynamicSamplesPerPixel = Math.ceil(totalSamplesInClip / TARGET_PEAK_COUNT);
-        dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, dynamicSamplesPerPixel);
-        
-        setError(null); // Clear previous errors
 
-        // 1. Construct the URL for the cut audio segment
-        const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
-            activeClip.processedFileName
-        )}&start=${clipStartSeconds.toFixed(3)}&end=${clipEndSeconds.toFixed(3)}`;
-        setCutAudioSegmentUrl(newCutAudioUrl);
-
-        // 2. Fetch peak data for this specific segment
         let isCancelled = false;
-        const fetchClipPeaks = async () => {
+        const fetchClipData = async () => {
             setIsLoading(true);
-            try {
-            const peakDataForSegment = await GetWaveform(
-                activeClip.processedFileName,
-                256, "logarithmic", -60.0,
-                clipStartSeconds,
-                clipEndSeconds
-            );
+            setError(null);
+            setPeakData(null);
+            setCutAudioSegmentUrl(null);
 
-            if (!isCancelled) {
-                if (peakDataForSegment && peakDataForSegment.peaks?.length > 0) {
-                setPeakData(peakDataForSegment);
-                } else {
-                setPeakData(null);
-                setError("Received invalid peak data for segment.");
+            try {
+                const clipStartSeconds = activeClip.sourceStartFrame / fps;
+                const clipEndSeconds = activeClip.sourceEndFrame / fps;
+
+                if (clipEndSeconds <= clipStartSeconds) {
+                    setError("Invalid clip segment duration.");
+                    setIsLoading(false);
+                    return;
                 }
-            }
+
+                const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
+                    activeClip.processedFileName
+                )}&start=${clipStartSeconds.toFixed(3)}&end=${clipEndSeconds.toFixed(3)}`;
+
+                const peakDataForSegment = await GetWaveform(
+                    activeClip.processedFileName,
+                    256, "logarithmic", -60.0,
+                    clipStartSeconds,
+                    clipEndSeconds
+                );
+
+                if (!isCancelled) {
+                    if (peakDataForSegment && peakDataForSegment.peaks?.length > 0) {
+                        setPeakData(peakDataForSegment);
+                        setCutAudioSegmentUrl(newCutAudioUrl);
+                    } else {
+                        setPeakData(null);
+                        setCutAudioSegmentUrl(null);
+                        setError("Received invalid peak data for segment.");
+                    }
+                }
             } catch (e: any) {
-            if (!isCancelled) {
-                setPeakData(null);
-                setError(e.message || "Error fetching peak data.");
-            }
+                if (!isCancelled) {
+                    setPeakData(null);
+                    setCutAudioSegmentUrl(null);
+                    setError(e.message || "Error fetching peak data.");
+                }
             } finally {
-            if (!isCancelled) setIsLoading(false);
+                if (!isCancelled) setIsLoading(false);
             }
         };
 
-        fetchClipPeaks();
+        fetchClipData();
+
         return () => {
             isCancelled = true;
         };
-        } else {
-        // Reset if no valid active clip or necessary data
-        setPeakData(null);
-        setCutAudioSegmentUrl(null);
-        setError(null);
-        }
     }, [activeClip, fps, httpPort]);
     console.log("peakData: ", peakData);
     console.log("cutAudioSegmentUrl: ", cutAudioSegmentUrl);

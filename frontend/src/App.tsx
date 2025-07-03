@@ -595,7 +595,7 @@ function AppContent() {
   );
 
   const titleBarHeight = "2.25rem";
-  if (!projectData) return;
+  if (!projectData || isLoading) return;
   return (
     <>
       <div
