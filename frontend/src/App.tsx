@@ -4,7 +4,7 @@ scan({
   enabled: true,
 });
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import deepEqual from "fast-deep-equal";
 import { toast } from "sonner";
 
@@ -59,7 +59,8 @@ import { InfoDialog } from "./InfoDialog";
 import Timecode, { FRAMERATE } from "smpte-timecode";
 import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
-import { useWaveformData } from "./hooks/useWaveformData";
+import { LoaderCircleIcon } from "lucide-react";
+import { useWaveformStore } from "./stores/waveformStore";
 
 
 
@@ -358,6 +359,33 @@ function AppContent() {
     }
   };
 
+  const handleSyncRef = useRef(handleSync);
+
+  useEffect(() => {
+    handleSyncRef.current = handleSync;
+  }, [handleSync]);
+
+  useEffect(() => {
+    console.count("ffmpegReady useEffect ran");
+    // Don't do anything until the initial status check is complete.
+    if (ffmpegReady === null) {
+      return;
+    }
+
+    // This condition elegantly handles two scenarios:
+    // 1. The initial check finds FFmpeg is ready (null -> true).
+    // 2. The user downloads FFmpeg (false -> true).
+    if (ffmpegReady === true && prevFfmpegReady !== true) {
+      console.log("FFmpeg is ready, calling handleSync (via ref).");
+      handleSyncRef.current();
+    }
+    // This handles the case where the initial check finds FFmpeg is NOT ready.
+    else if (ffmpegReady === false && prevFfmpegReady === null) {
+      console.log("Initial FFmpeg check failed, calling handleSync (via ref) to show alert.");
+      handleSyncRef.current();
+    }
+  }, [ffmpegReady, prevFfmpegReady]);
+
   const initialInitDone = useRef(false); // Ref to track if the effect has run
 
 
@@ -382,10 +410,11 @@ function AppContent() {
           setFFmpegReady(isFfmpegReady);
           console.log("is ffmpeg ready: ", isFfmpegReady)
 
-          if (!isFfmpegReady) {
+          if (isFfmpegReady) {
+            console.log("FFmpeg is initially ready, calling handleSync.");
+            handleSyncRef.current();
+          } else {
             console.log("no ffmpeg!");
-            // --- REPLACEMENT HAPPENS HERE ---
-            // Old toast.warning call is removed and replaced with EventsEmit.
             EventsEmit("showAlert", {
               title: "FFmpeg Not Found",
               message: "FFmpeg is required for certain features. Would you like to download it now?",
@@ -393,8 +422,6 @@ function AppContent() {
                 {
                   label: "Download",
                   onClick: async () => {
-                    // This logic is moved from the old toast action.
-                    // We can still use toast for in-progress/success feedback.
                     toast.info("Downloading FFmpeg...");
                     try {
                       await DownloadFFmpeg();
@@ -419,10 +446,8 @@ function AppContent() {
           );
           setHttpPort(null);
           setCurrentClipId(null);
-          // Optionally, inform the user that the audio server isn't available
         }
 
-        await handleSync();
       } catch (err) {
         console.error("App.tsx: Error during initial server info fetch:", err);
         setHttpPort(null);
@@ -588,14 +613,7 @@ function AppContent() {
     );
   };
 
-  const { peakData, cutAudioSegmentUrl, isLoading } = useWaveformData(
-    currentActiveClip,
-    projectData?.timeline.fps || 29.97,
-    httpPort
-  );
-
   const titleBarHeight = "2.25rem";
-  if (!projectData || isLoading) return;
   return (
     <>
       <div
@@ -608,7 +626,7 @@ function AppContent() {
       >
         <header className="flex items-center justify-between"></header>
         <main className="flex flex-col max-w-screen select-none h-full">
-          {currentActiveClip?.id && httpPort && !isLoading && (
+          {currentActiveClip?.id && httpPort && (
             <div className="flex-shrink-0 px-3">
               <FileSelector
                 audioItems={projectData?.timeline.audio_track_items}
@@ -625,30 +643,29 @@ function AppContent() {
             </div>
           )}
           <div className="flex flex-col flex-1 space-y-1 px-3 flex-grow min-h-0 py-2">
-            {currentClipId && cutAudioSegmentUrl && httpPort && !isLoading && (
-              <div className="flex flex-row space-x-1 items-start flex-1 min-h-[180px] max-h-[600px]">
-                <div className="flex w-min h-full">
-                  <ThresholdControl key={currentClipId} />
-                  <PeakMeter peakData={peakData} />
-                </div>
-                <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
-                  {httpPort &&
-                    currentActiveClip &&
-                    projectData &&
-                    projectData.timeline &&
-                    peakData &&
-                    cutAudioSegmentUrl && (
-                      <WaveformPlayer
-                        key={currentActiveClip.id}
-                        activeClip={currentActiveClip}
-                        projectFrameRate={projectData.timeline.fps}
-                        peakData={peakData}
-                        cutAudioSegmentUrl={cutAudioSegmentUrl}
-                      />
-                    )}
-                </div>
+            <div className="flex flex-row space-x-1 items-start flex-1 min-h-[180px] max-h-[600px]">
+              <div className="flex w-min h-full">
+                <ThresholdControl key={currentClipId} />
+                <PeakMeter />
               </div>
-            )}
+              <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
+                {!currentClipId || !httpPort ? (
+                  <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+                    <p className="text-gray-500">No audio clip selected.</p>
+                  </div>
+                ) : (
+                  currentActiveClip &&
+                  projectData?.timeline && (
+                    <WaveformPlayer
+                      key={currentActiveClip.id}
+                      activeClip={currentActiveClip}
+                      projectFrameRate={projectData.timeline.fps}
+                      httpPort={httpPort}
+                    />
+                  )
+                )}
+              </div>
+            </div>
             <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 overflow-hidden shadow-xl h-min flex flex-col">
               <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
                 <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">

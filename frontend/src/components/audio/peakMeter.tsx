@@ -1,4 +1,5 @@
 import { usePlaybackStore } from '@/stores/clipStore';
+import { useWaveformStore } from '@/stores/waveformStore';
 import { main } from '@wails/go/models';
 import React, { useEffect, useRef } from 'react';
 
@@ -33,11 +34,11 @@ const getColorForDb = (db: number) => {
     return '#22c55e'; // Green
 };
 
-interface PeakMeterProps {
-    peakData: main.PrecomputedWaveformData | null;
-}
 
-export const PeakMeter: React.FC<PeakMeterProps> = ({ peakData }) => {
+export const PeakMeter: React.FC = () => {
+
+    const { peakData } = useWaveformStore();
+
     const peakMeterRef = useRef<HTMLDivElement>(null);
     const peakHoldRef = useRef<HTMLDivElement>(null);
 

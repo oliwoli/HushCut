@@ -15,9 +15,11 @@ import Timecode, { FRAMERATE } from "smpte-timecode";
 
 import { SetDavinciPlayhead } from "@wails/go/main/App";
 import { secToFrames, formatDuration } from "@/lib/utils";
-import { useResizeObserver } from "@/hooks/hooks";
+import { usePrevious, useResizeObserver } from "@/hooks/hooks";
 import { ZoomSlider } from "@/components/ui/zoomSlider";
 import { main } from "@wails/go/models";
+import { useWaveformData } from "@/hooks/useWaveformData";
+import { useWaveformStore } from "@/stores/waveformStore";
 
 
 const formatAudioTime = (
@@ -86,20 +88,31 @@ TimecodeDisplay.displayName = "TimecodeDisplay";
 interface WaveformPlayerProps {
   activeClip: ActiveClip | null;
   projectFrameRate?: number | 30.0;
-  peakData: main.PrecomputedWaveformData | null; // <-- New Prop
-  cutAudioSegmentUrl: string | undefined; // <-- New Prop
+  httpPort: number
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   activeClip,
   projectFrameRate,
-  peakData,
-  cutAudioSegmentUrl
+  httpPort,
 }) => {
   if (!activeClip || !projectFrameRate) {
     // You can return a placeholder here if you want, e.g., <div>Select a clip</div>
     return null;
   }
+
+  const { peakData, cutAudioSegmentUrl } = useWaveformData(
+    activeClip,
+    projectFrameRate,
+    httpPort
+  );
+
+  const setWaveform = useWaveformStore((s) => s.setWaveform);
+
+  useEffect(() => {
+    console.log("")
+    setWaveform(cutAudioSegmentUrl ?? undefined, peakData ?? null);
+  }, [activeClip, cutAudioSegmentUrl, peakData, setWaveform]);
 
 
   const { silenceData } = useSilenceData(activeClip, projectFrameRate || null);
