@@ -1,4 +1,4 @@
-import { AudioWaveformIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon } from "lucide-react";
+import { AudioWaveformIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, SkipForwardIcon } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
@@ -15,12 +15,71 @@ import Timecode, { FRAMERATE } from "smpte-timecode";
 
 import { SetDavinciPlayhead } from "@wails/go/main/App";
 import { secToFrames, formatDuration } from "@/lib/utils";
-import { usePrevious, useResizeObserver } from "@/hooks/hooks";
+import { useResizeObserver } from "@/hooks/hooks";
 import { ZoomSlider } from "@/components/ui/zoomSlider";
-import { main } from "@wails/go/models";
 import { useWaveformData } from "@/hooks/useWaveformData";
 import { useWaveformStore } from "@/stores/waveformStore";
 
+
+function usePlaybackControls({
+  wavesurfer,
+  onPlayPause,
+  onRateChange,
+}: {
+  wavesurfer: WaveSurfer | null;
+  onPlayPause: () => void;
+  onRateChange: (newRate: number) => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Ignore shortcuts if user is typing in an input field
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+
+      switch (key) {
+        // Play and Pause
+        case 'k':
+          e.preventDefault();
+          onPlayPause();
+          break;
+
+        // Decrease/Increase Playback Speed
+        case 'j':
+        case 'l': {
+          e.preventDefault();
+          if (!wavesurfer) return;
+
+          const currentRate = wavesurfer.getPlaybackRate();
+          const step = 0.5;
+          let newRate;
+
+          if (key === 'j') {
+            // Decrease speed, clamped at 0.25x
+            newRate = Math.max(0.25, currentRate - step);
+          } else { // 'l'
+            // Increase speed, clamped at 4x
+            if (currentRate == 0.25) newRate = 0.5;
+            else {
+              newRate = Math.min(3, currentRate + step);
+            }
+          }
+
+          wavesurfer.setPlaybackRate(newRate, true); // `true` preserves pitch
+          onRateChange(newRate); // Notify component of the change
+          break;
+        }
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [wavesurfer, onPlayPause, onRateChange]);
+}
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -106,6 +165,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     projectFrameRate,
     httpPort
   );
+
+
 
   const setWaveform = useWaveformStore((s) => s.setWaveform);
 
@@ -302,6 +363,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const prevAudioUrlRef = useRef<string | undefined>(undefined);
   const isNewClipRef = useRef(false);
 
+  const [playbackRate, setPlaybackRate] = useState(1);
+
   const dimensions = useResizeObserver(waveformContainerRef)
 
   useEffect(() => {
@@ -457,6 +520,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       }
 
       ws.on("ready", () => {
+        setPlaybackRate(1.0);
         setIsLoading(false);
         if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount > activeClip.startFrame) {
           const clipTime =
@@ -518,6 +582,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
       ws.on("pause", () => {
+        if (wavesurferRef.current) {
+          wavesurferRef.current.setPlaybackRate(1.0, true);
+        }
+        // Then, update the React state so the UI display is correct
+        setPlaybackRate(1.0);
         if (isPlaying) {
           const timecode = currTimelineFrameRef.current || 0;
           console.log("timecode", timecode);
@@ -525,9 +594,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
         setPlaybackState({ isPlaying: false });
         setIsPlaying(false);
-        if (!currTimelineFrameRef) return;
-
-
       });
       ws.on("finish", () => {
         setIsPlaying(false);
@@ -847,6 +913,12 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     if (wavesurferRef.current && !isLoading) wavesurferRef.current.playPause();
   }, [isLoading]);
 
+  usePlaybackControls({
+    wavesurfer: wavesurferRef.current,
+    onPlayPause: handlePlayPause,
+    onRateChange: setPlaybackRate,
+  });
+
   const toggleSkipRegions = useCallback(
     () => setSkipRegionsEnabled((prev) => !prev),
     []
@@ -970,7 +1042,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       <div className="rounded-none border-0 mt-0 pt-1 overflow-hidden flex-shrink-0">
         <div
           ref={minimapContainerRef}
-          className="max-h-[40px] w-full bg-transparent border-0 border-t-0 rounded-b-xs box-border overflow-hidden"
+          className="max-h-[40px] w-full bg-neutral-900 border-0 border-t-0 rounded-b-xs box-border overflow-hidden"
         ></div>
         <div className="flex items-center gap-1">
           <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">
@@ -994,6 +1066,16 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
               />
             )}
           </div>
+          {!isLoading && playbackRate !== 1 && (
+            <div className="p-1.5 gap-1 rounded flex items-center text-xs font-mono text-zinc-400" title="Playback Speed">
+              {playbackRate > 1 ?
+                (<FastForwardIcon className="text-amber-500" size={18} />) :
+                (<FastForwardIcon className="text-teal-500 rotate-180" size={18} />)
+              }
+
+              <span>{playbackRate.toFixed(2)}x</span>
+            </div>
+          )}
           <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm">
             <AudioWaveformIcon size={21} className="text-gray-500" />
             <span>{silenceData?.length}</span>
