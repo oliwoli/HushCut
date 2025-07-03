@@ -8,6 +8,18 @@ import { main } from "@wails/go/models";
 import { TimecodeInstance } from "smpte-timecode";
 
 
+interface PlaybackState {
+  currentTime: number;
+  isPlaying: boolean;
+}
+
+// We don't need explicit setters; `setState` can update parts of the state.
+export const usePlaybackStore = create<PlaybackState>(() => ({
+  currentTime: 0,
+  isPlaying: false,
+}));
+
+
 interface GlobalStore {
   makeNewTimeline: boolean;
   isThresholdDragging: boolean;

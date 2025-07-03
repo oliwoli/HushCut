@@ -58,6 +58,8 @@ import { useUiStore } from "./stores/uiStore";
 import { InfoDialog } from "./InfoDialog";
 import Timecode, { FRAMERATE } from "smpte-timecode";
 import { Toaster } from "./components/ui/sonner";
+import { PeakMeter } from "./components/audio/peakMeter";
+import { useWaveformData } from "./hooks/useWaveformData";
 
 
 
@@ -586,6 +588,12 @@ function AppContent() {
     );
   };
 
+  const { peakData, cutAudioSegmentUrl } = useWaveformData(
+    currentActiveClip,
+    projectData?.timeline.fps || 30,
+    httpPort
+  );
+
   const titleBarHeight = "2.25rem";
   return (
     <>
@@ -615,10 +623,11 @@ function AppContent() {
               />
             </div>
           )}
-          <div className="flex flex-col space-y-1 px-3 flex-grow min-h-0 py-2">
-            {currentClipId && (
-              <div className="flex flex-row space-x-3 items-start h-[calc(70%-150px)] min-h-[300px] max-h-[600px]">
+          <div className="flex flex-col space-y-1 pl-3 flex-grow min-h-0 py-2">
+            {currentClipId && cutAudioSegmentUrl && (
+              <div className="flex flex-row space-x-1 items-start h-[calc(70%-150px)] min-h-[300px] max-h-[600px]">
                 <ThresholdControl key={currentClipId} />
+                <PeakMeter peakData={peakData} />
                 <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                   {httpPort &&
                     currentActiveClip &&
@@ -628,7 +637,8 @@ function AppContent() {
                         key={currentActiveClip.id}
                         activeClip={currentActiveClip}
                         projectFrameRate={projectData.timeline.fps}
-                        httpPort={httpPort}
+                        peakData={peakData}
+                        cutAudioSegmentUrl={cutAudioSegmentUrl}
                       />
                     )}
                 </div>

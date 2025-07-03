@@ -138,6 +138,47 @@ div[part="minimap-overlay"] {
 }
 
 
+.peak-meter-container {
+  position: relative;
+  top: 10px;
+  left: 10px; /* Changed from right to left */
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #fff;
+  font-size: 0.8em;
+  z-index: 10; /* Ensure it's above the waveform */
+}
+
+.peak-meter-bar-container {
+  width: 10px;
+  height: 50px;
+  background-color: rgba(0, 0, 0, 0.5);
+  border: 1px solid #555;
+  display: flex;
+  align-items: flex-end; /* Bars grow upwards from the bottom */
+  overflow: hidden;
+  border-radius: 2px;
+}
+
+.peak-meter-bar {
+  width: 100%;
+  transform-origin: bottom; /* Scale from the bottom */
+  height: 100%; /* Start with full height, scale down */
+  transform: scaleY(0); /* Initial state: hidden */
+}
+
+.peak-hold-marker {
+  transition: opacity 1s ease;
+  opacity: 1;
+}
+
+/* Optional: Add a "red zone" for clipping */
+.peak-meter-bar.clipping {
+  background-color: #ff0000;
+}
+
+
 
 /* ===== Custom Scrollbar Styles for WebKit-based environments (like Wails on Linux) ===== */
 

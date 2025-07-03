@@ -5,7 +5,7 @@ import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js";
 
-import { useClipParameter, useGlobalStore, useTimecodeStore } from "@/stores/clipStore";
+import { useClipParameter, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
 
 import { ActiveClip } from "@/types";
 import { useSilenceData } from "@/hooks/useSilenceData";
@@ -18,6 +18,9 @@ import { SetDavinciPlayhead } from "@wails/go/main/App";
 import { secToFrames, formatDuration } from "@/lib/utils";
 import { useResizeObserver } from "@/hooks/hooks";
 import { ZoomSlider } from "@/components/ui/zoomSlider";
+import { main } from "@wails/go/models";
+import Peaks from "peaks.js";
+
 
 const formatAudioTime = (
   totalSeconds: number,
@@ -85,24 +88,21 @@ TimecodeDisplay.displayName = "TimecodeDisplay";
 interface WaveformPlayerProps {
   activeClip: ActiveClip | null;
   projectFrameRate?: number | 30.0;
-  httpPort: number;
+  peakData: main.PrecomputedWaveformData | null; // <-- New Prop
+  cutAudioSegmentUrl: string | undefined; // <-- New Prop
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   activeClip,
   projectFrameRate,
-  httpPort,
+  peakData,
+  cutAudioSegmentUrl
 }) => {
-  if (!activeClip || !projectFrameRate || !httpPort) {
+  if (!activeClip || !projectFrameRate) {
     // You can return a placeholder here if you want, e.g., <div>Select a clip</div>
     return null;
   }
 
-  const { peakData, cutAudioSegmentUrl } = useWaveformData(
-    activeClip,
-    projectFrameRate,
-    httpPort
-  );
 
   const { silenceData } = useSilenceData(activeClip, projectFrameRate || null);
   const totalSilenceDuration = useMemo(() => {
@@ -126,6 +126,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<RegionsPlugin | null>(null);
   const addRegionsTimeoutRef = useRef<any | null>(null); // Ref to manage the timeout for adding regions
+
+  const setPlaybackState = usePlaybackStore.setState;
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -489,6 +491,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
       ws.on("play", () => {
+        setPlaybackState({ isPlaying: true });
         setIsPlaying(true);
         if (ws.isPlaying()) return;
         // cursed webkit fix
@@ -503,7 +506,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           console.log("timecode", timecode);
           setTimecode(Timecode(timecode, projectFrameRate as FRAMERATE, false))
         }
-
+        setPlaybackState({ isPlaying: false });
         setIsPlaying(false);
         if (!currTimelineFrameRef) return;
 
@@ -525,6 +528,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       });
 
       ws.on("timeupdate", (time: number) => {
+        setPlaybackState({ currentTime: time });
         currentTimeRef.current = time;
         const currentFrame = getFrameFromTime(time, projectFrameRate);
 
@@ -711,8 +715,14 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         wavesurferRef.current = null;
       }
     };
-  }, [audioUrl, peakData, dimensions]);
+  }, [audioUrl, peakData]);
 
+  useEffect(() => {
+    const ws = wavesurferRef.current;
+    if (!ws) return;
+    const currentZoom = ws.options.minPxPerSec;
+    ws.zoom(currentZoom);
+  }, [dimensions]);
 
   const updateSilenceRegions = useCallback(
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
@@ -800,7 +810,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     }
   }, [debouncedZoomTrigger]);
 
-  const [isMouseInWaveform, setIsMouseInWaveform] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
 
   const handleZoom = (newZoom: number) => {
@@ -897,10 +906,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-grow min-h-0">
+      <div className="flex-grow min-h-0 min-w-0">
         <div
           ref={waveformContainerRef}
-          className="h-full w-full bg-[#212126] border-1 border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative"
+          className="h-full w-full bg-[#212126] border-1 border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative min-w-1 min-h-1"
         >
           <canvas className="absolute inset-0 z-0" />
 
@@ -942,7 +951,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       <div className="rounded-none border-0 mt-0 pt-1 overflow-hidden flex-shrink-0">
         <div
           ref={minimapContainerRef}
-          className="max-h-[40px] w-full bg-transparent border-0 border-t-0 rounded-b-xs box-border overflow-hidden shadow-inner shadow-stone-900/50"
+          className="max-h-[40px] w-full bg-transparent border-0 border-t-0 rounded-b-xs box-border overflow-hidden"
         ></div>
         <div className="flex items-center gap-1">
           <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">
