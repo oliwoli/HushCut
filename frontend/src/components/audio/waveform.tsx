@@ -9,7 +9,6 @@ import { useClipParameter, useGlobalStore, usePlaybackStore, useTimecodeStore } 
 
 import { ActiveClip } from "@/types";
 import { useSilenceData } from "@/hooks/useSilenceData";
-import { useWaveformData } from "@/hooks/useWaveformData";
 //import { frameToTimecode, secToFrames } from "@/lib/utils";
 
 import Timecode, { FRAMERATE } from "smpte-timecode";
@@ -19,7 +18,6 @@ import { secToFrames, formatDuration } from "@/lib/utils";
 import { useResizeObserver } from "@/hooks/hooks";
 import { ZoomSlider } from "@/components/ui/zoomSlider";
 import { main } from "@wails/go/models";
-import Peaks from "peaks.js";
 
 
 const formatAudioTime = (
@@ -876,11 +874,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       return (
         <button
           onClick={toggleSkipRegions}
-          className={`p-1.5 rounded flex items-center text-xs ${skipClass} whitespace-normal [@media(min-width:30rem)]:whitespace-nowrap`}
+          className={`p-1.5 rounded flex items-center text-xs ${skipClass} whitespace-nowrap`}
           title={skipTitle}
         >
           <RedoDotIcon size={21} className="mr-1" />
-          {skipRegionsEnabled ? "Skip ON" : "Skip OFF"}
+          <span className="hidden [@media(min-width:30rem)]:flex">
+            {skipRegionsEnabled ? "Skip ON" : "Skip OFF"}
+          </span>
         </button>
       );
     });
@@ -914,7 +914,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           <canvas className="absolute inset-0 z-0" />
 
           <div
-            className={`${sliderClassName} p-1 ${!isPlaying ? "opacity-100" : "opacity-0 pointer-events-none"
+            className={`${sliderClassName} p-1 ${!isPlaying && !isThresholdDragging ? "opacity-100" : "opacity-0 pointer-events-none"
               }`}
           >
             <ZoomSlider

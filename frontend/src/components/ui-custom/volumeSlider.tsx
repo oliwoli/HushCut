@@ -16,7 +16,7 @@ export interface SliderProps {
   onDoubleClick?: () => void;
 }
 
-export function _LogSlider({
+export function _ThresholdSlider({
   marks = defaultMarks,
   minDb = -60,
   maxDb = 0,
@@ -58,6 +58,7 @@ export function _LogSlider({
         <SliderPrimitive.Track className="bg-none relative grow rounded-none w-1">
           <SliderPrimitive.Range className="bg-none absolute w-full rounded-none" />
         </SliderPrimitive.Track>
+        {/* TODO: make chonky again, but then gotta fix drag behavior, then fix height to fit markings */}
         <SliderPrimitive.Thumb
           className={cn(
             "block h-2 w-8 bg-zinc-300 rounded-xs relative shadow-md shadow-zinc-950/80",
@@ -76,7 +77,8 @@ export function _LogSlider({
 
       <div className="relative h-full bottom-0 bg-zinc-950/80 border-1 border-black drop-shadow-zinc-700 drop-shadow-xs w-1 z-0 right-[18px] rounded-xs"></div>
 
-      <div className="relative h-[99.3%] mb-[5px] ml-0 top-[4px] right-3 font-mono">
+      {/* --- MODIFIED TICK AND LABEL RENDERING --- */}
+      <div className="relative h-[99.3%] mb-[5px] ml-0 top-[4px] right-3 font-mono px-1">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {
           const dB = actualMinDb + i;
           const pct =
@@ -88,21 +90,23 @@ export function _LogSlider({
 
           const absVal = Math.abs(dB);
           const isLabeled = marks.includes(dB);
+
+          // Refined logic for tick types
           const isMajor = absVal % 10 === 0;
-          const isMedium = !isLabeled && absVal % 5 === 0;
+          const isMedium = absVal % 5 === 0 && !isMajor;
+          const isSmall = !isMajor && !isMedium;
 
-          const tickWidth = isMajor
-            ? "w-[12px]"
-            : isMedium || isLabeled
-              ? "w-[8px]"
-              : "w-[4px]";
-
+          const tickWidth = isMajor ? "w-[12px]" : isMedium || isLabeled ? "w-[8px]" : "w-[4px]";
           const tickOpacity = isLabeled ? "opacity-80" : "opacity-80";
 
           return (
             <div
               key={`tick-${dB}`}
-              className="absolute left-0 -translate-y-1/2"
+              className={cn(
+                "absolute left-0 -translate-y-1/2",
+                // At the smallest size, hide the minor ticks (1,2,3,4,6,7,8,9, etc.)
+                { "[@media(max-height:670px)]:hidden [@container(max-height:100px)]:hidden": isSmall }
+              )}
               style={{ bottom: `${pct}%` }}
             >
               <div
@@ -110,9 +114,17 @@ export function _LogSlider({
               />
 
               {isLabeled && (
-                <div className="absolute left-[15px] top-1/2 -translate-y-1/2 text-xs text-zinc-400 select-none">
+                <div className={cn(
+                  "absolute left-[15px] top-1/2 -translate-y-1/2 text-xs text-zinc-400 select-none",
+                  // Hide the -5 label on medium-compact screens
+                  { "[@media(max-height:920px)]:hidden [@container(max-height:508px)]:hidden": dB === -5 },
+                  // Hide all non-major labels on the most compact screens
+                  { "[@media(max-height:500px)]:hidden [@container(max-height:100px)]:hidden": !isMajor }
+                )}>
                   <span
-                    className={absVal % 10 === 0 ? "font-bold" : "font-light"}
+                    className={cn(
+                      isMajor ? "font-bold" : "font-light",
+                      "[@media(max-height:700px)]:text-[11px]")}
                   >
                     {absVal}
                   </span>
@@ -125,7 +137,6 @@ export function _LogSlider({
     </div>
   );
 }
-
 // Custom props comparison
 function areEqual(prev: SliderProps, next: SliderProps) {
   return (
@@ -138,4 +149,4 @@ function areEqual(prev: SliderProps, next: SliderProps) {
   );
 }
 
-export const LogSlider = memo(_LogSlider, areEqual);
+export const ThresholdSlider = memo(_ThresholdSlider, areEqual);

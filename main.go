@@ -89,7 +89,7 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:  "HushCut",
 		Width:  1024,
-		Height: 800,
+		Height: 801,
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: NewFileLoader(),

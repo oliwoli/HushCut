@@ -13,7 +13,7 @@ const _MakeNewTimelineSetting = React.memo(() => {
 
     return (
         <div className='space-y-2'>
-            <Label className="font-medium w-full text-stone-400">
+            <Label className="font-medium w-full text-stone-400 leading-5">
                 New Timeline
             </Label>
             <Switch checked={makeNewTimeline} onCheckedChange={setMakeNewTimeline} />
@@ -28,8 +28,8 @@ const _KeepSilenceSetting = React.memo(() => {
 
     return (
         <div className='space-y-2 mx-auto gap-2 justify-center'>
-            <Label className="font-medium w-full text-stone-400">
-                Keep Silence
+            <Label className="font-medium w-full text-stone-400 leading-5">
+                Preserve Silences
             </Label>
             <Switch checked={keepSilence} onCheckedChange={setKeepSilence} />
 
@@ -40,7 +40,7 @@ const _KeepSilenceSetting = React.memo(() => {
 
 export const DavinciSettings = () => {
     return (
-        <div className="space-y-1 w-full px-5 pt-1 pb-1 flex gap-4">
+        <div className="space-y-1 w-[12rem] md:w-[16rem] px-1 pt-1 pb-1 flex gap-4 leading-1">
             <_MakeNewTimelineSetting />
             <_KeepSilenceSetting />
         </div>

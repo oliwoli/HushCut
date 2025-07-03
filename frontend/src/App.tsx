@@ -588,13 +588,14 @@ function AppContent() {
     );
   };
 
-  const { peakData, cutAudioSegmentUrl } = useWaveformData(
+  const { peakData, cutAudioSegmentUrl, isLoading } = useWaveformData(
     currentActiveClip,
-    projectData?.timeline.fps || 30,
+    projectData?.timeline.fps || 29.97,
     httpPort
   );
 
   const titleBarHeight = "2.25rem";
+  if (!projectData) return;
   return (
     <>
       <div
@@ -607,7 +608,7 @@ function AppContent() {
       >
         <header className="flex items-center justify-between"></header>
         <main className="flex flex-col max-w-screen select-none h-full">
-          {currentActiveClip?.id && (
+          {currentActiveClip?.id && httpPort && !isLoading && (
             <div className="flex-shrink-0 px-3">
               <FileSelector
                 audioItems={projectData?.timeline.audio_track_items}
@@ -623,16 +624,20 @@ function AppContent() {
               />
             </div>
           )}
-          <div className="flex flex-col space-y-1 pl-3 flex-grow min-h-0 py-2">
-            {currentClipId && cutAudioSegmentUrl && (
-              <div className="flex flex-row space-x-1 items-start h-[calc(70%-150px)] min-h-[300px] max-h-[600px]">
-                <ThresholdControl key={currentClipId} />
-                <PeakMeter peakData={peakData} />
+          <div className="flex flex-col flex-1 space-y-1 px-3 flex-grow min-h-0 py-2">
+            {currentClipId && cutAudioSegmentUrl && httpPort && !isLoading && (
+              <div className="flex flex-row space-x-1 items-start flex-1 min-h-[180px] max-h-[600px]">
+                <div className="flex w-min h-full">
+                  <ThresholdControl key={currentClipId} />
+                  <PeakMeter peakData={peakData} />
+                </div>
                 <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                   {httpPort &&
                     currentActiveClip &&
                     projectData &&
-                    projectData.timeline && (
+                    projectData.timeline &&
+                    peakData &&
+                    cutAudioSegmentUrl && (
                       <WaveformPlayer
                         key={currentActiveClip.id}
                         activeClip={currentActiveClip}
@@ -645,18 +650,18 @@ function AppContent() {
               </div>
             )}
             <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 overflow-hidden shadow-xl h-min flex flex-col">
-              <div className="p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
-                <div className="flex flex-wrap gap-x-4 gap-y-2 w-min">
+              <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
+                <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
                   <SilenceControls key={currentClipId} />
                 </div>
                 {projectData && projectData.timeline?.audio_track_items?.length > 0 && (
-                  <div className="pt-5 pr-5 space-y-4">
+                  <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col [@media(width>=45rem)]:justify-start w-full justify-between">
+                    <DavinciSettings />
                     <RemoveSilencesButton
                       projectData={projectData}
                       defaultDetectionParams={getDefaultDetectionParams()}
                       onPendingAction={() => setPendingRemoveSilences(true)}
                     />
-                    <DavinciSettings />
                   </div>
                 )}
               </div>

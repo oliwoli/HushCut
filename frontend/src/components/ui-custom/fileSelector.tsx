@@ -51,7 +51,11 @@ const LinearWaveform = ({ peaks, className }: { peaks: number[], className?: str
   }
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" className={className}>
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      className={cn("w-full h-[80%]", className)} // Changed this line
+    >
       <path d={pathData} stroke="currentColor" strokeWidth="2" fill="none" />
     </svg>
   );
@@ -154,7 +158,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
 
   return (
     <div className="flex flex-col flex-shrink-0 max-w-44 min-w-24">
-      <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 space-x-2">
+      <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
         <span className="text-stone-200 p-1 rounded-xs border-1 flex items-center">{index}</span>
         <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
         <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
@@ -164,7 +168,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
         onClick={onClipClick}
         disabled={disabled}
         className={cn(
-          "h-20 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
+          "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 focus-visible:ring-blue-400",
           "bg-gray-700/40 border",
           {
@@ -195,7 +199,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
           </div>
         )}
 
-        <div className={cn("absolute inset-0 flex items-center justify-center text-teal-400/60 p-1 bottom-6", isLoading && "animate-pulse")}>
+        <div className={cn("absolute inset-0 flex items-center justify-center text-teal-400/60 p-1 bottom-6 [@media(max-height:800px)]:bottom-5", isLoading && "animate-pulse")}>
           {isLoading ? <SimulatedWaveform /> : (
             waveformPeaks ?
               <LinearWaveform
@@ -204,7 +208,9 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
               <SimulatedWaveform />
           )}
         </div>
-        <div className="relative z-10 h-full flex flex-col justify-end p-2 pl-1 pb-[0.450rem] bg-gradient-to-t from-black/50 via-black/20 to-transparent">
+        <div className={cn(
+          "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-gradient-to-t from-black/50 via-black/20 to-transparent"
+        )}>
           <div className="flex items-center space-x-1.5">
             {isNested && (
               <LayersIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />

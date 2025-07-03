@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import ResetButton from './ResetButton';
+import { Separator } from '@radix-ui/react-dropdown-menu';
 
 
 const _MinDurationControl = React.memo(() => {
@@ -165,15 +166,27 @@ const _MinContentControl = React.memo(() => {
 
 export const SilenceControls = () => {
     return (
-        <div className="w-full px-5 pt-7 flex flex-col gap-6 [@media(min-width:1024px)]:flex-row [@media(min-width:1024px)]:items-start [@media(min-width:1024px)]:gap-5">
-            <div className="flex flex-col gap-6">
-                <_MinDurationControl />
-                <_PaddingControl />
+        <div className="w-full px-5 pt-6 flex flex-col gap-6 space-y-1">
+            {/* Unified label and separator */}
+            <div>
+                <Label className="mb-2 block text-sm/tight text-zinc-200">Silence Detection</Label>
+                <Separator aria-orientation="horizontal" className="h-px bg-zinc-700/80" />
             </div>
 
-            <div className="flex-1 mt-2 [@media(min-width:1024px)]:mt-0">
-                <_MinContentControl />
+            {/* Controls in 2 columns on lg+ screens */}
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-5 justify-between">
+                {/* Left column */}
+                <div className="flex flex-col gap-6">
+                    <_MinDurationControl />
+                    <_PaddingControl />
+                </div>
+
+                {/* Right column */}
+                <div className="flex flex-col gap-6 mt-3">
+                    <_MinContentControl />
+                </div>
             </div>
         </div>
     );
+
 };

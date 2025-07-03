@@ -63,7 +63,7 @@ export const PeakMeter: React.FC<PeakMeterProps> = ({ peakData }) => {
 
         let animationFrameId: number | null = null;
 
-        const holdDuration = 1000;
+        let holdDuration = 1000;
         const falloffRate = 0.005;
         const attackRate = 0.6;
         const releaseRate = 0.1;
@@ -85,11 +85,13 @@ export const PeakMeter: React.FC<PeakMeterProps> = ({ peakData }) => {
             let displayValue = peakMeterDisplayValueRef.current;
 
             if (isPlaying) {
+                holdDuration = 1000
                 displayValue = targetValue > displayValue
                     ? attackRate * targetValue + (1 - attackRate) * displayValue
                     : releaseRate * targetValue + (1 - releaseRate) * displayValue;
             } else {
                 displayValue = Math.max(0, displayValue - falloffRate);
+                holdDuration = 2500
             }
 
             const peakHasExpired = now - heldPeakTimeRef.current > holdDuration;
@@ -137,7 +139,7 @@ export const PeakMeter: React.FC<PeakMeterProps> = ({ peakData }) => {
 
     return (
         <div className="h-full w-2">
-            <div className="relative h-[calc(100%-95px)] w-[3px] overflow-hidden bg-zinc-800">
+            <div className="relative h-[calc(100%-95px)] w-[4px] overflow-hidden bg-zinc-800 right-0 sm:right-1 rounded-sm">
                 <div
                     ref={peakHoldRef}
                     className="pointer-events-none absolute z-10 h-full w-full border-t-2 bg-none"

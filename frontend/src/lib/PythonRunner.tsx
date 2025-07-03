@@ -14,6 +14,7 @@ import type { DetectionParams, SilencePeriod } from "../types";
 
 import { ClipStore, useClipStore, useGlobalStore } from '@/stores/clipStore';
 import { useSyncBusyState } from "@/stores/appSync";
+import { cn } from "./utils";
 
 
 export function deriveAllClipDetectionParams(
@@ -302,10 +303,12 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       disabled={buttonDisabled}
-      className={`bg-stone-700/10 w-3xs shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
+      className={cn(`bg-stone-700/10 shadow-xl border-2 rounded-xl border-gray-500/60 hover:border-gray-500/40 text-white p-8 hover:bg-teal-700/10 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`,
+        "w-[12rem] md:w-3xs"
+      )}
     >
-      <span className="items-center align-middle flex text-xl gap-4 font-[50]">
-        <AudioWaveformIcon size={32} className="scale-150 text-gray-500" />
+      <span className="items-center align-middle flex text-base md:text-xl gap-4 font-[50]">
+        <AudioWaveformIcon size={32} className="scale-125 md:scale-150 text-gray-500" />
         {currentButtonText}
       </span>
     </Button>

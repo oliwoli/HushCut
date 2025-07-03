@@ -94,6 +94,8 @@ export function useWaveformData(
         setError(null);
         }
     }, [activeClip, fps, httpPort]);
+    console.log("peakData: ", peakData);
+    console.log("cutAudioSegmentUrl: ", cutAudioSegmentUrl);
 
     return { cutAudioSegmentUrl, peakData, isLoading, error };
 }
