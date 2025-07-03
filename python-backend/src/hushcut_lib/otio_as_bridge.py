@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, List, Dict, Tuple, Optional, cast
+from typing import Any, List, Dict, Tuple, Optional, cast, Sequence
 
 # Assuming these are correctly defined in your project
 from hushcut_lib.local_types import TimelineItem, NestedAudioTimelineItem
@@ -88,6 +88,7 @@ def _create_nested_audio_item_from_otio(
         "source_end_frame": normalized_source_start_frame + duration,
         "duration": duration,
         "edit_instructions": [],
+        "nested_items": None, # Added to satisfy TypedDict
     }
     return nested_item
 
@@ -149,7 +150,7 @@ def _recursive_otio_parser(
                 nested_clips = _recursive_otio_parser(
                     item_in_track,
                     active_angle_name=active_angle_name,
-                    container_duration=effective_duration,
+                    container_duration=container_duration,
                 )
                 for nested_clip in nested_clips:
                     nested_clip["start_frame"] += playhead
@@ -328,7 +329,7 @@ def process_track_items(
 
 
 def unify_edit_instructions(
-    items: List[TimelineItem],
+    items: Sequence[TimelineItem],
 ) -> List[Tuple[float, Optional[float], bool]]:
     """
     Takes a list of linked items and unifies their edit instructions. It flattens
@@ -468,7 +469,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         "audio_track_items", []
     )
 
-    items_by_link_group: Dict[int, List[Dict]] = {}
+    items_by_link_group: Dict[int, List[TimelineItem]] = {}
     for item in all_pd_items:
         link_group_id = item.get("link_group_id")
         if link_group_id is not None:
@@ -557,3 +558,4 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     # debug_json_path = os.path.join(current_dir, "debug_project_data.json")
     # print(f"exporting to {debug_json_path}")
     # export_to_json(globalz.PROJECT_DATA, debug_json_path)
+

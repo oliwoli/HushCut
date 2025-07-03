@@ -8,7 +8,6 @@ import http.client
 from http.client import HTTPConnection
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-import pprint
 import signal
 import socket
 import threading
@@ -22,16 +21,14 @@ from typing import (
     Optional,
     Tuple,
     TypedDict,
-    Union,
 )
 import os
 import sys
 import subprocess
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import atexit
 import urllib.parse
-from uuid import uuid4
 import uuid
 
 # Add the hushcut_lib directory to sys.path
@@ -44,13 +41,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 # if not os.path.exists(hushcut_lib_path):
 #     raise FileNotFoundError("hushcut_lib directory not found.")
 
-
-from hushcut_lib.edit_silence import (
-    create_edits_with_optional_silence,
-    ClipData,
-    SilenceInterval,
-    EditInstruction,
-)
 
 import hushcut_lib.misc_utils as misc_utils
 
@@ -68,16 +58,7 @@ import hushcut_lib.globalz as globalz
 from hushcut_lib.otio_as_bridge import (
     unify_linked_items_in_project_data,
     populate_nested_clips,
-    unify_edit_instructions,
 )
-
-
-# from project_orga import (
-#     map_media_pool_items_to_folders,
-#     MediaPoolItemFolderMapping,
-#     move_clips_to_temp_folder,
-#     restore_clips_from_temp_folder,
-# )
 
 
 # GLOBALS
@@ -117,7 +98,7 @@ class ProgressTracker:
         self._tasks = {}
         self._total_weight = 0.0
         self._task_progress = {}
-        self._last_report = time()
+        self._last_report: float = time()
 
         # 1. Create a thread pool that will handle our HTTP requests.
         #    max_workers can be tuned, but 2-3 is fine for this kind of task.
@@ -204,10 +185,6 @@ TRACKER = ProgressTracker()
 
 
 def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] = None):
-    global STANDALONE_MODE
-    if STANDALONE_MODE:
-        return
-
     global GO_SERVER_PORT
     if GO_SERVER_PORT == 0:
         print("Python Error: Go server port not configured. Cannot send message to Go.")
@@ -252,35 +229,19 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
 
 
 def resolve_import_error_msg(e: Exception, task_id: str = "") -> None:
-    global STANDALONE_MODE
-
     print(f"Failed to import GetResolve: {e}")
     print("Check and ensure DaVinci Resolve installation is correct.")
 
-    if not STANDALONE_MODE:
-        send_message_to_go(
-            "showAlert",
-            {
-                "title": "DaVinci Resolve Error",
-                "message": "Failed to import DaVinci Resolve Python API.",
-                "severity": "error",
-            },
-            task_id=task_id,
-        )
+    send_message_to_go(
+        "showAlert",
+        {
+            "title": "DaVinci Resolve Error",
+            "message": "Failed to import DaVinci Resolve Python API.",
+            "severity": "error",
+        },
+        task_id=task_id,
+    )
     return None
-
-
-def GetResolve() -> Union[Any, None]:
-    try:
-        import DaVinciResolveScript as bmd
-    except ImportError:
-        # This block should ideally not be reached if sys.path is correctly set by get_resolve()
-        # but kept as a fallback for unexpected scenarios.
-        print(
-            "Unable to find module DaVinciResolveScript. Please ensure it's installed and discoverable."
-        )
-        return None
-    return bmd.scriptapp("Resolve")
 
 
 def get_resolve(task_id: str = "") -> None:
@@ -290,7 +251,9 @@ def get_resolve(task_id: str = "") -> None:
         resolve_modules_path = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
     elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
         resolve_modules_path = os.path.join(
-            os.getenv("PROGRAMDATA"),
+            str(os.getenv("PROGRAMDATA"))
+            if os.getenv("PROGRAMDATA") is not None
+            else "",
             "Blackmagic Design",
             "DaVinci Resolve",
             "Support",
@@ -309,7 +272,7 @@ def get_resolve(task_id: str = "") -> None:
 
     try:
         # Attempt to import after modifying sys.path
-        import DaVinciResolveScript as bmd
+        import DaVinciResolveScript as bmd  # type: ignore
     except ImportError as e:
         resolve_import_error_msg(e, task_id)
         return None
@@ -321,7 +284,7 @@ def get_resolve(task_id: str = "") -> None:
     resolve_obj = bmd.scriptapp("Resolve")
     if not resolve_obj:
         try:
-            resolve_obj = resolve
+            resolve_obj = resolve  # type: ignore
         except Exception as e:
             print(f"could not get resolve_obj by calling resolve var directly. {e}")
             resolve_import_error_msg(
@@ -356,153 +319,6 @@ def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
         print(f"Timeline exported successfully to {file_path}")
     else:
         print("Failed to export timeline.")
-
-
-def extract_audio(file: FileSource, target_folder: str) -> Optional[AudioFromVideo]:
-    global FFMPEG
-    filepath = file.get("file_path")
-    if not filepath or not os.path.exists(filepath):
-        return
-
-    wav_path = os.path.join(target_folder, f"{file['uuid']}.wav")
-
-    # This object is created regardless, as it's needed for the return value
-    audio_from_video: AudioFromVideo = {
-        "audio_file_name": os.path.basename(wav_path),
-        "audio_file_path": wav_path,
-        "audio_file_uuid": file["uuid"],
-        "video_file_path": filepath,
-        "video_bmd_media_pool_item": file["bmd_media_pool_item"],
-        "silence_intervals": [],
-    }
-
-    # The caller now determines if this function is needed.
-    # The check remains here as a safeguard.
-    if misc_utils.is_valid_audio(wav_path):
-        return audio_from_video
-
-    print(f"Extracting audio from: {filepath}")
-    audio_extract_cmd = [
-        FFMPEG,
-        "-y",
-        "-i",
-        filepath,
-        "-vn",
-        "-acodec",
-        "pcm_s16le",
-        "-ac",
-        "1",
-        wav_path,
-    ]
-    subprocess.run(audio_extract_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # Final check to ensure extraction was successful
-    if misc_utils.is_valid_audio(wav_path):
-        return audio_from_video
-    else:
-        print(f"Error: Failed to extract or validate audio for {filepath}")
-        return None
-
-
-def process_audio_files(
-    audio_source_files: list[FileSource], target_folder: str, max_workers=4
-) -> list[AudioFromVideo]:
-    """Runs audio extraction in parallel using ThreadPoolExecutor."""
-    start_time = time()
-    audios_from_video: list[AudioFromVideo] = []
-
-    if not audio_source_files:
-        return []
-
-    print(
-        f"Starting audio extraction for {len(audio_source_files)} files with {max_workers} workers."
-    )
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(extract_audio, file, target_folder)
-            for file in audio_source_files
-        ]
-
-        for future in as_completed(futures):
-            result = future.result()
-            if result:  # Only add valid results
-                audios_from_video.append(result)
-
-    print(
-        f"Audio extraction for {len(audio_source_files)} files completed in {time() - start_time:.2f} seconds."
-    )
-    return audios_from_video
-
-
-def detect_silence_in_file(audio_file: AudioFromVideo, timeline_fps) -> AudioFromVideo:
-    """Runs FFmpeg silence detection on a single WAV file and returns intervals."""
-    global FFMPEG
-    processed_audio = audio_file["audio_file_path"]
-    silence_detect_cmd = [
-        FFMPEG,
-        "-i",
-        processed_audio,
-        "-af",
-        "silencedetect=n=-20dB:d=1.0",
-        "-f",
-        "null",
-        "-",
-    ]
-    proc = subprocess.run(
-        silence_detect_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stderr_output = proc.stderr
-
-    silence_data: list[SilenceInterval] = []
-    current_silence: SilenceInterval = {"start": 0, "end": 0}
-    for line in stderr_output.splitlines():
-        line = line.strip()
-        if "silence_start:" in line:
-            try:
-                start_time = float(line.split("silence_start:")[1].strip())
-                current_silence["start"] = misc_utils.sec_to_frames(
-                    start_time, timeline_fps
-                )
-            except ValueError:
-                continue
-        elif "silence_end:" in line and "silence_duration:" in line:
-            try:
-                end_time = float(line.split("silence_end:")[1].split("|")[0].strip())
-                current_silence["end"] = misc_utils.sec_to_frames(
-                    end_time, timeline_fps
-                )
-                silence_data.append(current_silence)
-                current_silence = {"start": 0, "end": 0}
-            except ValueError:
-                continue
-    audio_file["silence_intervals"] = silence_data
-    return audio_file
-
-
-def detect_silence_parallel(
-    processed_audio: list[AudioFromVideo], timeline_fps, max_workers=4
-) -> dict[str, AudioFromVideo]:
-    """Runs silence detection in parallel across audio files."""
-    results: dict[str, AudioFromVideo] = {}
-
-    if not processed_audio:
-        return {}
-
-    print(f"Starting silence detection with {max_workers} workers.")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(detect_silence_in_file, audio_from_video, timeline_fps)
-            for audio_from_video in processed_audio
-        ]
-
-        for future in as_completed(futures):
-            final_audio: AudioFromVideo = future.result()
-            results[final_audio["video_file_path"]] = final_audio
-
-    return results
 
 
 ResolvePage = Literal["edit", "color", "fairlight", "fusion", "deliver"]
@@ -555,6 +371,10 @@ def get_items_by_tracktype(
                 "processed_file_name": None,  # Initialized as None
                 "source_start_frame": source_start_float,
                 "source_end_frame": source_end_float,
+                "source_channel": 0,  # Default value
+                "link_group_id": None,  # Default value
+                "type": None,  # Default value, changed from "Clip"
+                "nested_clips": [],  # Default value
             }
             if media_pool_item and not source_file_path:
                 # This branch means it's likely a compound clip, generator, or title.
@@ -566,27 +386,6 @@ def get_items_by_tracktype(
 
             items.append(timeline_item)
 
-    return items
-
-
-def simple_get_items_by_tracktype(
-    track_type: Literal["video", "audio"], timeline: Any
-) -> list[Dict]:  # Using Dict for simplicity as TimelineItem structure is complex
-    """Fetches all timeline items of a specific type from the timeline."""
-    items: list[Dict] = []
-    track_count = timeline.GetTrackCount(track_type)
-    for i in range(1, track_count + 1):
-        # Ensure we handle a None return from the API call
-        track_items = timeline.GetItemListInTrack(track_type, i) or []
-        for item in track_items:
-            # For verification, we only need a few key properties
-            timeline_item = {
-                "bmd_item": item,
-                "track_type": track_type,
-                "track_index": i,
-                "start_frame": round(item.GetStart()),  # Use rounded integer frames
-            }
-            items.append(timeline_item)
     return items
 
 
@@ -645,38 +444,6 @@ def _verify_timeline_state(
                 f"    - Missing {count} clip(s) on {track_type} track {track_index} at frame {start_frame}"
             )
         return False
-
-
-def get_source_media_from_timeline_item(
-    timeline_item: TimelineItem,
-) -> Union[FileSource, None]:
-    media_pool_item = timeline_item["bmd_item"].GetMediaPoolItem()
-    if not media_pool_item:
-        return None
-    filepath = media_pool_item.GetClipProperty("File Path")
-    if not filepath:
-        # print(f"Audio mapping: {media_pool_item.GetAudioMapping()}")
-        return None
-    file_path_uuid: str = misc_utils.uuid_from_path(filepath).hex
-    source_media_item: FileSource = {
-        "file_path": filepath,
-        "uuid": file_path_uuid,
-        "bmd_media_pool_item": media_pool_item,
-    }
-    return source_media_item
-
-
-def resync_with_resolve() -> bool:
-    global RESOLVE
-    RESOLVE = get_resolve()
-    if not RESOLVE:
-        return False
-    return True
-
-
-def assign_bmd_mpi_to_items(items: list[TimelineItem]) -> None:
-    for item in items:
-        item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
 
 
 def generate_uuid_from_nested_clips(
@@ -747,7 +514,7 @@ def mixdown_compound_clips(
     Finds unique compound/multicam content on the timeline, and for each,
     either renders a mixdown (standalone mode) or prepares the data for Go.
     """
-    global FFMPEG, TEMP_DIR, STANDALONE_MODE
+    global FFMPEG, TEMP_DIR
 
     # --- Pass 1: Map all compound/multicam clips by their content UUID ---
     content_map = {}
@@ -755,7 +522,11 @@ def mixdown_compound_clips(
         if not item.get("type") or not item.get("nested_clips"):
             continue
 
-        content_uuid = generate_uuid_from_nested_clips(item, item["nested_clips"])
+        nested_clips_list = item["nested_clips"]
+        if nested_clips_list is None:
+            continue
+
+        content_uuid = generate_uuid_from_nested_clips(item, nested_clips_list)
         if content_uuid not in content_map:
             content_map[content_uuid] = []
         content_map[content_uuid].append(item)
@@ -768,52 +539,7 @@ def mixdown_compound_clips(
 
         needs_render = f"{content_uuid}.wav" not in curr_processed_file_names
 
-        if needs_render and STANDALONE_MODE:
-            print(f"Standalone Mode: Rendering mixdown for content ID {content_uuid}")
-            nested_clips = representative_item["nested_clips"]
-            unique_source_files = list(
-                set([nc["source_file_path"] for nc in nested_clips])
-            )
-            source_map = {path: i for i, path in enumerate(unique_source_files)}
-
-            filter_complex_parts = []
-            delayed_streams = []
-
-            for i, nested_clip in enumerate(nested_clips):
-                source_index = source_map[nested_clip["source_file_path"]]
-                start_sec = nested_clip["source_start_frame"] / fps
-                duration_sec = nested_clip["duration"] / fps
-                trim_filter = f"[{source_index}:a]atrim=start={start_sec}:duration={duration_sec},asetpts=PTS-STARTPTS[t{i}];"
-                filter_complex_parts.append(trim_filter)
-
-                delay_ms = (nested_clip["start_frame"] / fps) * 1000
-                delay_filter = f"[t{i}]adelay={int(delay_ms)}|{int(delay_ms)}[d{i}];"
-                filter_complex_parts.append(delay_filter)
-                delayed_streams.append(f"[d{i}]")
-
-            mix_inputs = "".join(delayed_streams)
-            amix_filter = (
-                f"{mix_inputs}amix=inputs={len(nested_clips)}:dropout_transition=0[out]"
-            )
-            filter_complex_parts.append(amix_filter)
-
-            ffmpeg_cmd = [FFMPEG, "-y"]
-            for source_file in unique_source_files:
-                ffmpeg_cmd.extend(["-i", source_file])
-
-            ffmpeg_cmd.extend(
-                [
-                    "-filter_complex",
-                    "".join(filter_complex_parts),
-                    "-map",
-                    "[out]",
-                    "-ac",
-                    "1",
-                    output_wav_path,
-                ]
-            )
-            subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        elif needs_render:  # This implies not STANDALONE_MODE
+        if needs_render:
             print(
                 f"Go Mode: Skipping local render for new content ID {content_uuid}. Go will handle it."
             )
@@ -824,85 +550,13 @@ def mixdown_compound_clips(
 
         # --- [REFACTORED] Update all timeline items in this content group ---
         # This logic now correctly separates the I/O check from the data update.
-        should_update_datastructure = False
-        if not STANDALONE_MODE:
-            # In Go mode, we don't check the disk. We trust Go to create the file.
-            # We always proceed to update the data structure.
-            should_update_datastructure = True
-        else:
-            # In Standalone mode, we only update the data if the file was successfully created.
-            should_update_datastructure = os.path.exists(output_wav_path)
 
-        if should_update_datastructure:
-            # This block runs for all items in Go mode, or only for successful renders in Standalone mode.
-            for tl_item in items_in_group:
-                tl_item["processed_file_name"] = output_filename
-                tl_item["source_file_path"] = output_wav_path
-                tl_item["source_start_frame"] = 0.0
-                tl_item["source_end_frame"] = (
-                    tl_item["end_frame"] - tl_item["start_frame"]
-                )
-        else:
-            # This 'else' branch will now only be triggered in standalone mode if a render fails.
-            print(
-                f"ERROR: Failed to create or find mixdown for content ID: {content_uuid}"
-            )
-
-
-def _standardize_audio_stream_worker(item: TimelineItem, target_dir: str):
-    """
-    Worker function that creates a single standardized WAV file, either by
-    mono-mixing or by extracting a specific channel. Skips if the file exists.
-    """
-    global FFMPEG
-
-    source_path = item["source_file_path"]
-    # Default to 0 (mixdown) if source_channel is not specified
-    channel = item.get("source_channel", 0)
-    output_filename = item["processed_file_name"]
-
-    if not output_filename:
-        return
-
-    output_path = os.path.join(target_dir, output_filename)
-
-    # Skip if a valid file already exists
-    if misc_utils.is_valid_audio(output_path):
-        return
-
-    ffmpeg_cmd = [FFMPEG, "-y", "-i", source_path]
-    if channel > 0:
-        # Channel-specific extraction. ffmpeg is 0-indexed, DaVinci API is 1-indexed.
-        print(f"Extracting channel {channel} from '{os.path.basename(source_path)}'")
-        ffmpeg_cmd.extend(["-map_channel", f"0.0.{channel - 1}", output_path])
-    else:
-        # Standard mono mixdown
-        print(f"Creating mono mixdown for '{os.path.basename(source_path)}'")
-        ffmpeg_cmd.extend(["-vn", "-acodec", "pcm_s16le", "-ac", "1", output_path])
-
-    subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-
-def standardize_all_audio_streams(
-    items: list[TimelineItem], target_dir: str, max_workers=4
-):
-    """
-    Processes all timeline items concurrently, creating the necessary WAV files.
-    """
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Create a dict to de-duplicate jobs. We only need to process each unique
-        # target file once.
-        unique_jobs = {
-            item["processed_file_name"]: item
-            for item in items
-            if item.get("processed_file_name")
-        }
-
-        # Run the worker function for each unique job
-        executor.map(
-            lambda item: _standardize_audio_stream_worker(item, target_dir),
-            unique_jobs.values(),
-        )
+        # This block runs for all items in Go mode, or only for successful renders in Standalone mode.
+        for tl_item in items_in_group:
+            tl_item["processed_file_name"] = output_filename
+            tl_item["source_file_path"] = output_wav_path
+            tl_item["source_start_frame"] = 0.0
+            tl_item["source_end_frame"] = tl_item["end_frame"] - tl_item["start_frame"]
 
 
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
@@ -910,7 +564,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     (REVISED) Analyzes timeline items and channel mappings, then conditionally processes
     them if running in standalone mode.
     """
-    global PROJECT, MEDIA_POOL, STANDALONE_MODE, TEMP_DIR
+    global PROJECT, MEDIA_POOL, TEMP_DIR
 
     # --- 1. Initial Data Gathering ---
     timeline_name = timeline.GetName()
@@ -989,6 +643,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         if source_path not in globalz.PROJECT_DATA["files"]:
             globalz.PROJECT_DATA["files"][source_path] = {
                 "properties": {"FPS": timeline_fps},
+                "processed_audio_path": None,  # Added to satisfy TypedDict
                 "timelineItems": [],
                 "fileSource": {
                     "file_path": source_path,
@@ -1005,68 +660,8 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         print("Complex clips found...")
         mixdown_compound_clips(audio_track_items, timeline_fps, [])
 
-    # --- 5. Perform Processing ONLY if in Standalone Mode ---
-    if STANDALONE_MODE:
-        print("Standalone Mode: Standardizing all required audio streams...")
-        standardize_all_audio_streams(audio_track_items, TEMP_DIR)
-
-        print("Standalone Mode: Detecting silence...")
-        all_processed_files = {
-            item["processed_file_name"]
-            for item in audio_track_items
-            if item.get("processed_file_name")
-        }
-
-        wavs_for_silence_detection: list[AudioFromVideo] = [
-            {
-                "audio_file_path": os.path.join(TEMP_DIR, fname),
-                "video_file_path": fname,
-                "silence_intervals": [],
-            }
-            for fname in all_processed_files
-            if misc_utils.is_valid_audio(os.path.join(TEMP_DIR, fname))
-        ]
-        silence_results = detect_silence_parallel(
-            wavs_for_silence_detection, timeline_fps
-        )
-
-        for item in audio_track_items:
-            if (
-                item.get("processed_file_name")
-                and item["processed_file_name"] in silence_results
-            ):
-                silence_intervals = silence_results[item["processed_file_name"]][
-                    "silence_intervals"
-                ]
-                clip_data: ClipData = {
-                    "start_frame": item["start_frame"],
-                    "end_frame": item["end_frame"],
-                    "source_start_frame": item["source_start_frame"],
-                    "source_end_frame": item["source_end_frame"],
-                }
-                item["edit_instructions"] = create_edits_with_optional_silence(
-                    clip_data, silence_intervals
-                )
-
     print("Python-side analysis complete.")
     return True, None
-
-
-def merge_project_data(project_data_from_go: ProjectData) -> None:
-    """Use everything from go except keys which values are <BMDObject> (string)"""
-    global TEMP_DIR
-
-    if not globalz.PROJECT_DATA:
-        globalz.PROJECT_DATA = {}
-    for key, value in project_data_from_go.items():
-        if value == "<BMDObject>":
-            continue
-        globalz.PROJECT_DATA[key] = value
-
-    debug_output = os.path.join(TEMP_DIR, "debug_project_data_from_go.json")
-    misc_utils.export_to_json(globalz.PROJECT_DATA, debug_output)
-
-    return
 
 
 def deep_merge_bmd_aware(
@@ -1198,26 +793,6 @@ def send_progress_update(
     )
 
 
-def tl_has_nested_item() -> bool:
-    print("checking if tl has nested item")
-    project_data = globalz.PROJECT_DATA
-    if not project_data:
-        return False
-
-    all_tl_items = (
-        project_data["timeline"]["audio_track_items"]
-        + project_data["timeline"]["video_track_items"]
-    )
-
-    for item in all_tl_items:
-        item_type = item.get("type")
-        if not item_type:
-            continue
-        return True
-
-    return False
-
-
 def setTimecode(timecode: str, task_id: str = "") -> bool:
     global RESOLVE
     global PROJECT
@@ -1343,7 +918,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
             send_message_to_go("taskResult", response_payload, task_id=task_id)
             return
 
-    if sync or STANDALONE_MODE:
+    if sync:
         output_dir = os.path.join(TEMP_DIR, "debug_project_data.json")
         print(f"exporting debug json to {output_dir}")
         misc_utils.export_to_json(globalz.PROJECT_DATA, output_dir)
@@ -1362,8 +937,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         )
         export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
         print(f"Exported timeline to OTIO in {input_otio_path}")
-        if not STANDALONE_MODE:
-            return
+        return
 
     if not globalz.PROJECT_DATA:
         alert_message = "An unexpected error happened during sync. Could not get project data from Davinci."
@@ -1673,7 +1247,7 @@ def append_and_link_timeline_items(
                 lookup_key = (
                     clip_info.get("mediaType"),
                     clip_info["trackIndex"],
-                    clip_info["recordFrame"],
+                    int(clip_info["recordFrame"]),  # Cast to int
                 )
                 link_key_lookup[lookup_key] = link_key
 
@@ -1714,7 +1288,7 @@ def append_and_link_timeline_items(
                 lookup_key = (
                     media_type,
                     item_dict["track_index"],
-                    item_dict["start_frame"],
+                    int(item_dict["start_frame"]),
                 )
                 link_key = link_key_lookup.get(lookup_key)
                 if link_key:
@@ -1756,88 +1330,6 @@ def append_and_link_timeline_items(
 
     if not success:
         print("❌ Operation failed after all retries. Please check the logs.")
-
-
-def _recursive_find_item_in_folder(
-    current_folder: Any, item_id_to_find: str
-) -> Optional[Any]:
-    """
-    Recursively scans a folder and its subfolders for an item with the given unique ID.
-
-    Args:
-        current_folder: The DaVinci Resolve Folder object to scan.
-        item_id_to_find: The unique ID string of the MediaPoolItem to find.
-
-    Returns:
-        The Folder object containing the item if found, otherwise None.
-    """
-    if not current_folder:
-        print("Warning: _recursive_find_item_in_folder received a None folder.")
-        return None
-
-    # 1. Check clips (items) in the current folder
-    try:
-        clips_in_folder = current_folder.GetClipList()
-    except AttributeError:
-        # This can happen if current_folder is not a valid Folder object (e.g., if GetRootFolder fails unexpectedly)
-        print(
-            f"Error: Could not get clip list from folder '{current_folder.GetName() if hasattr(current_folder, 'GetName') else 'Unknown Folder'}'."
-        )
-        return None
-
-    for item in clips_in_folder:
-        try:
-            if item.GetUniqueId() == item_id_to_find:
-                # print(f"Found item '{item_id_to_find}' in folder: {current_folder.GetName()}") # Optional
-                return current_folder
-        except AttributeError:
-            # Item might not have GetUniqueId() if it's a malformed object, though unlikely for GetClipList() results
-            print(
-                f"Warning: An item in folder '{current_folder.GetName()}' does not have GetUniqueId method."
-            )
-            continue
-
-    # 2. If not found, recurse into subfolders
-    try:
-        subfolders = current_folder.GetSubFolderList()
-    except AttributeError:
-        print(
-            f"Error: Could not get subfolder list from folder '{current_folder.GetName() if hasattr(current_folder, 'GetName') else 'Unknown Folder'}'."
-        )
-        return None
-
-    for subfolder in subfolders:
-        found_folder = _recursive_find_item_in_folder(subfolder, item_id_to_find)
-        if found_folder:
-            return found_folder  # Propagate the result upwards
-    return None
-
-
-def find_item_folder_by_id(item_id: str) -> Any | None:
-    """
-    Finds the Media Pool Folder object that contains a MediaPoolItem (e.g., timeline, clip)
-    with the specified unique ID. Scans recursively.
-
-    Args:
-        item_id: The unique ID string of the MediaPoolItem to find.
-
-    Returns:
-        The Folder object containing the item if found, otherwise None.
-        Returns None if RESOLVE object is not available or no project is open.
-    """
-    global MEDIA_POOL
-    if not MEDIA_POOL:
-        return None
-    root_folder = MEDIA_POOL.GetRootFolder()
-
-    if not root_folder:
-        print("Error: Could not get the root folder from the Media Pool.")
-        return None
-
-    print(
-        f"Starting search for item ID '{item_id}' from root folder '{root_folder.GetName()}'."
-    )
-    return _recursive_find_item_in_folder(root_folder, item_id)
 
 
 # Add this new global event
@@ -1900,7 +1392,7 @@ def signal_go_ready(go_server_port: int):
             )
             if attempt < max_retries - 1:
                 print(f"Python Backend: Retrying in {retry_delay_seconds} seconds...")
-                time.sleep(retry_delay_seconds)
+                time.sleep(retry_delay_seconds)  # type: ignore
             else:
                 print(
                     f"Python Backend: Failed to signal Go server after {max_retries} attempts."
@@ -1994,6 +1486,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                     "Python Command Server: Command authentication is currently disabled."
                 )
 
+            command = None  # Initialize command here
             # --- Command Processing ---
             try:
                 content_length = int(self.headers["Content-Length"])
@@ -2350,7 +1843,7 @@ def init():
             httpd.handle_request()
             # Small sleep to prevent busy-waiting if no requests are coming in
             # and to allow Resolve's main loop to process other events.
-            sleep(0.01)
+            sleep(0.01)  # type: ignore  # type: ignore
     except KeyboardInterrupt:
         print("Python Backend: Keyboard interrupt detected. Shutting down.")
         SHUTDOWN_EVENT.set()
@@ -2538,7 +2031,7 @@ def init():
             httpd.handle_request()
             # Small sleep to prevent busy-waiting if no requests are coming in
             # and to allow Resolve's main loop to process other events.
-            sleep(0.01)
+            sleep(0.01)  # type: ignore  # type: ignore
     except KeyboardInterrupt:
         print("Python Backend: Keyboard interrupt detected. Shutting down.")
         SHUTDOWN_EVENT.set()
