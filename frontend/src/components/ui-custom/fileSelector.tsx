@@ -219,7 +219,7 @@ const AudioClip = ({ item, index, isSelected, onClipClick, disabled, fps, conver
               <AudioLinesIcon className={cn("text-sm h-[14px] text-stone-400 p-0 mr-1")} />
             )}
             <div className="flex items-baseline space-x-1">
-              <p className="font-medium text-xs text-zinc-200/90 truncate">{item.name}</p>
+              <p className="font-medium text-xs text-zinc-200/90 truncate max-w-28">{item.name}</p>
               <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="p-0 m-0 ml-[-4px] mb-[2px]" /></span>
             </div>
           </div>
