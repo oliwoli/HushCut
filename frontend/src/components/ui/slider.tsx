@@ -53,7 +53,7 @@ function Slider({
         </SliderPrimitive.Track>
         {/* Markings Container */}
         <div className="absolute inset-0 flex justify-center items-center">
-          <div className="relative h-full" style={{ width: '87.6%' }}> {/* Adjust width here to fine-tune scale */}
+          <div className="relative h-full" style={{ width: '88.9%' }}> {/* Adjust width here to fine-tune scale */}
             {Array.from({ length: 11 }, (_, i) => {
               const markValue = min + ((max - min) / 10) * (i);
               const percentage = ((markValue - min) / (max - min)) * 100;
