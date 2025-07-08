@@ -1,4 +1,5 @@
 import { clsx, type ClassValue } from "clsx"
+import Timecode, { FRAMERATE } from "smpte-timecode";
 import { twMerge } from "tailwind-merge"
 
 export function cn(...inputs: ClassValue[]) {
@@ -23,6 +24,14 @@ export function frameToTimecode(
   if (fps <= 0) {
     throw new Error("FPS must be positive");
   }
+
+  let timecodeObj = Timecode(frame, fps as FRAMERATE, false)
+  let finalTimecode = timecodeObj.toString()
+  if (!includeFrames) {
+    // If frames are not included, remove the frame part from the timecode
+    finalTimecode = finalTimecode.replace(/:\d{2}$/, "");
+  }
+  return finalTimecode
 
   // Total seconds (floating)
   let totalSecondsFloat = frame / fps;
@@ -62,6 +71,7 @@ export function frameToTimecode(
   if (includeFrames) {
     tc += `:${pad2(frames)}`;
   }
+
   return tc;
 }
 
