@@ -57,11 +57,11 @@ export function useWaveformData(
 
                 const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
                     activeClip.processedFileName
-                )}&start=${clipStartSeconds.toFixed(3)}&end=${clipEndSeconds.toFixed(3)}`;
+                )}&start=${clipStartSeconds}&end=${clipEndSeconds}`;
 
                 const peakDataForSegment = await GetWaveform(
                     activeClip.processedFileName,
-                    256, "logarithmic", -60.0,
+                    128, "logarithmic", -60.0,
                     clipStartSeconds,
                     clipEndSeconds
                 );
