@@ -182,7 +182,7 @@ export const SilenceControls = () => {
                 </div>
 
                 {/* Right column */}
-                <div className="flex flex-col gap-6 mt-3">
+                <div className="flex flex-col gap-6">
                     <_MinContentControl />
                 </div>
             </div>

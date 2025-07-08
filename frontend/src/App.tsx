@@ -672,7 +672,7 @@ function AppContent() {
                   <SilenceControls key={currentClipId} />
                 </div>
                 {projectData && projectData.timeline?.audio_track_items?.length > 0 && (
-                  <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col [@media(width>=45rem)]:justify-start w-full justify-between">
+                  <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col-reverse [@media(width>=45rem)]:justify-start w-full justify-between">
                     <DavinciSettings />
                     <RemoveSilencesButton
                       projectData={projectData}
