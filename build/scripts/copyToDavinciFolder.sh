@@ -37,6 +37,9 @@ copy_files() {
 
   cp "python-backend/src/HushCut.py" "$TARGET_FOLDER/HushCut.py"
   chmod +x "$TARGET_FOLDER/HushCut.py"
+  
+  cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
+  chmod +x "$TARGET_FOLDER/HushCut"
 
   cp "build/bin/python_backend" "$TARGET_FOLDER/python_backend"
 
