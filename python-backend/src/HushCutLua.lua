@@ -11,14 +11,120 @@ local math = require("math")
 -- Externalish Libraries (must be installed)
 local dkjson = require("dkjson") -- local file, should work
 
--- External Libraries (need to be replaced)
-local socket = require("socket")
-local http = require("socket.http")
-local ltn12 = require("ltn12")
-local lfs = require("lfs")
+
+local function uuid()
+    local random = math.random
+    local template ='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
+    return string.gsub(template, '[xy]', function (c)
+      local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
+      return string.format('%x', v)
+    end)
+  end
+
 
 -- Polyfills & Helpers for Python features
 local helpers = {}
+
+--- Joins path components with the correct separator.
+---@param ... string
+---@return string
+function helpers.path_join(...)
+    local args = {...}
+    local sep = package.config:sub(1,1)
+    local path = table.concat(args, sep)
+    -- Replace multiple separators with a single one, but handle the file:// prefix
+    path = path:gsub("([^:])([/\\]+)", "%1" .. sep)
+    return path
+end
+
+--- Replicates Python's os.path.dirname
+---@param path string
+---@return string
+function helpers.dirname(path)
+    return path:match("(.*" .. "[/\\]" .. ")")
+end
+
+
+--- Gets the current working directory.
+---@return string
+function helpers.currentdir()
+    local cmd = (package.config:sub(1, 1) == '/') and "pwd" or "cd"
+    local handle = io.popen(cmd)
+    if not handle then return "" end
+    local path = handle:read("*a")
+    handle:close()
+    return path:match("[^\n]+") or ""
+end
+
+--- Checks if a path (file or directory) exists.
+---@param path string
+---@return boolean
+function helpers.path_exists(path)
+    local escaped_path = '"' .. path:gsub('"', '\"') .. '"'
+    if package.config:sub(1, 1) == '/' then -- Unix-like
+        return os.execute("test -e " .. escaped_path) == 0
+    else -- Windows
+        return os.execute('dir ' .. escaped_path .. ' > nul 2>&1') == 0
+    end
+end
+
+--- Creates a directory, including parent directories.
+---@param path string
+function helpers.mkdir(path)
+    if helpers.path_exists(path) then return end
+    local escaped_path = '"' .. path:gsub('"', '\"') .. '"'
+    local cmd = (package.config:sub(1, 1) == '/') and ("mkdir -p " .. escaped_path) or ("mkdir " .. escaped_path)
+    os.execute(cmd)
+end
+
+--- Replicates Python's os.path.abspath using the shell's realpath for robustness.
+---@param path string
+---@return string
+function helpers.abspath(path)
+    if package.config:sub(1, 1) == '/' then -- Unix-like
+        local handle = io.popen('realpath -m "' .. path:gsub('"', '\"') .. '"')
+        if handle then
+            local resolved_path = handle:read("*a"):match("[^\n]+")
+            handle:close()
+            if resolved_path then return resolved_path end
+        end
+    end
+    -- Fallback for Windows or if realpath fails
+    if path:match("^[a-zA-Z]:[\\/]") or path:sub(1,1) == '/' then return path end
+    return helpers.path_join(helpers.currentdir(), path)
+end
+
+
+
+-- GLOBALS
+local SCRIPT_DIR = helpers.dirname(arg[0] or "")
+local TEMP_DIR = helpers.path_join(SCRIPT_DIR, "..", "wav_files")
+TEMP_DIR = helpers.abspath(TEMP_DIR)
+if not helpers.path_exists(TEMP_DIR) then
+    helpers.mkdir(TEMP_DIR)
+end
+
+local PROJECT = nil
+local TIMELINE = nil
+local MEDIA_POOL = nil
+-- local AUTH_TOKEN = nil -- Unused
+-- local ENABLE_COMMAND_AUTH = false -- Unused
+local GO_SERVER_PORT = 0
+
+local STANDALONE_MODE = false
+local RESOLVE = nil
+local MAKE_NEW_TIMELINE = true
+local MAX_RETRIES = 100
+local created_timelines = {}
+---@type ProjectData?
+local PROJECT_DATA = nil
+
+local TASKS = {
+    prepare = 30,
+    append = 30,
+    verify = 15,
+    link = 35,
+}
 
 --- Deep copies a table.
 ---@param orig table
@@ -38,27 +144,99 @@ function helpers.deepcopy(orig)
     return copy
 end
 
---- Joins path components with the correct separator.
----@param ... string
----@return string
-function helpers.path_join(...)
-    local args = {...}
-    local sep = package.config:sub(1,1)
-    return table.concat(args, sep)
+
+--- Sleeps for a given number of seconds.
+---@param seconds number
+function helpers.sleep(seconds)
+    if not seconds or seconds <= 0 then return end
+    if package.config:sub(1, 1) == '/' then -- Unix-like
+        os.execute("sleep " .. tonumber(seconds))
+    else -- Windows
+        os.execute("timeout /t " .. math.floor(tonumber(seconds) + 0.5) .. " /nobreak > nul")
+    end
 end
 
---- Replicates Python's os.path.dirname
----@param path string
----@return string
-function helpers.dirname(path)
-    return path:match("(.*" .. package.config:sub(1,1) .. ")")
-end
+--- Performs an HTTP request using curl.
+---@param method string 'GET' or 'POST'
+---@param url string The URL to request
+---@param options table? { headers = table, body = string, timeout = number }
+---@return boolean success, string response_body, number status_code
+function helpers.http_request(method, url, options)
+    options = options or {}
+    local timeout = options.timeout or 10
+    local headers = options.headers or {}
+    local body = options.body
 
---- Replicates Python's os.path.abspath
----@param path string
----@return string
-function helpers.abspath(path)
-    return lfs.currentdir() .. package.config:sub(1,1) .. path
+    local temp_output_file = helpers.path_join(TEMP_DIR, "curl_output_" .. uuid() .. ".txt")
+    
+    local command_parts = {
+        "curl",
+        "-s", -- silent
+        "-f", -- fail silently on server errors
+        string.format("-w \"%%{http_code}\""),
+        string.format("--connect-timeout %d", timeout),
+        string.format("-o \"%s\"", temp_output_file),
+        string.format("-X %s", method)
+    }
+
+    for key, value in pairs(headers) do
+        table.insert(command_parts, string.format("-H \"%s: %s\"", key, value))
+    end
+
+    local temp_body_file
+    if body then
+        temp_body_file = helpers.path_join(TEMP_DIR, "curl_body_" .. uuid() .. ".json")
+        local file, err = io.open(temp_body_file, "w")
+        if not file then
+            print("Error creating temp file for curl body: " .. tostring(err))
+            os.remove(temp_output_file)
+            return false, "Failed to create temp body file", -1
+        end
+        file:write(body)
+        file:close()
+        table.insert(command_parts, string.format("--data-binary \"@%s\"", temp_body_file))
+    end
+
+    table.insert(command_parts, string.format("\"%s\"", url))
+    
+    local command = table.concat(command_parts, " ")
+    
+    local handle = io.popen(command)
+    if not handle then
+        print("Failed to execute curl command.")
+        os.remove(temp_output_file)
+        if temp_body_file then os.remove(temp_body_file) end
+        return false, "Failed to popen curl", -1
+    end
+
+    local status_code_str = handle:read("*a")
+    local proc_ok, _, _ = handle:close()
+
+    if not proc_ok then
+        print(string.format("curl command failed for URL %s. It's likely the server is not reachable.", url))
+        os.remove(temp_output_file)
+        if temp_body_file then os.remove(temp_body_file) end
+        return false, "curl command failed", -1
+    end
+
+    local response_body = ""
+    local out_file, read_err = io.open(temp_output_file, "r")
+    if out_file then
+        response_body = out_file:read("*a")
+        out_file:close()
+    else
+        print("Could not read curl output file (this may be expected if the server returned no body): " .. tostring(read_err))
+    end
+    
+    os.remove(temp_output_file)
+    if temp_body_file then
+        os.remove(temp_body_file)
+    end
+
+    local status_code = tonumber(status_code_str) or -1
+    local success = (status_code >= 200 and status_code < 300)
+
+    return success, response_body, status_code
 end
 
 --- Simulates subprocess.run, returning a CompletedProcess-like table.
@@ -91,14 +269,14 @@ function helpers.Counter(t)
             for k, v in pairs(other) do
                 result[k] = (result[k] or 0) + v
             end
-            return setmetatable(result, mt)
+            return setmetatable(result, getmetatable(self))
         end,
         __sub = function(self, other)
             local result = helpers.deepcopy(self)
             for k, v in pairs(other) do
                 result[k] = (result[k] or 0) - v
             end
-            return setmetatable(result, mt)
+            return setmetatable(result, getmetatable(self))
         end
     }
     return setmetatable(counts, mt)
@@ -221,42 +399,8 @@ end
 ---@field auto_linked boolean
 --endregion
 
--- GLOBALS
-local SCRIPT_DIR = helpers.dirname(arg[0])
-local TEMP_DIR = helpers.path_join(SCRIPT_DIR, "..", "wav_files")
-TEMP_DIR = helpers.abspath(TEMP_DIR)
-if not lfs.attributes(TEMP_DIR) then
-    lfs.mkdir(TEMP_DIR)
-end
 
-local PROJECT = nil
-local TIMELINE = nil
-local MEDIA_POOL = nil
-local AUTH_TOKEN = nil
-local ENABLE_COMMAND_AUTH = false
-local GO_SERVER_PORT = 0
-local PYTHON_LISTEN_PORT = 0
-local SERVER_INSTANCE_HOLDER = {}
-local SHUTDOWN_FLAG = false -- Replaces threading.Event
-
-local STANDALONE_MODE = false
-local RESOLVE = nil
-local FFMPEG = "ffmpeg"
-local MAKE_NEW_TIMELINE = true
-local MAX_RETRIES = 100
-local created_timelines = {}
----@type ProjectData?
-local PROJECT_DATA = nil
-
-local TASKS = {
-    prepare = 30,
-    append = 30,
-    verify = 15,
-    link = 35,
-}
-
-
--- Forward declarations for functions that call each other
+-- Forward declarations for all major functions
 local send_message_to_go
 local get_resolve
 local send_result_with_alert
@@ -264,110 +408,259 @@ local export_timeline_to_otio
 local populate_nested_clips
 local unify_linked_items_in_project_data
 local append_and_link_timeline_items
-local main_logic = {} -- To hold main logic functions
+local main_logic = {}
+local _create_nested_audio_item_from_otio
+local _recursive_otio_parser
+local process_track_items
+local unify_edit_instructions
+local send_progress_update
+local get_items_by_tracktype
+local _verify_timeline_state
+local generate_uuid_from_nested_clips
+local mixdown_compound_clips
+local apply_edits_from_go
+local setTimecode
+local _append_clips_to_timeline
+local poll_go_for_command
+local process_go_command
+local main_command_loop
+local init
 
 
-local function uuid()
-    local random = math.random
-    local template ='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-    return string.gsub(template, '[xy]', function (c)
-      local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
-      return string.format('%x', v)
-    end)
-  end
-
-
-
-local function uuid_from_path(path)
+local function uuid_from_path(path_str)
+    -- This is a placeholder. A real implementation would use a proper hashing algorithm
+    -- to create a deterministic UUID from the path string, like Python's uuid5.
+    -- For now, we return a random one, which is NOT correct for caching but will
+    -- allow the script to run.
     return uuid()
 end
 
 
+function main_logic.get_project_data(project, timeline)
+    local timeline_name = timeline:GetName()
+    local timeline_fps = timeline:GetSetting("timelineFrameRate")
+    local video_track_items = get_items_by_tracktype("video", timeline)
+    local audio_track_items = get_items_by_tracktype("audio", timeline)
 
-function make_project_data_serializable(original_project_data)
-    local serializable_data = helpers.deepcopy(original_project_data)
+    local tl_dict = {
+        name = timeline_name,
+        fps = timeline_fps,
+        start_timecode = timeline:GetStartTimecode(),
+        curr_timecode = timeline:GetCurrentTimecode(),
+        video_track_items = video_track_items,
+        audio_track_items = audio_track_items,
+    }
+    PROJECT_DATA = {
+        project_name = project:GetName(),
+        timeline = tl_dict,
+        files = {},
+    }
 
-    if serializable_data.timeline then
-        for _, track_type_key in ipairs({"video_track_items", "audio_track_items"}) do
-            if serializable_data.timeline[track_type_key] then
-                for i, item in ipairs(serializable_data.timeline[track_type_key]) do
-                    if item.bmd_item then
-                        item.bmd_item_placeholder = string.format("ResolveTimelineItem_Track%s_Index%d", item.track_index or "N/A", i)
-                        item.bmd_item = nil
+    local has_complex_clips = false
+    for _, item in ipairs(audio_track_items) do
+        if item.type then has_complex_clips = true; break end
+    end
+
+    if has_complex_clips then
+        print("Complex clips found. Analyzing timeline structure with OTIO...")
+        local input_otio_path = helpers.path_join(TEMP_DIR, "temp-timeline.otio")
+        export_timeline_to_otio(timeline, input_otio_path)
+        populate_nested_clips(input_otio_path)
+    end
+
+    print("Analyzing timeline items and audio channel mappings...")
+    for _, item in ipairs(audio_track_items) do
+        if item.source_file_path and item.source_file_path ~= "" then
+            local source_path = item.source_file_path
+            local source_uuid = uuid_from_path(source_path)
+
+            item.source_channel = 0 -- Default
+            item.processed_file_name = string.format("%s.wav", source_uuid)
+
+            local ok, mapping_str = pcall(function() return item.bmd_item:GetSourceAudioChannelMapping() end)
+            if ok and mapping_str and mapping_str ~= "" then
+                local s, mapping = pcall(dkjson.decode, mapping_str)
+                if s then
+                    local clip_track_map = ((mapping.track_mapping or {})["1"] or {})
+                    local clip_type = clip_track_map.type
+                    local channel_indices = clip_track_map.channel_idx or {}
+                    if clip_type and string.lower(clip_type) == "mono" and #channel_indices == 1 then
+                        local channel_num = channel_indices[1]
+                        print(string.format("Detected clip '%s' using specific source channel: %d", item.name, channel_num))
+                        item.source_channel = channel_num
+                        item.processed_file_name = string.format("%s_ch%d.wav", source_uuid, channel_num)
                     end
                 end
+            else
+                 print(string.format("Warning: Could not get audio mapping for '%s'. Defaulting to mono mixdown. Error: %s", item.name, tostring(mapping_str)))
             end
         end
     end
-
-    if serializable_data.files then
-        for file_path_key, file_data_dict in pairs(serializable_data.files) do
-            if file_data_dict.fileSource and file_data_dict.fileSource.bmd_media_pool_item then
-                file_data_dict.fileSource.bmd_media_pool_item_placeholder = string.format("ResolveMediaPoolItem_SourcePath_%s", file_data_dict.fileSource.file_path or "N/A")
-                file_data_dict.fileSource.bmd_media_pool_item = nil
-            end
-            if file_data_dict.timelineItems then
-                for i, item in ipairs(file_data_dict.timelineItems) do
-                    if item.bmd_item then
-                        item.bmd_item_placeholder = string.format("ResolveTimelineItem_InFileData_File_%s_Index%d", file_path_key, i)
-                        item.bmd_item = nil
-                    end
-                end
+    
+    for _, item in ipairs(audio_track_items) do
+        local source_path = item.source_file_path
+        if source_path and source_path ~= "" then
+            if not PROJECT_DATA.files[source_path] then
+                PROJECT_DATA.files[source_path] = {
+                    properties = { FPS = timeline_fps },
+                    processed_audio_path = nil,
+                    timelineItems = {},
+                    fileSource = {
+                        file_path = source_path,
+                        uuid = uuid_from_path(source_path),
+                        bmd_media_pool_item = item.bmd_mpi,
+                    },
+                    silenceDetections = nil,
+                }
             end
         end
     end
+    
+    if has_complex_clips then
+        print("Complex clips found...")
+        mixdown_compound_clips(audio_track_items, timeline_fps, {})
+    end
 
-    return serializable_data
+    print("Lua-side analysis complete.")
+    return true, nil
 end
 
-function is_valid_audio(filepath)
-    if not lfs.attributes(filepath) then
-        return false
-    end
-    local ok, result = pcall(helpers.subprocess_run, {
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", filepath
-    })
-    if ok and result.returncode == 0 then
-        local duration = tonumber(result.stdout:match("^%s*(.-)%s*$"))
-        return duration and duration > 0.1
-    else
-        print(string.format("Error checking audio file %s: %s", filepath, result.stderr or "pcall failed"))
-        return false
-    end
-end
+function main_logic.run(sync, task_id)
+    local script_start_time = os.time()
+    print("running main function...")
 
-function export_to_json(data, output_path)
-    local dir = helpers.dirname(output_path)
-    if not lfs.attributes(dir) then
-        lfs.mkdir(dir)
+    if not sync then
+        TRACKER:start_new_run(TASKS, task_id)
+        TRACKER:update_task_progress("init", 0.1, "Preparing")
     end
-    local file, err = io.open(output_path, "w")
-    if not file then
-        print("Error opening file for JSON export:", err)
+
+    if not RESOLVE then
+        task_id = task_id or ""
+        get_resolve(task_id)
+    end
+    if not RESOLVE then
+        print("could not get resolve object")
+        PROJECT_DATA = {}
+        send_result_with_alert("DaVinci Resolve Error", "Could not connect to DaVinci Resolve. Is it running?", task_id)
+        send_message_to_go("projectData", PROJECT_DATA)
+        return false
+    end
+
+    if not RESOLVE:GetProjectManager() then
+        print("no project")
+        PROJECT = nil
+        send_result_with_alert("DaVinci Resolve Error", "Could not connect to DaVinci Resolve. Is it running?", task_id)
+        return false
+    end
+
+    PROJECT = RESOLVE:GetProjectManager():GetCurrentProject()
+
+    if not PROJECT then
+        PROJECT_DATA = nil
+        MEDIA_POOL = nil
+        local message = "Please open a project and open a timeline."
+        local response_payload = {
+            status = "error", message = message, shouldShowAlert = true,
+            alertTitle = "No open project", alertMessage = message, alertSeverity = "error",
+        }
+        send_message_to_go("taskResult", response_payload, task_id)
+        send_message_to_go("projectData", PROJECT_DATA)
+        return false
+    end
+
+    TIMELINE = PROJECT:GetCurrentTimeline()
+    if not TIMELINE then
+        PROJECT_DATA = nil
+        local message = "Please open a timeline."
+        local response_payload = {
+            status = "error", message = message, data = PROJECT_DATA, shouldShowAlert = true,
+            alertTitle = "No Open Timeline", alertMessage = message, alertSeverity = "error",
+        }
+        send_message_to_go("taskResult", response_payload, task_id)
+        return false
+    end
+
+    local input_otio_path = helpers.path_join(TEMP_DIR, "temp-timeline.otio")
+
+    if sync or not PROJECT_DATA then
+        local success, alert_title = main_logic.get_project_data(PROJECT, TIMELINE)
+        if not success then
+            alert_title = alert_title or "Sync error"
+            local response_payload = {
+                status = "error", message = alert_title, shouldShowAlert = true,
+                alertTitle = alert_title, alertMessage = "", alertSeverity = "error",
+            }
+            print(dkjson.encode(response_payload))
+            local output_dir = helpers.path_join(TEMP_DIR, "debug_project_data.json")
+            print(string.format("exporting debug json to %s", output_dir))
+            -- export_to_json(PROJECT_DATA, output_dir)
+            send_message_to_go("taskResult", response_payload, task_id)
+            return
+        end
+    end
+
+    if sync then
+        local output_dir = helpers.path_join(TEMP_DIR, "debug_project_data.json")
+        print(string.format("exporting debug json to %s", output_dir))
+        -- export_to_json(PROJECT_DATA, output_dir)
+
+        print("just syncing, exiting")
+        print(string.format("it took %.2f seconds for script to finish", os.time() - script_start_time))
+
+        local response_payload = {
+            status = "success",
+            message = "Sync successful!",
+            data = PROJECT_DATA, -- make_project_data_serializable(PROJECT_DATA),
+        }
+
+        send_message_to_go("taskResult", response_payload, task_id)
+        export_timeline_to_otio(TIMELINE, input_otio_path)
+        print(string.format("Exported timeline to OTIO in %s", input_otio_path))
         return
     end
-    -- NOTE: cjson does not have a default serializer for non-serializable types.
-    -- The make_project_data_serializable function should be used beforehand.
-    file:write(dkjson.encode(data))
-    file:close()
-end
 
-function send_message(message_type, payload)
-    local message = {type = message_type, payload = payload}
-    print(dkjson.encode(message))
-    io.flush()
-end
+    if not PROJECT_DATA then
+        local alert_message = "An unexpected error happened during sync. Could not get project data from Davinci."
+        send_result_with_alert("unexpected sync error", alert_message, task_id)
+        return
+    end
 
-function make_empty_timeline_item()
-    return {
-        bmd_item = nil, bmd_mpi = nil, name = "", id = "",
-        track_type = "video", track_index = 0, source_file_path = "",
-        processed_file_name = nil, start_frame = 0.0, end_frame = 0.0,
-        source_start_frame = 0.0, source_end_frame = 0.0, duration = 0.0,
-        edit_instructions = {}, source_channel = nil, link_group_id = nil,
-        type = nil, nested_clips = {}
+    -- safety check: do we have bmd items?
+    local all_timeline_items = {}
+    for _, item in ipairs(PROJECT_DATA.timeline.video_track_items) do table.insert(all_timeline_items, item) end
+    for _, item in ipairs(PROJECT_DATA.timeline.audio_track_items) do table.insert(all_timeline_items, item) end
+
+    if #all_timeline_items == 0 then
+        print("critical error, can't continue")
+        local alert_message = "An unexpected error happened during sync. Could not get timeline items from Davinci."
+        send_result_with_alert("unexpected sync error", alert_message, task_id)
+        return
+    end
+
+    local some_bmd_item = all_timeline_items[1].bmd_item
+    if not some_bmd_item or type(some_bmd_item) == "string" then
+        print("critical error, can't continue")
+        return
+    end
+
+    unify_linked_items_in_project_data(input_otio_path)
+
+    TRACKER:complete_task("prepare")
+    TRACKER:update_task_progress("append", 1.0, "Adding Clips to Timeline")
+
+    append_and_link_timeline_items(MAKE_NEW_TIMELINE, task_id)
+
+    TRACKER:complete_task("append")
+
+    local execution_time = os.time() - script_start_time
+    print(string.format("it took %.2f s to complete", execution_time))
+
+    local response_payload = {
+        status = "success",
+        message = "Edit successful!",
     }
+
+    send_message_to_go("taskResult", response_payload, task_id)
 end
 
 function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_container, max_duration)
@@ -435,7 +728,6 @@ end
 
 function _recursive_otio_parser(otio_composable, active_angle_name, container_duration)
     local found_clips = {}
-    local _recursive_otio_parser_ref = _recursive_otio_parser -- for recursion
 
     for _, track in ipairs(otio_composable.children or {}) do
         if string.lower(track.kind or "") == "audio" then
@@ -462,7 +754,7 @@ function _recursive_otio_parser(otio_composable, active_angle_name, container_du
                             local item = _create_nested_audio_item_from_otio(item_in_track, playhead, effective_duration)
                             if item then table.insert(found_clips, item) end
                         elseif schema:find("stack") then
-                            local nested_clips = _recursive_otio_parser_ref(item_in_track, active_angle_name, container_duration)
+                            local nested_clips = _recursive_otio_parser(item_in_track, active_angle_name, container_duration)
                             for _, nested_clip in ipairs(nested_clips) do
                                 nested_clip.start_frame = nested_clip.start_frame + playhead
                                 nested_clip.end_frame = nested_clip.end_frame + playhead
@@ -565,7 +857,7 @@ function populate_nested_clips(input_otio_path)
     end
 end
 
-function process_track_items(items, pd_timeline, pd_timeline_key, timeline_start_rate, timeline_start_frame, max_id, track_index)
+function process_track_items(items, pd_timeline, pd_timeline_key, timeline_start_frame, max_id, track_index)
     local FRAME_MATCH_TOLERANCE = 0.5
     local playhead_frames = 0
     local current_max_id = max_id
@@ -713,7 +1005,6 @@ function unify_linked_items_in_project_data(input_otio_path)
 
     local max_link_group_id = 0
     local track_type_counters = {video = 0, audio = 0, subtitle = 0}
-    local timeline_rate = ((otio_data.global_start_time or {}).rate or 24)
     local start_time_value = ((otio_data.global_start_time or {}).value or 0.0)
     local timeline_start_frame = tonumber(start_time_value)
 
@@ -724,7 +1015,7 @@ function unify_linked_items_in_project_data(input_otio_path)
             local current_track_index = track_type_counters[kind]
             local pd_key = string.format("%s_track_items", kind)
             max_link_group_id = math.max(max_link_group_id,
-                process_track_items(track.children or {}, pd_timeline, pd_key, timeline_rate, timeline_start_frame, max_link_group_id, current_track_index)
+                process_track_items(track.children or {}, pd_timeline, pd_key, timeline_start_frame, max_link_group_id, current_track_index)
             )
         end
     end
@@ -820,14 +1111,7 @@ function ProgressTracker:new()
     self._total_weight = 0.0
     self._task_progress = {}
     self._last_report = os.time()
-    -- No thread pool in standard Lua. Updates will be blocking but should be fast.
     return self
-end
-
-function ProgressTracker:shutdown()
-    print("\nShutting down progress updater...")
-    -- No threads to shut down
-    print("Shutdown complete.")
 end
 
 function ProgressTracker:start_new_run(weighted_tasks, task_id)
@@ -855,7 +1139,6 @@ function ProgressTracker:start_new_run(weighted_tasks, task_id)
 end
 
 function ProgressTracker:_report_progress(message)
-    -- In Lua, this will be a blocking call.
     if os.time() - self._last_report > 0.25 then
         send_progress_update(self.task_id, self:get_percentage(), message)
         self._last_report = os.time()
@@ -909,34 +1192,26 @@ function send_message_to_go(message_type, payload, task_id)
     local go_message = {Type = message_type, Payload = payload}
     local json_payload = dkjson.encode(go_message)
 
-    local path = "/msg"
+    local url = "http://localhost:" .. GO_SERVER_PORT .. "/msg"
     if task_id then
-        path = path .. "?task_id=" .. task_id
+        url = url .. "?task_id=" .. task_id
     end
 
-    local response_body = {}
-    local ok, code, headers, status = pcall(http.request, {
-        url = "http://localhost:" .. GO_SERVER_PORT .. path,
-        method = "POST",
-        headers = {
-            ["Content-Type"] = "application/json",
-            ["Content-Length"] = #json_payload
-        },
-        source = ltn12.source.string(json_payload),
-        sink = ltn12.sink.table(response_body)
+    local ok, response_body, code = helpers.http_request("POST", url, {
+        headers = { ["Content-Type"] = "application/json" },
+        body = json_payload
     })
 
-    if ok and code >= 200 and code < 300 then
+    if ok then
         print(string.format("Lua (to Go): Message type '%s' sent. Task id: %s. Go responded: %d", message_type, task_id or "N/A", code))
         return true
     else
-        local err_msg = not ok and code or ("status " .. (code or "nil"))
-        print(string.format("Lua (to Go): Error sending message type '%s'. Go responded with %s: %s", message_type, err_msg, table.concat(response_body)))
+        print(string.format("Lua (to Go): Error sending message type '%s'. Go responded with status %s: %s", message_type, tostring(code), response_body))
         return false
     end
 end
 
-function resolve_import_error_msg(e, task_id)
+local function resolve_import_error_msg(e, task_id)
     print(string.format("Failed to import GetResolve: %s", tostring(e)))
     print("Check and ensure DaVinci Resolve installation is correct.")
 
@@ -947,14 +1222,14 @@ function resolve_import_error_msg(e, task_id)
             message = "Failed to import DaVinci Resolve Lua API.",
             severity = "error",
         },
-        {task_id=task_id}
+        task_id
     )
     return nil
 end
 
 function get_resolve(task_id)
     local resolve_modules_path = ""
-    local platform = "linux" -- Simplified for translation, would need better detection
+    local platform = "linux"
     if os.getenv("OS") == "Windows_NT" then platform = "win"
     elseif os.execute("uname -s"):find("Darwin") then platform = "darwin" end
 
@@ -982,8 +1257,7 @@ function get_resolve(task_id)
 
     local resolve_obj = bmd.scriptapp("Resolve")
     if not resolve_obj then
-        -- In some environments, `resolve` is a global variable
-        local ok_global, _ = pcall(function() return resolve end)
+        local ok_global, _ = pcall(function() return _G.resolve end)
         if ok_global and _G.resolve then
             resolve_obj = _G.resolve
         else
@@ -1004,7 +1278,6 @@ function export_timeline_to_otio(timeline, file_path)
         return
     end
 
-    -- Assuming EXPORT_OTIO is a constant provided by the Resolve API
     local success = timeline:Export(file_path, RESOLVE.EXPORT_OTIO, 1) -- '1' for OTIO
     if success then
         print(string.format("Timeline exported successfully to %s", file_path))
@@ -1012,19 +1285,9 @@ function export_timeline_to_otio(timeline, file_path)
         print("Failed to export timeline.")
     end
 end
-
-function switch_to_page(page)
-    if not RESOLVE then return end
-    local current_page = RESOLVE:GetCurrentPage()
-    if current_page ~= page then
-        RESOLVE:OpenPage(page)
-        print(string.format("Switched to %s page.", page))
-    else
-        print(string.format("Already on %s page.", page))
-    end
 end
 
-function get_item_id(item, item_name, start_frame, track_type, track_index)
+local function get_item_id(item_name, start_frame, track_type, track_index)
     return string.format("%s-%s-%d--%f", item_name, track_type, track_index, start_frame)
 end
 
@@ -1051,7 +1314,7 @@ function get_items_by_tracktype(track_type, timeline)
                 bmd_item = item_bmd, bmd_mpi = media_pool_item,
                 duration = 0, name = item_name, edit_instructions = {},
                 start_frame = start_frame, end_frame = item_bmd:GetEnd(),
-                id = get_item_id(item_bmd, item_name, start_frame, track_type, i),
+                id = get_item_id(item_name, start_frame, track_type, i),
                 track_type = track_type, track_index = i,
                 source_file_path = source_file_path, processed_file_name = nil,
                 source_start_frame = source_start_float, source_end_frame = source_end_float,
@@ -1070,7 +1333,7 @@ function get_items_by_tracktype(track_type, timeline)
     return items
 end
 
-function _verify_timeline_state(timeline, expected_clips, attempt_num)
+function _verify_timeline_state(timeline, expected_clips)
     print("Verifying timeline state...")
     TRACKER:update_task_progress("verify", 1.0, "Verifying")
     
@@ -1117,8 +1380,6 @@ function _verify_timeline_state(timeline, expected_clips, attempt_num)
         end
         return false
     end
-end
-
 function generate_uuid_from_nested_clips(top_level_item, nested_clips)
     local bmd_item = top_level_item.bmd_mpi
     local seed_string = bmd_item and string.format("bmd_id:%s;", bmd_item:GetUniqueId()) or "bmd_id:<unknown>;"
@@ -1137,10 +1398,10 @@ function generate_uuid_from_nested_clips(top_level_item, nested_clips)
 
     seed_string = seed_string .. "nested_clips[" .. table.concat(nested_strings, "||") .. "]"
     
-    return uuid.new(seed_string, "dns")
+    return uuid_from_path(seed_string)
 end
 
-function mixdown_compound_clips(audio_timeline_items, fps, curr_processed_file_names)
+function mixdown_compound_clips(audio_timeline_items, _, curr_processed_file_names)
     local content_map = {}
     for _, item in ipairs(audio_timeline_items) do
         if item.type and item.nested_clips and #item.nested_clips > 0 then
@@ -1177,94 +1438,6 @@ function mixdown_compound_clips(audio_timeline_items, fps, curr_processed_file_n
     end
 end
 
-function main_logic.get_project_data(project, timeline)
-    local timeline_name = timeline:GetName()
-    local timeline_fps = timeline:GetSetting("timelineFrameRate")
-    local video_track_items = get_items_by_tracktype("video", timeline)
-    local audio_track_items = get_items_by_tracktype("audio", timeline)
-
-    local tl_dict = {
-        name = timeline_name,
-        fps = timeline_fps,
-        start_timecode = timeline:GetStartTimecode(),
-        curr_timecode = timeline:GetCurrentTimecode(),
-        video_track_items = video_track_items,
-        audio_track_items = audio_track_items,
-    }
-    PROJECT_DATA = {
-        project_name = project:GetName(),
-        timeline = tl_dict,
-        files = {},
-    }
-
-    local has_complex_clips = false
-    for _, item in ipairs(audio_track_items) do
-        if item.type then has_complex_clips = true; break end
-    end
-
-    if has_complex_clips then
-        print("Complex clips found. Analyzing timeline structure with OTIO...")
-        local input_otio_path = helpers.path_join(TEMP_DIR, "temp-timeline.otio")
-        export_timeline_to_otio(timeline, input_otio_path)
-        populate_nested_clips(input_otio_path)
-    end
-
-    print("Analyzing timeline items and audio channel mappings...")
-    for _, item in ipairs(audio_track_items) do
-        if item.source_file_path and item.source_file_path ~= "" then
-            local source_path = item.source_file_path
-            local source_uuid = uuid_from_path(source_path)
-
-            item.source_channel = 0 -- Default
-            item.processed_file_name = string.format("%s.wav", source_uuid)
-
-            local ok, mapping_str = pcall(function() return item.bmd_item:GetSourceAudioChannelMapping() end)
-            if ok and mapping_str and mapping_str ~= "" then
-                local s, mapping = pcall(dkjson.decode, mapping_str)
-                if s then
-                    local clip_track_map = ((mapping.track_mapping or {})["1"] or {})
-                    local clip_type = clip_track_map.type
-                    local channel_indices = clip_track_map.channel_idx or {}
-                    if clip_type and string.lower(clip_type) == "mono" and #channel_indices == 1 then
-                        local channel_num = channel_indices[1]
-                        print(string.format("Detected clip '%s' using specific source channel: %d", item.name, channel_num))
-                        item.source_channel = channel_num
-                        item.processed_file_name = string.format("%s_ch%d.wav", source_uuid, channel_num)
-                    end
-                end
-            else
-                 print(string.format("Warning: Could not get audio mapping for '%s'. Defaulting to mono mixdown. Error: %s", item.name, tostring(mapping_str)))
-            end
-        end
-    end
-    
-    for _, item in ipairs(audio_track_items) do
-        local source_path = item.source_file_path
-        if source_path and source_path ~= "" then
-            if not PROJECT_DATA.files[source_path] then
-                PROJECT_DATA.files[source_path] = {
-                    properties = { FPS = timeline_fps },
-                    processed_audio_path = nil,
-                    timelineItems = {},
-                    fileSource = {
-                        file_path = source_path,
-                        uuid = uuid_from_path(source_path),
-                        bmd_media_pool_item = item.bmd_mpi,
-                    },
-                    silenceDetections = nil,
-                }
-            end
-        end
-    end
-    
-    if has_complex_clips then
-        print("Complex clips found...")
-        mixdown_compound_clips(audio_track_items, timeline_fps, {})
-    end
-
-    print("Lua-side analysis complete.")
-    return true, nil
-end
 
 function apply_edits_from_go(target_project, source_project)
     print("Applying edit instructions from Go...")
@@ -1314,148 +1487,10 @@ function send_progress_update(task_id, progress, message)
     send_message_to_go("taskUpdate", response_payload, task_id)
 end
 
-function setTimecode(timecode, task_id)
+function setTimecode(timecode)
     if not timecode then return false end
     if not RESOLVE or not TIMELINE then return false end
     return TIMELINE:SetCurrentTimecode(timecode)
-end
-
-function main_logic.run(sync, task_id)
-    local script_start_time = os.time()
-    print("running main function...")
-
-    if not sync then
-        TRACKER:start_new_run(TASKS, task_id)
-        TRACKER:update_task_progress("init", 0.1, "Preparing")
-    end
-
-    if not RESOLVE then
-        task_id = task_id or ""
-        get_resolve(task_id)
-    end
-    if not RESOLVE then
-        print("could not get resolve object")
-        PROJECT_DATA = {}
-        send_result_with_alert("DaVinci Resolve Error", "Could not connect to DaVinci Resolve. Is it running?", task_id)
-        send_message_to_go("projectData", PROJECT_DATA)
-        return false
-    end
-
-    if not RESOLVE:GetProjectManager() then
-        print("no project")
-        PROJECT = nil
-        send_result_with_alert("DaVinci Resolve Error", "Could not connect to DaVinci Resolve. Is it running?", task_id)
-        return false
-    end
-
-    PROJECT = RESOLVE:GetProjectManager():GetCurrentProject()
-
-    if not PROJECT then
-        PROJECT_DATA = nil
-        MEDIA_POOL = nil
-        local message = "Please open a project and open a timeline."
-        local response_payload = {
-            status = "error", message = message, shouldShowAlert = true,
-            alertTitle = "No open project", alertMessage = message, alertSeverity = "error",
-        }
-        send_message_to_go("taskResult", response_payload, task_id)
-        send_message_to_go("projectData", PROJECT_DATA)
-        return false
-    end
-
-    TIMELINE = PROJECT:GetCurrentTimeline()
-    if not TIMELINE then
-        PROJECT_DATA = nil
-        local message = "Please open a timeline."
-        local response_payload = {
-            status = "error", message = message, data = PROJECT_DATA, shouldShowAlert = true,
-            alertTitle = "No Open Timeline", alertMessage = message, alertSeverity = "error",
-        }
-        send_message_to_go("taskResult", response_payload, task_id)
-        return false
-    end
-
-    local input_otio_path = helpers.path_join(TEMP_DIR, "temp-timeline.otio")
-
-    if sync or not PROJECT_DATA then
-        local success, alert_title = main_logic.get_project_data(PROJECT, TIMELINE)
-        if not success then
-            alert_title = alert_title or "Sync error"
-            local response_payload = {
-                status = "error", message = alert_title, shouldShowAlert = true,
-                alertTitle = alert_title, alertMessage = "", alertSeverity = "error",
-            }
-            print(dkjson.encode(response_payload))
-            local output_dir = helpers.path_join(TEMP_DIR, "debug_project_data.json")
-            print(string.format("exporting debug json to %s", output_dir))
-            export_to_json(PROJECT_DATA, output_dir)
-            send_message_to_go("taskResult", response_payload, task_id)
-            return
-        end
-    end
-
-    if sync then
-        local output_dir = helpers.path_join(TEMP_DIR, "debug_project_data.json")
-        print(string.format("exporting debug json to %s", output_dir))
-        export_to_json(PROJECT_DATA, output_dir)
-
-        print("just syncing, exiting")
-        print(string.format("it took %.2f seconds for script to finish", os.time() - script_start_time))
-
-        local response_payload = {
-            status = "success",
-            message = "Sync successful!",
-            data = make_project_data_serializable(PROJECT_DATA),
-        }
-
-        send_message_to_go("taskResult", response_payload, task_id)
-        export_timeline_to_otio(TIMELINE, input_otio_path)
-        print(string.format("Exported timeline to OTIO in %s", input_otio_path))
-        return
-    end
-
-    if not PROJECT_DATA then
-        local alert_message = "An unexpected error happened during sync. Could not get project data from Davinci."
-        send_result_with_alert("unexpected sync error", alert_message, task_id)
-        return
-    end
-
-    -- safety check: do we have bmd items?
-    local all_timeline_items = {}
-    for _, item in ipairs(PROJECT_DATA.timeline.video_track_items) do table.insert(all_timeline_items, item) end
-    for _, item in ipairs(PROJECT_DATA.timeline.audio_track_items) do table.insert(all_timeline_items, item) end
-
-    if #all_timeline_items == 0 then
-        print("critical error, can't continue")
-        local alert_message = "An unexpected error happened during sync. Could not get timeline items from Davinci."
-        send_result_with_alert("unexpected sync error", alert_message, task_id)
-        return
-    end
-
-    local some_bmd_item = all_timeline_items[1].bmd_item
-    if not some_bmd_item or type(some_bmd_item) == "string" then
-        print("critical error, can't continue")
-        return
-    end
-
-    unify_linked_items_in_project_data(input_otio_path)
-
-    TRACKER:complete_task("prepare")
-    TRACKER:update_task_progress("append", 1.0, "Adding Clips to Timeline")
-
-    append_and_link_timeline_items(MAKE_NEW_TIMELINE, task_id)
-
-    TRACKER:complete_task("append")
-
-    local execution_time = os.time() - script_start_time
-    print(string.format("it took %.2f s to complete", execution_time))
-
-    local response_payload = {
-        status = "success",
-        message = "Edit successful!",
-    }
-
-    send_message_to_go("taskResult", response_payload, task_id)
 end
 
 function _append_clips_to_timeline(timeline, media_pool, timeline_items)
@@ -1654,14 +1689,15 @@ function append_and_link_timeline_items(create_new_timeline, task_id)
         local expected_clip_infos = {}
         for _, item in ipairs(processed_clips) do table.insert(expected_clip_infos, item.clip_info) end
 
-        if _verify_timeline_state(TIMELINE, expected_clip_infos, attempt) then
+        if _verify_timeline_state(TIMELINE, expected_clip_infos) then
             TRACKER:complete_task("verify")
             print("Verification successful. Proceeding to modify and link.")
 
             local auto_linked_keys = {}
             for _, clip in ipairs(processed_clips) do if clip.auto_linked then auto_linked_keys[clip.link_key] = true end end
             if next(auto_linked_keys) then
-                print(string.format("Identified %d auto-linked groups to skip for manual linking.", table.getn(auto_linked_keys)))
+                local count = 0; for _ in pairs(auto_linked_keys) do count = count + 1 end
+                print(string.format("Identified %d auto-linked groups to skip for manual linking.", count))
             end
 
             local link_key_lookup = {}
@@ -1736,11 +1772,11 @@ function append_and_link_timeline_items(create_new_timeline, task_id)
             break
         else
             print(string.format("Attempt %d failed. Rolling back changes...", attempt))
-            if #bmd_items_from_api > 0 then
+            if bmd_items_from_api and #bmd_items_from_api > 0 then
                 TIMELINE:DeleteClips(bmd_items_from_api, false)
             end
             if attempt < num_retries then
-                socket.sleep(sleep_time_between)
+                helpers.sleep(sleep_time_between)
                 sleep_time_between = sleep_time_between + 1.5
             end
         end
@@ -1751,232 +1787,138 @@ function append_and_link_timeline_items(create_new_timeline, task_id)
     end
 end
 
-function signal_go_ready(go_port)
-    local ready_url = string.format("http://localhost:%d/ready", go_port)
-    local max_retries = 5
-    local retry_delay_seconds = 2
+--region New Command Processing and Main Loop (replaces server)
 
-    print(string.format("Lua Backend: Attempting to signal Go server at %s", ready_url))
+--- This function replaces the old server logic. It is called when a command is received from Go.
+---@param command_data table The full command object from Go.
+function process_go_command(command_data)
+    if not command_data or not command_data.command then
+        print("Received invalid command from Go.")
+        return
+    end
 
-    for attempt = 1, max_retries do
-        local response_body = {}
-        local ok, code = pcall(http.request, {
-            url = ready_url,
-            method = "GET",
-            sink = ltn12.sink.table(response_body)
-        })
+    local command = command_data.command
+    local params = command_data.params or {}
+    local task_id = params.taskId
 
-        if ok and code >= 200 and code < 300 then
-            print(string.format("Lua Backend: Successfully signaled Go server. Status: %d", code))
-            print("Lua Backend: Go server response:", table.concat(response_body))
-            return true
-        else
-            local err_msg = not ok and code or ("status " .. (code or "nil"))
-            print(string.format("Lua Backend: Error signaling Go (attempt %d/%d): %s", attempt, max_retries, err_msg))
-            if attempt < max_retries then
-                print(string.format("Lua Backend: Retrying in %d seconds...", retry_delay_seconds))
-                socket.sleep(retry_delay_seconds)
-            else
-                print(string.format("Lua Backend: Failed to signal Go server after %d attempts.", max_retries))
-                return false
-            end
+    print(string.format("Received command '%s' with task ID '%s'", command, task_id or "N/A"))
+
+    if command == "sync" then
+        main_logic.run(true, task_id)
+    elseif command == "makeFinalTimeline" then
+        local project_data_from_go = params.projectData
+        MAKE_NEW_TIMELINE = params.makeNewTimeline == nil or params.makeNewTimeline
+        if not project_data_from_go then
+            print("Error: Missing projectData for makeFinalTimeline command.")
+            send_result_with_alert("Lua Error", "Missing projectData parameter.", task_id)
+            return
         end
-    end
-    return false
-end
-
--- HTTP Server Implementation
-local server_logic = {}
-
-function server_logic.send_json_response(client, status_code, data_dict)
-    local status_map = { [200]="OK", [400]="Bad Request", [401]="Unauthorized", [404]="Not Found", [500]="Internal Server Error" }
-    local body = dkjson.encode(data_dict)
-    client:send(string.format("HTTP/1.1 %d %s\r\n", status_code, status_map[status_code] or "OK"))
-    client:send("Content-Type: application/json\r\n")
-    client:send(string.format("Content-Length: %d\r\n", #body))
-    client:send("\r\n")
-    client:send(body)
-end
-
-function server_logic.handle_request(client)
-    local line, err = client:receive()
-    if not line then print("Could not read request line:", err); return end
-    
-    local method, path = line:match("^(%S+) (%S+)")
-    
-    local headers = {}
-    while true do
-        line, err = client:receive()
-        if not line or line == "" then break end
-        local h, v = line:match("^([%w-]+):%s*(.*)$")
-        if h then headers[string.lower(h)] = v end
-    end
-    
-    local body = nil
-    if headers["content-length"] then
-        body, err = client:receive(tonumber(headers["content-length"]))
-        if not body then print("Could not read request body:", err); return end
-    end
-    
-    -- Routing
-    if method == "POST" then
-        if path == "/register" then
-            local ok, data = pcall(dkjson.decode, body)
-            if ok and data.go_server_port then
-                GO_SERVER_PORT = data.go_server_port
-                print(string.format("Lua Command Server: Registered Go server on port %d", GO_SERVER_PORT))
-                server_logic.send_json_response(client, 200, {status="success", message="Go server registered."})
-            else
-                server_logic.send_json_response(client, 400, {status="error", message="Invalid or missing JSON body or 'go_server_port'."})
-            end
-        elseif path == "/shutdown" then
-            print("Lua Command Server: Received shutdown signal from Go. Exiting.")
-            server_logic.send_json_response(client, 200, {status="success", message="Shutdown acknowledged."})
-            SHUTDOWN_FLAG = true
-        elseif path:match("^/command") then
-            local ok, data = pcall(dkjson.decode, body)
-            if not ok then
-                server_logic.send_json_response(client, 400, {status="error", message="Invalid JSON format."})
-                return
-            end
-            
-            local command = data.command
-            local params = data.params or {}
-            local task_id = params.taskId
-
-            if command == "sync" then
-                server_logic.send_json_response(client, 200, {status="success", message="Sync command received."})
-                main_logic.run(true, task_id)
-            elseif command == "makeFinalTimeline" then
-                local project_data_from_go = params.projectData
-                MAKE_NEW_TIMELINE = params.makeNewTimeline == nil or params.makeNewTimeline
-                if not project_data_from_go then
-                    server_logic.send_json_response(client, 400, {status="error", message="Missing projectData."})
-                    return
-                end
-                server_logic.send_json_response(client, 200, {status="success", message="Final timeline generation started."})
-                if PROJECT_DATA then
-                    apply_edits_from_go(PROJECT_DATA, project_data_from_go)
-                else
-                    PROJECT_DATA = project_data_from_go
-                end
-                main_logic.run(false, task_id)
-            elseif command == "setPlayhead" then
-                local time_value = params.time
-                if time_value and setTimecode(time_value, task_id) then
-                    server_logic.send_json_response(client, 200, {status="success", message="Playhead set to " .. time_value .. "."})
-                else
-                    server_logic.send_json_response(client, 400, {status="error", message="Could not set playhead."})
-                end
-            else
-                server_logic.send_json_response(client, 400, {status="error", message="Unknown command: " .. tostring(command)})
-            end
+        if PROJECT_DATA then
+            apply_edits_from_go(PROJECT_DATA, project_data_from_go)
         else
-            server_logic.send_json_response(client, 404, {status="error", message="Endpoint not found."})
+            PROJECT_DATA = project_data_from_go
+        end
+        main_logic.run(false, task_id)
+    elseif command == "setPlayhead" then
+        local time_value = params.time
+        if not setTimecode(time_value) then
+             print("Could not set playhead.")
         end
     else
-        server_logic.send_json_response(client, 404, {status="error", message="Endpoint not found."})
+        print("Unknown command from Go: " .. tostring(command))
     end
 end
 
-function find_free_port()
-    local server = socket.tcp()
-    local ok, err = server:bind("127.0.0.1", 0)
-    if not ok then return nil, err end
-    local ip, port = server:getsockname()
-    server:close()
-    return port
+--- Polls the Go server for the next command using long polling.
+---@param go_port number The port the Go server is listening on.
+---@return table|nil command_data, string|nil command_name
+function poll_go_for_command(go_port)
+    local url = string.format("http://localhost:%d/lua/get-command", go_port)
+    -- Use a long timeout to allow for long polling on the server side
+    local ok, body, code = helpers.http_request("GET", url, { timeout = 60 })
+    
+    if not ok then
+        if code == -1 then
+            -- A code of -1 from our helper means curl failed to execute or connect.
+            -- This is a strong indicator that the Go application has terminated.
+            print("Connection to Go server lost. Assuming shutdown.")
+            return { command = "shutdown" }, "shutdown"
+        end
+        return nil, nil
+    end
+
+    if code == 204 then -- HTTP 204 No Content
+        return nil, nil
+    end
+
+    local s, data = pcall(dkjson.decode, body)
+    if not s then
+        print("Failed to decode command from Go:", body)
+        return nil, nil
+    end
+
+    return data, data.command
 end
+
+--- The main loop that replaces the HTTP server. It polls Go for commands.
+function main_command_loop()
+    print("Lua Backend: Entering main command loop, polling Go server.")
+    local running = true
+    while running do
+        local data, command = poll_go_for_command(GO_SERVER_PORT)
+        if command then
+            if command == "shutdown" then
+                print("Lua Backend: Received shutdown command. Exiting.")
+                running = false
+            else
+                local ok, err = pcall(process_go_command, data)
+                if not ok then
+                    print(string.format("ERROR processing command '%s': %s", command, tostring(err)))
+                    local task_id = data and data.params and data.params.taskId
+                    send_result_with_alert("Lua Script Error", "An error occurred: " .. tostring(err), task_id)
+                end
+            end
+        end
+    end
+    print("Lua Backend: Exited main command loop.")
+
+--endregion
 
 function init()
     local args = {}
     for i, v in ipairs(arg) do
         if v == "-gp" or v == "--go-port" then args.go_port = tonumber(arg[i+1])
-        elseif v == "-lp" or v == "--listen-on-port" then args.listen_on_port = tonumber(arg[i+1])
-        elseif v == "--ffmpeg" then FFMPEG = arg[i+1]
         elseif v == "--standalone" then STANDALONE_MODE = true
-        elseif v == "--wails-dev" then args.wails_dev = true
         end
     end
 
-    GO_SERVER_PORT = args.go_port or 0
-    FFMPEG = args.ffmpeg or "ffmpeg"
-
-    PYTHON_LISTEN_PORT = args.listen_on_port or find_free_port()
-    print(string.format("Lua Backend: Listening for Go commands on http://127.0.0.1:%d", PYTHON_LISTEN_PORT))
+    GO_SERVER_PORT = args.go_port or 8080
 
     if STANDALONE_MODE then
         main_logic.run(false)
         return
     end
 
-    if GO_SERVER_PORT == 0 then
-        print("Lua Backend: Go application did not yet start. Starting it...")
-        local go_app_path = nil
-        local platform_key = os.getenv("OS") == "Windows_NT" and "win" or "linux" -- Simplified
-        
-        local potential_paths = {}
-        if platform_key == "win" then
-            potential_paths = {
-                helpers.path_join(SCRIPT_DIR, "HushCut.exe"),
-                helpers.path_join(SCRIPT_DIR, "..", "..", "build", "bin", "HushCut.exe")
-            }
-        else -- linux/darwin
-            potential_paths = {
-                helpers.path_join(SCRIPT_DIR, "HushCut"),
-                helpers.path_join(SCRIPT_DIR, "..", "..", "build", "bin", "HushCut")
-            }
+    print(string.format("Lua Backend: Waiting for Go server to be ready on port %d...", GO_SERVER_PORT))
+    local ready = false
+    for i = 1, 30 do
+        local ok, _, code = helpers.http_request("GET", string.format("http://localhost:%d/health", GO_SERVER_PORT))
+        if ok and code == 200 then
+            print("Lua Backend: Go server is ready.")
+            ready = true
+            break
         end
-        
-        for _, path in ipairs(potential_paths) do
-            if lfs.attributes(path) then
-                go_app_path = path
-                print(string.format("Lua Backend: Found binary at: %s", go_app_path))
-                break
-            end
-        end
-
-        if not go_app_path then
-            print("Lua Backend: Error: Go Wails application 'HushCut' not found.")
-        else
-            local go_command = string.format('"%s" --python-port %d', go_app_path, PYTHON_LISTEN_PORT)
-            print(string.format("Lua Backend: Launching Go with command: %s", go_command))
-            os.execute(go_command .. " &") -- Run in background
-        end
-    else
-        if not signal_go_ready(GO_SERVER_PORT) then
-            print("Lua Backend: CRITICAL - Could not signal main readiness to Go application.")
-        else
-            print("Lua Backend: Successfully signaled main readiness to Go application.")
-        end
+        print(string.format("Lua Backend: Waiting... (attempt %d/30)", i))
+        helpers.sleep(1)
     end
 
-    local server, err = socket.bind("127.0.0.1", PYTHON_LISTEN_PORT)
-    if not server then
-        print("Could not start server:", err)
+    if not ready then
+        print("Lua Backend: Go server did not become ready. Exiting.")
         return
     end
-    server:settimeout(1) -- 1-second timeout to allow checking SHUTDOWN_FLAG
 
-    print("Lua Backend: Running. Command server is active.")
-    while not SHUTDOWN_FLAG do
-        local client = server:accept()
-        if client then
-            local ok, err = pcall(server_logic.handle_request, client)
-            if not ok then
-                print("Error handling request:", err)
-            end
-            client:close()
-        end
-    end
-    
-    print("Lua Backend: Exiting main loop.")
-    server:close()
-    print("Lua Backend: HTTP server shut down.")
-    print("Lua Backend: Exiting.")
+    main_command_loop()
 end
 
--- Script Entry Point
-local script_time = os.time()
+-- Entry point
 init()
-print(string.format("Total script execution time: %.2f seconds.", os.time() - script_time))
