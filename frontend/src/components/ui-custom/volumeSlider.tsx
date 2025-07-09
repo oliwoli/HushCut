@@ -77,8 +77,7 @@ export function _ThresholdSlider({
 
       <div className="relative h-full bottom-0 bg-zinc-950/80 border-1 border-black drop-shadow-zinc-700 drop-shadow-xs w-1 z-0 right-[18px] rounded-xs"></div>
 
-      {/* --- MODIFIED TICK AND LABEL RENDERING --- */}
-      <div className="relative h-[99.3%] mb-[5px] ml-0 top-[4px] right-3 font-mono px-1">
+      <div className="relative h-[97.8%] ml-0 top-0 mt-[3.2525%] right-3 font-mono px-1">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {
           const dB = actualMinDb + i;
           const pct =
