@@ -1635,10 +1635,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
                 "alertSeverity": "error",
             }
             print(response_payload)
-            output_dir = os.path.join(TEMP_DIR, "debug_project_data.json")
-
-            print(f"exporting debug json to {output_dir}")
-            export_to_json(PROJECT_DATA, output_dir)
             send_message_to_go("taskResult", response_payload, task_id=task_id)
             return
 

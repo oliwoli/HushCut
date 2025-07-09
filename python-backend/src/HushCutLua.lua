@@ -691,9 +691,11 @@ local json = (function()
   return internal_json_module
 end)()
 
-
-
 local go_server_port = nil
+local script_path = debug.getinfo(1, "S").source:sub(2)
+local script_dir = script_path:gsub("[^/\\]+$", "")
+local TEMP_DIR = script_dir .. "temp"
+
 
 ---
 -- Sends a JSON message to the Go server via an HTTP POST request.
@@ -708,6 +710,7 @@ local function send_message_to_go(message_type, payload, task_id)
     return false
   end
 
+
   local go_message = { Type = message_type, Payload = payload }
 
   -- Create a state table with a custom exception handler for the JSON encoder.
@@ -717,7 +720,7 @@ local function send_message_to_go(message_type, payload, task_id)
       if reason == 'unsupported type' then
         -- Fallback to string representation for any unsupported type (like userdata).
         -- We must quote the string to make it a valid JSON string value.
-        return json.quotestring(tostring(value))
+        return json.quotestring(tostring("<BMD_Object>"))
       end
       -- For any other error, re-raise it to halt execution.
       error(defaultmessage, 0)
@@ -733,7 +736,6 @@ local function send_message_to_go(message_type, payload, task_id)
     return false
   end
 
-  json_payload = json_payload:gsub("'", "'\\''")
 
   local path = "/msg"
   if task_id then
@@ -741,9 +743,26 @@ local function send_message_to_go(message_type, payload, task_id)
   end
   local url = "http://localhost:" .. go_server_port .. path
 
+  --json_payload = json_payload:gsub("'", "'\\''")
+  -- local escaped_payload = json_payload:gsub('"', '\\"')
+  -- local command = string.format(
+  --   'curl -s -X POST -H "Content-Type: application/json" -d "%s" "%s" -w "\\n%%{http_code}"',
+  --   escaped_payload,
+  --   url
+  -- )
+
+  local tmp_filename = TEMP_DIR .. "/payload.json"
+  local f = io.open(tmp_filename, "w")
+  if not f then
+    print("Lua (to Go): Failed to open temp file for payload.")
+    return false
+  end
+  f:write(json_payload)
+  f:close()
+
   local command = string.format(
-    "curl -s -X POST -H \"Content-Type: application/json\" -d '%s' %s -w \"\\n%%{http_code}\"",
-    json_payload,
+    'curl -s -X POST -H "Content-Type: application/json" --data-binary "@%s" "%s" -w "\\n%%{http_code}"',
+    tmp_filename,
     url
   )
 
@@ -779,11 +798,14 @@ local function send_message_to_go(message_type, payload, task_id)
   end
 end
 
+
 local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSeverity)
   if not go_server_port then
     print("Lua Error: Go server port not configured. Cannot send result with alert.")
     return false
   end
+
+
 
   -- Construct the message payload
   local payload = {
@@ -795,16 +817,22 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
     alertSeverity = alertSeverity or "error",
   }
 
+
+
   -- Send the message to the Go server
   return send_message_to_go("taskResult", payload, task_id)
 end
 
 
 
+
+
+
+
 local os_type = jit.os
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:gsub("[^/\\]+$", "")
 local potential_paths
+
+
 
 if os_type == "OSX" then
   potential_paths = {
@@ -824,6 +852,8 @@ else
   }
 end
 
+
+
 local go_app_path = nil
 for _, path in ipairs(potential_paths) do
   local f = io.open(path, "r")
@@ -833,6 +863,8 @@ for _, path in ipairs(potential_paths) do
     break
   end
 end
+
+
 
 local function find_free_port(go_script_path)
   local handle = io.popen(go_script_path .. " --find-port")
@@ -847,11 +879,16 @@ local function find_free_port(go_script_path)
 end
 
 
+
+
+
 local function get_resolve()
   local success, result = pcall(function()
     ---@diagnostic disable-next-line: undefined-global
     return Resolve()
   end)
+
+
 
   if success and result then
     return result
@@ -862,8 +899,12 @@ local function get_resolve()
   end
 end
 
+
+
 local go_script_path = script_dir .. "lua-go-http"
 local free_port = find_free_port(go_script_path)
+
+
 
 ---@diagnostic disable-next-line: undefined-global
 local resolve = get_resolve()
@@ -876,6 +917,8 @@ local project = nil
 local media_pool = nil
 local timeline = nil
 
+
+
 if resolve then
   pm = resolve:GetProjectManager()
   if pm then
@@ -887,20 +930,21 @@ if resolve then
   end
 end
 
-local TEMP_DIR = script_dir .. "temp"
+
+
 if not os.execute("mkdir -p " .. TEMP_DIR) then
   print("Failed to create temp directory: " .. TEMP_DIR)
   return
 end
 local make_new_timeline = true
 local MAX_RETRIES = 100
-
 local project_data = nil
 
 if not resolve then
   print("Resolve not found. Make sure this script is run inside DaVinci Resolve.")
   return
 end
+
 
 
 local bit = require("bit") -- assumes LuaBitOp or LuaJIT's bit library
@@ -937,6 +981,7 @@ local function uuid(seed)
 end
 
 
+
 -- Placeholder for a function that creates a UUID from a file path.
 local function uuid_from_path(path)
   -- call the script with --uuid-from-str <path>
@@ -957,6 +1002,8 @@ local function uuid_from_path(path)
   end
 end
 
+
+
 ---
 -- Creates a unique identifier for a timeline item based on the Python implementation.
 -- @param bmd_item (bmd.TimelineItem) The timeline item object from Resolve (unused).
@@ -967,20 +1014,11 @@ end
 -- @return (string) A unique identifier string.
 --
 local function get_item_id(bmd_item, item_name, start_frame, track_type, track_index)
-  -- This creates an ID like: "MyClip-video-1--108000.0"
-  return string.format("%s-%s-%d--%f", item_name, track_type, track_index, start_frame)
+  -- This creates an ID like: "MyClip-video-1--120"
+  return string.format("%s-%s-%d--%d", item_name, track_type, track_index, start_frame)
 end
 
--- =============================================================================
--- NEW CORE LOGIC FUNCTIONS
--- =============================================================================
 
----
--- Generates a deterministic, content-based UUID for a compound or multicam clip.
--- @param top_level_item (table) The timeline item for the compound/multicam clip.
--- @param nested_clips (table) The list of resolved nested audio clips.
--- @return (string) A unique and stable UUID string based on the clip's content.
---
 local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
   -- 1. Start with the top-level clip's unique properties.
   local bmd_item = top_level_item.bmd_mpi
@@ -1062,7 +1100,7 @@ end
 ---
 -- Gathers all items of a specific type (video or audio) from the timeline.
 -- @param track_type (string) The type of track to scan ("video" or "audio").
--- @param bmd_timeline (bmd.Timeline) The current timeline object.
+-- @param timeline (bmd.Timeline) The current timeline object.
 -- @return (table) A list of timeline item tables.
 --
 local function get_items_by_tracktype(track_type, bmd_timeline)
@@ -1073,10 +1111,9 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
     local track_items = bmd_timeline:GetItemListInTrack(track_type, i)
     if track_items then
       for _, item_bmd in ipairs(track_items) do
-        local media_pool_item = item_bmd:GetMediaPoolItem()
-        -- Ensure frame numbers are treated as floats for consistency
         local start_frame = tonumber(item_bmd:GetStart(true)) + 0.0
         local item_name = item_bmd:GetName()
+        local media_pool_item = item_bmd:GetMediaPoolItem()
         local left_offset = tonumber(item_bmd:GetLeftOffset(true)) + 0.0
         local duration = tonumber(item_bmd:GetDuration(true)) + 0.0
         local source_start_float = left_offset
@@ -1087,14 +1124,19 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           source_file_path = media_pool_item:GetClipProperty("File Path") or ""
         end
 
+        print("source start float: " .. tostring(source_start_float) ..
+          ", source end float: " .. tostring(source_end_float) ..
+          ", left offset: " .. tostring(left_offset) ..
+          ", duration: " .. tostring(duration))
+
         local timeline_item = {
           bmd_item = item_bmd,
           bmd_mpi = media_pool_item,
-          duration = 0.0, -- unused, therefore 0
+          duration = 0, -- unused, therefore 0
           name = item_name,
           edit_instructions = {},
           start_frame = start_frame,
-          end_frame = tonumber(item_bmd:GetEnd(true)) + 0.0,
+          end_frame = item_bmd:GetEnd(true),
           id = get_item_id(item_bmd, item_name, start_frame, track_type, i),
           track_type = track_type,
           track_index = i,
@@ -1102,8 +1144,8 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           processed_file_name = nil,
           source_start_frame = source_start_float,
           source_end_frame = source_end_float,
-          source_channel = 0, -- Default value, added for all items for consistency
-          link_group_id = nil,
+          source_channel = 0, -- Default value
+          link_group_id = json.null,
           type = nil,
           nested_clips = {},
         }
@@ -1144,17 +1186,18 @@ end
 --
 local function get_project_data(project, timeline)
   -- --- 1. Initial Data Gathering ---
-  local video_track_items = get_items_by_tracktype("video", timeline)
   local audio_track_items = get_items_by_tracktype("audio", timeline)
 
-  PROJECT_DATA = {
+
+
+  project_data = {
     project_name = project:GetName(),
     timeline = {
       name = timeline:GetName(),
       fps = timeline:GetSetting("timelineFrameRate"),
       start_timecode = timeline:GetStartTimecode(),
       curr_timecode = timeline:GetCurrentTimecode(),
-      video_track_items = video_track_items,
+      video_track_items = get_items_by_tracktype("video", timeline),
       audio_track_items = audio_track_items,
     },
     files = {},
@@ -1168,18 +1211,23 @@ local function get_project_data(project, timeline)
     end
   end
 
+
+
   if has_complex_clips then
     print("Complex clips found. Analyzing timeline structure with OTIO...")
     local input_otio_path = TEMP_DIR .. "/temp-timeline.otio"
     export_timeline_to_otio(timeline, input_otio_path)
-    populate_nested_clips(input_otio_path) -- This should populate PROJECT_DATA
+    populate_nested_clips(input_otio_path) -- This should populate project_data
   end
+
+
 
   -- --- 2. Analyze Mappings & Define Streams ---
   print("Analyzing timeline items and audio channel mappings...")
   for _, item in ipairs(audio_track_items) do
     if item.source_file_path and item.source_file_path ~= "" then
       local source_uuid = uuid_from_path(item.source_file_path)
+      item.source_channel = 0 -- Default
       item.processed_file_name = source_uuid .. ".wav"
 
       local success, mapping_str = pcall(function() return item.bmd_item:GetSourceAudioChannelMapping() end)
@@ -1205,21 +1253,20 @@ local function get_project_data(project, timeline)
   end
 
   -- --- 3. Populate the 'files' map ---
-  -- CORRECTED: This loop now ONLY iterates over audio_track_items to match the Python script's logic.
   for _, item in ipairs(audio_track_items) do
     local source_path = item.source_file_path
     if source_path and source_path ~= "" then
-      if not PROJECT_DATA.files[source_path] then
-        PROJECT_DATA.files[source_path] = {
-          properties = { FPS = PROJECT_DATA.timeline.fps },
-          processed_audio_path = nil, -- Corrected to nil to produce 'null' in JSON
+      if not project_data.files[source_path] then
+        project_data.files[source_path] = {
+          properties = { FPS = project_data.timeline.fps },
+          processed_audio_path = "",
           timelineItems = {},
           fileSource = {
             file_path = source_path,
             uuid = uuid_from_path(source_path),
             bmd_media_pool_item = item.bmd_mpi,
           },
-          silenceDetections = nil,
+          silenceDetections = json.null,
         }
       end
     end
@@ -1235,96 +1282,54 @@ local function get_project_data(project, timeline)
 end
 
 
--- =============================================================================
--- Main Application Logic
--- =============================================================================
-
-local os_type = jit.os
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:gsub("[^/\\]+$", "")
-TEMP_DIR = script_dir .. "temp" -- Initialize global TEMP_DIR
-
-local potential_paths
-if os_type == "OSX" then
-  potential_paths = {
-    script_dir .. "HushCut.app/Contents/MacOS/HushCut",
-    script_dir .. "../../build/bin/HushCut.app/Contents/MacOS/HushCut",
-    script_dir .. "../../build/bin/HushCut",
-  }
-elseif os_type == "Windows" then
-  potential_paths = {
-    script_dir .. "HushCut.exe",
-    script_dir .. "../../build/bin/HushCut.exe",
-  }
-else
-  potential_paths = {
-    script_dir .. "HushCut",
-    script_dir .. "../../build/bin/HushCut",
-  }
-end
-
-local go_app_path = nil
-for _, path in ipairs(potential_paths) do
-  local f = io.open(path, "r")
-  if f then
-    f:close()
-    go_app_path = path
-    break
-  end
-end
-
-local function find_free_port(go_script_path)
-  local handle = io.popen(go_script_path .. " --find-port")
-  if handle then
-    local port = handle:read("*a")
-    handle:close()
-    if port then
-      return port:gsub("%s+", "")
-    end
-  end
-  return nil
-end
-
-local function get_resolve()
-  ---@diagnostic disable-next-line: undefined-global
-  local success, result = pcall(function() return Resolve() end)
-  if success and result then return result end
-  print("Warning: Failed to obtain Resolve object. Details:", result)
-  return nil
-end
-
-local go_script_path = script_dir .. "lua-go-http"
-local free_port = find_free_port(go_script_path)
-
-local resolve = get_resolve()
-if not resolve then
-  print("Lua Error: Resolve object not found. Ensure this script is run inside DaVinci Resolve.")
-  return
-end
-
-local pm = resolve:GetProjectManager()
-if not os.execute("mkdir -p " .. TEMP_DIR) then
-  print("Failed to create temp directory: " .. TEMP_DIR)
-  return
-end
-
---- Main command handler
+--- @param sync boolean
+--- @param task_id string|nil
 local function main(sync, task_id)
-  local project = pm:GetCurrentProject()
+  if not resolve then
+    resolve = get_resolve()
+  end
+
+  if not resolve then
+    local alert_title = "Resolve Not Found"
+    local alert_message = "This script must be run inside DaVinci Resolve."
+    local alert_severity = "error"
+    send_result_with_alert(alert_title, alert_message, task_id, alert_severity)
+    return
+  end
+
+  if not pm then
+    pm = resolve:GetProjectManager()
+    project = nil
+    local alert_title = "DaVinci Resolve Error"
+    local message = "Could not connect to DaVinci Resolve. Is it running?"
+    send_result_with_alert(alert_title, message, task_id, "error")
+    return
+  end
+
   if not project then
-    send_result_with_alert("No Open Project", "Please open a DaVinci Resolve project.", task_id, "error")
+    project_data = nil
+    media_pool = nil
+    timeline = nil
+    local alert_title = "No open project"
+    local alert_message = "Please open a project and a timeline."
+    send_result_with_alert(alert_title, alert_message, task_id, "error")
     return
   end
 
-  local timeline = project:GetCurrentTimeline()
+  timeline = project:GetCurrentTimeline()
   if not timeline then
-    send_result_with_alert("No Active Timeline", "Please open a timeline in your project.", task_id, "error")
+    project_data = nil
+    local title = "No timeline"
+    local msg = "Please open a timeline."
+    send_result_with_alert(title, msg, task_id, "error")
     return
   end
 
-  if sync or not PROJECT_DATA then
+  -- input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
+  local input_otio_path = TEMP_DIR .. "/temp-timeline.otio"
+
+  if sync or not project_data then
     print("syncing project data...")
-    -- The get_project_data function now handles all data gathering internally.
     local success, err = get_project_data(project, timeline)
     if not success then
       local alert_title = "Project Data Error"
@@ -1333,29 +1338,43 @@ local function main(sync, task_id)
       return
     end
     print("Project data gathered successfully.")
+    print(project_data)
 
-    if PROJECT_DATA then
+    if project_data then
       local mt = { __jsontype = 'object' }
-      setmetatable(PROJECT_DATA, mt)
-      setmetatable(PROJECT_DATA.files, mt)
+      setmetatable(project_data, mt)
+      setmetatable(project_data.files, mt)
 
       local state = {
         indent = true, -- Enable pretty-printing
         exception = function(reason, value)
           if reason == 'unsupported type' then
-            return "<BMDObject>"
+            -- Fallback to a string representation for any unserializable type
+            return "<BMD_Object>"
           end
           error(reason, 0)
         end
       }
-      print("--- BEGIN PROJECT DATA ---")
-      print(json.encode(PROJECT_DATA, state))
-      print("--- END PROJECT DATA ---")
 
-      send_message_to_go("projectData", PROJECT_DATA, task_id)
+      print(json.encode(project_data, state))
+
+      local payload = {
+        status = "success",
+        message = "sync successful!",
+        data = project_data
+      }
+
+      local json_string = json.encode(project_data, state)
+      print("DEBUG ENCODED JSON:", json_string)
+      -- Now, send the data. The encoder will respect the metatable.
+      send_message_to_go("projectData", project_data)
+      send_message_to_go("taskResult", payload, task_id)
+      return
     end
   end
 end
+
+
 
 if go_app_path and free_port then
   print("Found HushCut executable at: " .. go_app_path)
@@ -1382,6 +1401,7 @@ if go_app_path and free_port then
   for line in handle:lines() do
     print("server output: " .. line)
 
+    -- try to parse the line as JSON
     local json_data, pos, err = nil, nil, nil
     local params = nil
     local task_id = nil
@@ -1389,13 +1409,32 @@ if go_app_path and free_port then
       local json_str = line:match("Body: (.*)")
       if json_str then
         json_data, pos, err = json.decode(json_str, 1, nil)
-        if err then print("Error parsing JSON: " .. err) end
+        if err then
+          print("Error parsing JSON: " .. err)
+        else
+          -- print the parsed JSON data
+          print("Parsed JSON data: " .. json.encode(json_data))
+        end
+      else
+        print("No JSON found in line: " .. line)
       end
     end
 
     if json_data then
       params = json_data.params
-      if params and params.taskId then task_id = params.taskId end
+      if not params then
+        print("No params found in JSON data.")
+      else
+        print("Params found in JSON data: " .. json.encode(params))
+      end
+    end
+
+
+
+    -- if taskId is in the params, print it
+    if params and params.taskId then
+      task_id = params.taskId
+      print("Task ID detected: " .. task_id)
     end
 
     if json_data and json_data.go_server_port then
@@ -1419,8 +1458,14 @@ if go_app_path and free_port then
     end
   end
 
+  -- This code will be executed *after* the Go process has shut down.
   print("Go http server has shut down. Exiting Lua script.")
+
+  -- Closing the handle is good practice. It also returns the process status.
   handle:close()
+
+  -- os.exit() is now redundant, as the script is at its end.
+  -- However, you can call it explicitly if you have more logic below.
   os.exit(0)
 elseif not go_app_path then
   print("HushCut executable not found.")
