@@ -38,6 +38,9 @@ copy_files() {
   cp "python-backend/src/HushCut.py" "$TARGET_FOLDER/HushCut.py"
   chmod +x "$TARGET_FOLDER/HushCut.py"
 
+  cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
+  chmod +x "$TARGET_FOLDER/HushCut"
+
   cp "python-backend/src/HushCutLua.lua" "$TARGET_FOLDER/HushCutLua.lua"
   cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
   

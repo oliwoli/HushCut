@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
 	"flag"
 	"fmt"
 	"io"
@@ -10,14 +11,42 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func main() {
 	port := flag.Int("port", 8080, "port to listen on")
 	findPort := flag.Bool("find-port", false, "find a free port and exit")
+
+	uuidCount := flag.Int("uuid", 0, "generate N random UUIDs")
+	uuidFromStr := flag.String("uuid-from-str", "", "comma-separated list of strings to generate deterministic UUIDs")
+
 	flag.Parse()
+
+	// --- UUID logic ---
+	if *uuidCount > 0 {
+		for i := 0; i < *uuidCount; i++ {
+			fmt.Println(uuid.New())
+		}
+		return
+	}
+
+	if *uuidFromStr != "" {
+		strs := strings.Split(*uuidFromStr, ",")
+		for _, s := range strs {
+			h := md5.Sum([]byte(s))
+			u := uuid.Must(uuid.FromBytes(h[:]))
+			u = uuid.NewMD5(uuid.Nil, []byte(s))
+			uuidStr := u.String()
+			fmt.Println(uuidStr)
+		}
+		return
+	}
+	// ------------------
 
 	if *findPort {
 		addr, err := net.ResolveTCPAddr("tcp", "localhost:0")

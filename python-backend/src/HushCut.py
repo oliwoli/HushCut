@@ -1063,7 +1063,7 @@ def get_resolve(task_id: str = "") -> None:
     resolve_obj = bmd.scriptapp("Resolve")
     if not resolve_obj:
         try:
-            resolve_obj = resolve  # type: ignore
+            resolve_obj = resolve  # type: ignore  # noqa: F821
         except Exception as e:
             print(f"could not get resolve_obj by calling resolve var directly. {e}")
             resolve_import_error_msg(
@@ -1074,7 +1074,6 @@ def get_resolve(task_id: str = "") -> None:
     RESOLVE = resolve_obj
 
 
-# export timeline to XML
 def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
     """
     Export the current timeline to an XML file.
@@ -1286,14 +1285,13 @@ def generate_uuid_from_nested_clips(
 
 def mixdown_compound_clips(
     audio_timeline_items: list[TimelineItem],
-    fps: float,
     curr_processed_file_names: list[str],
 ):
     """
     Finds unique compound/multicam content on the timeline, and for each,
     either renders a mixdown (standalone mode) or prepares the data for Go.
     """
-    global FFMPEG, TEMP_DIR
+    global TEMP_DIR
 
     # --- Pass 1: Map all compound/multicam clips by their content UUID ---
     content_map = {}
@@ -1327,9 +1325,6 @@ def mixdown_compound_clips(
                 f"Content for '{representative_item['name']}' is unchanged. Skipping render."
             )
 
-        # --- [REFACTORED] Update all timeline items in this content group ---
-        # This logic now correctly separates the I/O check from the data update.
-
         # This block runs for all items in Go mode, or only for successful renders in Standalone mode.
         for tl_item in items_in_group:
             tl_item["processed_file_name"] = output_filename
@@ -1339,10 +1334,6 @@ def mixdown_compound_clips(
 
 
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
-    """
-    (REVISED) Analyzes timeline items and channel mappings, then conditionally processes
-    them if running in standalone mode.
-    """
     global PROJECT, MEDIA_POOL, TEMP_DIR, PROJECT_DATA
 
     # --- 1. Initial Data Gathering ---
@@ -1437,9 +1428,8 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     # --- 4. Handle Compound Clips ---
     if any(item.get("type") for item in audio_track_items):
         print("Complex clips found...")
-        mixdown_compound_clips(audio_track_items, timeline_fps, [])
+        mixdown_compound_clips(audio_track_items, [])
 
-    print("Python-side analysis complete.")
     return True, None
 
 
@@ -1565,7 +1555,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         get_resolve(task_id)
     if not RESOLVE:
         print("could not get resolve object")
-        PROJECT_DATA = {}
+        PROJECT_DATA = None
         alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
         send_result_with_alert(alert_title, message, task_id)
@@ -1589,7 +1579,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         PROJECT_DATA = None
         MEDIA_POOL = None
         alert_title = "No open project"
-        message = "Please open a project and open a timeline."
+        message = "Please open a project and a timeline."
 
         response_payload = {
             "status": "error",
