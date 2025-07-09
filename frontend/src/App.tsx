@@ -644,14 +644,23 @@ function AppContent() {
           )}
           <div className="flex flex-col flex-1 space-y-1 px-3 flex-grow min-h-0 py-2">
             <div className="flex flex-row space-x-1 items-start flex-1 min-h-[180px] max-h-[600px]">
-              <div className="flex w-min h-full">
-                <ThresholdControl key={currentClipId} />
-                <PeakMeter />
-              </div>
+              {currentActiveClip &&
+                projectData?.timeline && (
+                  <div className="flex w-min h-full">
+                    <ThresholdControl key={currentClipId} />
+                    <PeakMeter />
+                  </div>
+                )}
+
               <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
-                {!currentClipId || !httpPort ? (
+                {!projectData || !currentClipId || !httpPort ? (
                   <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-                    <p className="text-gray-500">No audio clip selected.</p>
+                    {!projectData ? (
+                      <p className="text-gray-500">No active timeline.</p>
+                    ) : (
+                      <p className="text-gray-500">No audio clip selected.</p>
+                    )}
+
                   </div>
                 ) : (
                   currentActiveClip &&
