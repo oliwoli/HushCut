@@ -8,7 +8,6 @@ import http.client
 from http.client import HTTPConnection
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-import pprint
 import signal
 import socket
 import threading

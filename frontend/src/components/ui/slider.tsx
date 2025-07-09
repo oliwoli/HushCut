@@ -77,10 +77,10 @@ function Slider({
         </div>
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
-          className="border-zinc-400 transition-[color,box-shadow] border-t-zinc-300 border-b-zinc-400 border-b-2 bg-zinc-200 block size-4 shrink-0 rounded-[3px] border focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 w-3 h-7 z-10 overflow-hidden group" // Ensure thumb is on top
+          className="border-zinc-400 transition-[color,box-shadow] border-t-zinc-300 border-b-zinc-400 border-b-1 bg-zinc-200 block size-4 shrink-0 rounded-[3px] border focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50 w-3 h-7 z-10 overflow-hidden group" // Ensure thumb is on top
         >
           {/* <div className="absolute top-1/2 left-1/2 -translate-y-1/2 h-[80%] rounded-[1px] w-[8px] bg-zinc-100 shadow-2xl pointer-events-none transform -translate-x-1/2 z-1" /> */}
-          <div className="absolute top-[4px] h-[70%] w-[3px] bg-zinc-400 pointer-events-none left-1/2 transform -translate-x-1/2 z-2 rounded-full" />
+          <div className="absolute top-[25%] h-[50%] w-[2px] bg-zinc-500 pointer-events-none left-1/2 transform -translate-x-1/2 z-2 rounded-full" />
         </SliderPrimitive.Thumb>
       </SliderPrimitive.Root>
     </div >
