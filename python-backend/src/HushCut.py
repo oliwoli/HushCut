@@ -30,9 +30,7 @@ from subprocess import CompletedProcess
 
 # GLOBALS
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-TEMP_DIR: str = os.path.join(
-    os.path.dirname(os.path.abspath(sys.argv[0])), "..", "wav_files"
-)
+TEMP_DIR: str = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "wav_files")
 TEMP_DIR = os.path.abspath(TEMP_DIR)
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
@@ -474,6 +472,8 @@ def populate_nested_clips(input_otio_path: str) -> None:
     Reads an OTIO file and populates nested clip data. This version combines
     all fixes: single-pass processing, specific item matching, and multicam angle detection.
     """
+    global PROJECT_DATA
+
     project_data = PROJECT_DATA
     if not project_data or "timeline" not in project_data:
         logging.error("Cannot populate nested clips: PROJECT_DATA is not configured.")
@@ -621,6 +621,9 @@ def process_track_items(
             link_group_id = (
                 item.get("metadata", {}).get("Resolve_OTIO", {}).get("Link Group ID")
             )
+            print(
+                f"Processing item '{item.get('name')}' on track {track_index} with link group ID: {link_group_id}"
+            )
 
             if link_group_id is not None:
                 # Apply the found link ID to all matching items.
@@ -731,6 +734,8 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     based on a discrete frame grid, and overwrites the project data.
     This ensures perfect sync and no gaps between edited clips.
     """
+    global PROJECT_DATA
+
     project_data = PROJECT_DATA
     if not project_data or "timeline" not in project_data:
         logging.error("Could not initialize or find project data.")
@@ -781,8 +786,13 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             items_by_link_group.setdefault(link_group_id, []).append(item)
 
     next_new_group_id = max_link_group_id + 1
+    print(f"Scanning {len(all_pd_items)} items for missing link_group_id")
+    print(f"all pd items: {all_pd_items}")
     for item in all_pd_items:
-        if "link_group_id" not in item and item.get("edit_instructions"):
+        if item.get("link_group_id") is None and item.get("edit_instructions"):
+            print(
+                f"Item '{item.get('name', 'Unnamed')}' has no link_group_id. Assigning new ID {next_new_group_id}"
+            )
             item["link_group_id"] = next_new_group_id
             items_by_link_group[next_new_group_id] = [item]
             next_new_group_id += 1
@@ -917,8 +927,6 @@ class ProgressTracker:
                 send_progress_update, self.task_id, self.get_percentage(), message
             )
             self._last_report = time()
-
-    # --- No changes needed for the methods below ---
 
     def update_task_progress(
         self, task_name: str, percentage: float, message: str = ""
@@ -1437,7 +1445,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
 
 def apply_edits_from_go(
     target_project: ProjectData, source_project: ProjectData
-) -> None:
+) -> ProjectData:
     """
     Applies ONLY the 'edit_instructions' from a source project data structure
     to the target, matching audio timeline items by their unique ID.
@@ -1458,7 +1466,7 @@ def apply_edits_from_go(
         print(
             "Warning: No audio items with IDs found in data from Go. No edits applied."
         )
-        return
+        return source_project
 
     # Get the target audio items that we will modify in-place.
     target_audio_items = target_project.get("timeline", {}).get("audio_track_items", [])
@@ -1478,6 +1486,7 @@ def apply_edits_from_go(
                 items_updated_count += 1
 
     print(f"Finished applying edits. Updated {items_updated_count} timeline items.")
+    return target_project
 
 
 def send_result_with_alert(
@@ -1549,7 +1558,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     if not sync:
         TRACKER.start_new_run(TASKS, task_id)
-        TRACKER.update_task_progress("init", 0.1, message="Preparing")
+        TRACKER.update_task_progress("prepare", 0.1, message="Preparing")
 
     if not RESOLVE:
         task_id = task_id or ""
@@ -1665,7 +1674,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         return
 
     if not PROJECT_DATA:
-        alert_message = "An unexpected error happened during sync. Could not get project data from Davinci."
+        alert_message = "An unexpected error happened during sync. Could not get project data from DaVinci."
         send_result_with_alert("unexpected sync error", alert_message, task_id)
         return
 
@@ -1677,16 +1686,19 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     if not all_timeline_items:
         print("critical error, can't continue")
-        alert_message = "An unexpected error happened during sync. Could not get timeline items from Davinci."
+        alert_message = "An unexpected error happened during sync. Could not get timeline items from DaVinci."
         send_result_with_alert("unexpected sync error", alert_message, task_id)
         return
 
     some_bmd_item = all_timeline_items[0]["bmd_item"]
     if not some_bmd_item or isinstance(some_bmd_item, str):
         print("critical error, can't continue")
-        return
+        alert_message = "An unexpected error happened during sync. Could not get timeline items from DaVinci."
+        send_result_with_alert("unexpected sync error", alert_message, task_id)
 
+    TRACKER.update_task_progress("prepare", 50.0, message="Preparing")
     unify_linked_items_in_project_data(input_otio_path)
+    print(f"project data after unify: {PROJECT_DATA}")
 
     TRACKER.complete_task("prepare")
     TRACKER.update_task_progress("append", 1.0, "Adding Clips to Timeline")
@@ -1836,7 +1848,7 @@ def append_and_link_timeline_items(
     Appends clips to the timeline, using an optimized auto-linking method where
     possible, and then manually links any remaining clips.
     """
-    global MEDIA_POOL, TIMELINE, PROJECT
+    global MEDIA_POOL, TIMELINE, PROJECT, PROJECT_DATA
 
     if not PROJECT_DATA or not PROJECT_DATA.get("timeline"):
         print("Error: Project data is missing or malformed.")
@@ -1917,8 +1929,6 @@ def append_and_link_timeline_items(
                 print(f"Deleting {len(all_clips_to_delete)} existing clips...")
                 timeline.DeleteClips(all_clips_to_delete)
             else:
-                pass  # Added to fix indentation
-                pass  # Added to fix indentation
                 print("Timeline is already empty.")
 
     if not timeline:
@@ -2184,7 +2194,6 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
             return
 
         # --- Route 3: /command ---
-        # Handles all functional commands like 'sync', 'makeFinalTimeline', etc.
         elif self.path == "/command":
             # --- Authentication (Placeholder) ---
             # Your existing auth logic is preserved here.
@@ -2252,7 +2261,9 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                     )
 
                     if PROJECT_DATA:
-                        apply_edits_from_go(PROJECT_DATA, project_data_from_go)
+                        PROJECT_DATA = apply_edits_from_go(
+                            PROJECT_DATA, project_data_from_go
+                        )
                     else:
                         PROJECT_DATA = project_data_from_go
 
