@@ -16,22 +16,25 @@ def load_source(module_name, file_path):
 
         module = None
         spec = importlib.util.spec_from_file_location(module_name, file_path)
-        if spec:
+        if spec and spec.loader:
             module = importlib.util.module_from_spec(spec)
-        if module:
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+            if module:
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
         return module
     else:
-        import imp
+        # For Python versions older than 3.5, imp is used.
+        # This branch might not be reached in modern environments.
+        # Adding type ignore as imp is deprecated and might not be found by Pyright.
+        import imp # type: ignore
 
-        return imp.load_source(module_name, file_path)
+        return imp.load_source(module_name, file_path) # type: ignore
 
 
 def GetResolve() -> Union[Any, None]:
     expectedPath: str = ""
     try:
-        import DaVinciResolveScript as bmd
+        import DaVinciResolveScript as bmd # type: ignore
     except ImportError:
         if sys.platform.startswith("darwin"):
             expectedPath = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/"
@@ -39,7 +42,7 @@ def GetResolve() -> Union[Any, None]:
             import os
 
             expectedPath = (
-                os.getenv("PROGRAMDATA")
+                (os.getenv("PROGRAMDATA") or "")
                 + "\\Blackmagic Design\\DaVinci Resolve\\Support\\Developer\\Scripting\\Modules\\"
             )
         elif sys.platform.startswith("linux"):
@@ -53,7 +56,7 @@ def GetResolve() -> Union[Any, None]:
             load_source(
                 "DaVinciResolveScript", expectedPath + "DaVinciResolveScript.py"
             )
-            import DaVinciResolveScript as bmd
+            import DaVinciResolveScript as bmd # type: ignore
         except Exception as ex:
             # No fallbacks ... report error:
             print(

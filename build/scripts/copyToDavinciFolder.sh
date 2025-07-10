@@ -41,6 +41,18 @@ copy_files() {
   cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
   chmod +x "$TARGET_FOLDER/HushCut"
 
+  cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
+  chmod +x "$TARGET_FOLDER/HushCut"
+
+  cp "python-backend/src/HushCutLua.lua" "$TARGET_FOLDER/HushCutLua.lua"
+  cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
+  
+  cd "lua-go-http"
+  go build .
+  cd ..
+  cp "lua-go-http/lua-go-http" "$TARGET_FOLDER/lua-go-http"
+  chmod +x "$TARGET_FOLDER/lua-go-http"
+
   cp "build/bin/python_backend" "$TARGET_FOLDER/python_backend"
 
   # Copy HushCut.app directory for macOS

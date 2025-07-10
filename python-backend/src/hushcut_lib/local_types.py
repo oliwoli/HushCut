@@ -75,6 +75,10 @@ def make_empty_timeline_item() -> TimelineItem:
         "source_end_frame": 0.0,
         "duration": 0.0,
         "edit_instructions": [],
+        "source_channel": None,
+        "link_group_id": None,
+        "type": None,
+        "nested_clips": [],
     }
 
 
