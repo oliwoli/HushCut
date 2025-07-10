@@ -965,11 +965,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       return (
         <button
           onClick={toggleSkipRegions}
-          className={`p-1.5 rounded flex items-center text-xs ${skipClass} whitespace-nowrap`}
+          className={`p-1.5 rounded flex items-center text-xs whitespace-nowrap gap-1`}
           title={skipTitle}
         >
-          <RedoDotIcon size={21} className="mr-1" />
-          <span className="hidden [@media(min-width:30rem)]:flex">
+          <RedoDotIcon size={21} className={`mr-1 ${skipClass}`} />
+          <span className={`hidden [@media(min-width:30rem)]:flex ${skipRegionsEnabled ? "text-stone-300" : "text-stone-500"} w-12 `}>
             {skipRegionsEnabled ? "Skip ON" : "Skip OFF"}
           </span>
         </button>
