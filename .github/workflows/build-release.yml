@@ -47,6 +47,11 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
       - name: Install Python deps
         run: |
           pip install --upgrade pip setuptools wheel
@@ -55,13 +60,23 @@ jobs:
 
       - name: Build Python backend
         run: |
-          pyinstaller python-backend/src/main.py -y
+          pyinstaller python-backend/src/HushCut.py --name python_backend -y
           mkdir -p build/bin
-          cp dist/main/main${{ matrix.ext }} build/bin/python_backend${{ matrix.ext }}
-          if [ -d dist/main/_internal ]; then
-            cp -r dist/main/_internal build/bin/
+          cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend${{ matrix.ext }}
+          if [ -d dist/python_backend/_internal ]; then
+            cp -r dist/python_backend/_internal build/bin/
           fi
-          rm -rf dist build/main
+          rm -rf dist build/python_backend
+
+      - name: Build lua-go-http
+        run: |
+          cd lua-go-http
+          go build .
+          cd ..
+          cp lua-go-http/lua-go-http${{ matrix.ext }} build/bin/
+
+      - name: Copy Lua script
+        run: cp python-backend/src/HushCut.lua build/bin/
 
       - name: Install pnpm
         run: npm install -g pnpm
@@ -72,14 +87,15 @@ jobs:
           build-name: HushCut
           build-platform: ${{ matrix.platform }}
           package: false
-          go-version: '1.22'
 
-      - name: Move Python backend to macOS Resources folder
+      - name: Move binaries to macOS Resources folder
         if: matrix.label == 'macos'
         run: |
           RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
           mkdir -p "$RESOURCE_DIR"
           mv -v build/bin/python_backend "$RESOURCE_DIR/"
+          mv -v build/bin/lua-go-http "$RESOURCE_DIR/"
+          mv -v build/bin/HushCut.lua "$RESOURCE_DIR/"
 
       - name: Download FFmpeg
         if: startsWith(github.ref, 'refs/tags/')
