@@ -148,6 +148,9 @@ function AppContent() {
 
   const isBusy = useSyncBusyState(s => s.isBusy);
   const setBusy = useSyncBusyState(s => s.setBusy);
+
+  const setHasProjectData = useSyncBusyState(s => s.setHasProjectData);
+
   const currentClipId = useClipStore(s => s.currentClipId);
   const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
@@ -284,6 +287,9 @@ function AppContent() {
       if (!deepEqual(projectData, newData)) {
         // Using fast-deep-equal
         setProjectData(newData);
+
+        setHasProjectData(!!newData);
+
         if (!newData) return
         await Promise.all([
           ProcessProjectAudio(newData),
@@ -314,6 +320,7 @@ function AppContent() {
           response.message
         );
         setProjectData(null);
+        setHasProjectData(false);
         // toast.error("Sync failed", {
         //   id: loadingToastId,
         //   description: response.message || "An error occurred during sync.",
@@ -333,6 +340,7 @@ function AppContent() {
           response
         );
         setProjectData(null);
+        setHasProjectData(false);
         // toast.error("Sync failed: Unexpected response format", {
         //   id: loadingToastId,
         //   duration: 5000,
@@ -342,6 +350,7 @@ function AppContent() {
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
       setProjectData(null);
+      setHasProjectData(false);
 
       if (err && err.alertIssued) {
         //toast.dismiss(loadingToastId);

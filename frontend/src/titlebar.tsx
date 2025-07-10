@@ -16,6 +16,7 @@ import { BrowserOpenURL } from "@wails/runtime/runtime";
 
 import { useUiStore } from "@/stores/uiStore";
 import { useSyncBusyState } from "./stores/appSync";
+import clsx from "clsx";
 
 const _TitleBar = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(true);
@@ -34,6 +35,7 @@ const _TitleBar = () => {
   }, [dropdownOpen]);
 
   const isBusy = useSyncBusyState(s => s.isBusy);
+  const hasProjectData = useSyncBusyState(s => s.hasProjectData);
 
   // This function will handle the logic
   const handlePinClick = () => {
@@ -49,6 +51,7 @@ const _TitleBar = () => {
   const handleDonateClick = () => {
     BrowserOpenURL("https://buymeacoffee.com/hushcut");
   };
+
 
   return (
     <div className="select-none">
@@ -82,14 +85,16 @@ const _TitleBar = () => {
           </div>
           <div className="flex items-center gap-2">
             <h1 className="text-sm font-normal text-neutral-200">HushCut</h1>
-            {isBusy ? (
-              <CircleIcon
-                size={8}
-                className="fill-yellow-200/80 stroke-0 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50"
-              />) :
+            <CircleIcon
+              size={8}
+              className={clsx(
+                'stroke-0', // always applied
+                !hasProjectData && 'fill-red-600',
+                hasProjectData && isBusy && 'fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50',
+                hasProjectData && !isBusy && 'fill-teal-600'
+              )}
+            />
 
-              <CircleIcon size={8} className="fill-teal-600 stroke-0" />
-            }
           </div>
           <div className="flex items-center">
             <DropdownMenu onOpenChange={setDropdownOpen}>

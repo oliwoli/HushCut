@@ -1,7 +1,7 @@
 // ThresholdControl.tsx
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { ThresholdSlider } from "@/components/ui-custom/volumeSlider";
-import { useClipStore, useClipParameter, useIsClipModified, defaultParameters, useGlobalStore } from '@/stores/clipStore';
+import { useClipStore, useClipParameter, defaultParameters } from '@/stores/clipStore';
 
 interface ThresholdControlProps {
 }

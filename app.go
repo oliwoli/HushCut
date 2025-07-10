@@ -63,7 +63,7 @@ func NewApp() *App {
 		effectiveAudioFolderPath: "", // FIXME: This needs to be initialized properly!
 		pendingTasks:             make(map[string]chan PythonCommandResponse),
 		ffmpegSemaphore:          make(chan struct{}, 8),
-		waveformSemaphore:        make(chan struct{}, 5),
+		waveformSemaphore:        make(chan struct{}, 3),
 		conversionTracker:        sync.Map{}, // Initialize the new tracker
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
