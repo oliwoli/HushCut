@@ -694,7 +694,7 @@ end)()
 local go_server_port = nil
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local script_dir = script_path:gsub("[^/\\]+$", "")
-local TEMP_DIR = script_dir .. "temp"
+local TEMP_DIR = script_dir .. "wav_files"
 
 
 ---
@@ -742,14 +742,6 @@ local function send_message_to_go(message_type, payload, task_id)
     path = path .. "?task_id=" .. task_id
   end
   local url = "http://localhost:" .. go_server_port .. path
-
-  --json_payload = json_payload:gsub("'", "'\\''")
-  -- local escaped_payload = json_payload:gsub('"', '\\"')
-  -- local command = string.format(
-  --   'curl -s -X POST -H "Content-Type: application/json" -d "%s" "%s" -w "\\n%%{http_code}"',
-  --   escaped_payload,
-  --   url
-  -- )
 
   local tmp_filename = TEMP_DIR .. "/payload.json"
   local f = io.open(tmp_filename, "w")
@@ -822,10 +814,6 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
   -- Send the message to the Go server
   return send_message_to_go("taskResult", payload, task_id)
 end
-
-
-
-
 
 
 
@@ -916,6 +904,7 @@ local pm = nil
 local project = nil
 local media_pool = nil
 local timeline = nil
+local created_timelines = {}
 
 
 
@@ -991,10 +980,10 @@ local function uuid_from_path(path)
     print("Lua Error: Failed to execute command to get UUID from path: " .. path)
     return nil
   else
-    local uuid = handle:read("*a")
+    local uuid_str = handle:read("*a")
     handle:close()
-    if uuid and #uuid > 0 then
-      return uuid:gsub("%s+", "") -- Remove any whitespace
+    if uuid_str and #uuid_str > 0 then
+      return uuid_str:gsub("%s+", "") -- Remove any whitespace
     else
       print("Lua Error: No UUID returned for path: " .. path)
       return nil
@@ -1124,11 +1113,6 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           source_file_path = media_pool_item:GetClipProperty("File Path") or ""
         end
 
-        print("source start float: " .. tostring(source_start_float) ..
-          ", source end float: " .. tostring(source_end_float) ..
-          ", left offset: " .. tostring(left_offset) ..
-          ", duration: " .. tostring(duration))
-
         local timeline_item = {
           bmd_item = item_bmd,
           bmd_mpi = media_pool_item,
@@ -1145,7 +1129,7 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           source_start_frame = source_start_float,
           source_end_frame = source_end_float,
           source_channel = 0, -- Default value
-          link_group_id = json.null,
+          link_group_id = nil,
           type = nil,
           nested_clips = {},
         }
@@ -1165,16 +1149,30 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
 end
 
 -- Placeholder function, needs implementation.
-local function export_timeline_to_otio(timeline, file_path)
-  print("Placeholder: Would export timeline to OTIO at path: " .. file_path)
+local function export_timeline_to_otio(davinci_tl, file_path)
+  if not resolve then return end
+  if not davinci_tl then
+    print("No timeline to export.")
+    return
+  end
   -- In a real implementation, this would use Resolve's API to export the timeline.
+  local success = davinci_tl:Export(file_path, resolve.EXPORT_OTIO)
+  if success then
+    print("Timeline exported successfully to " .. file_path)
+  else
+    print("Failed to export timeline.")
+  end
 end
+
 
 -- Placeholder function, needs implementation.
 local function populate_nested_clips(input_otio_path)
   print("Placeholder: Would populate 'nested_clips' from OTIO file: " .. input_otio_path)
   -- This function would parse the OTIO file and populate the 'nested_clips'
   -- field of the relevant items in the project_data structure.
+  -- Due to the complexity of OTIO parsing in Lua, this is a simplified placeholder.
+  -- A full implementation would require a Lua JSON parser and a deep understanding
+  -- of the OTIO specification to traverse the data structure.
 end
 
 
@@ -1184,20 +1182,20 @@ end
 -- @param timeline (bmd.Timeline) The current timeline object.
 -- @return (boolean, string|nil) A tuple of success status and an optional error message.
 --
-local function get_project_data(project, timeline)
+local function get_project_data(bmd_project, bmd_timeline)
   -- --- 1. Initial Data Gathering ---
-  local audio_track_items = get_items_by_tracktype("audio", timeline)
-
+  local audio_track_items = get_items_by_tracktype("audio", bmd_timeline)
+  local video_track_items = get_items_by_tracktype("video", bmd_timeline)
 
 
   project_data = {
-    project_name = project:GetName(),
+    project_name = bmd_project:GetName(),
     timeline = {
-      name = timeline:GetName(),
-      fps = timeline:GetSetting("timelineFrameRate"),
-      start_timecode = timeline:GetStartTimecode(),
-      curr_timecode = timeline:GetCurrentTimecode(),
-      video_track_items = get_items_by_tracktype("video", timeline),
+      name = bmd_timeline:GetName(),
+      fps = bmd_timeline:GetSetting("timelineFrameRate"),
+      start_timecode = bmd_timeline:GetStartTimecode(),
+      curr_timecode = bmd_timeline:GetCurrentTimecode(),
+      video_track_items = video_track_items,
       audio_track_items = audio_track_items,
     },
     files = {},
@@ -1211,12 +1209,10 @@ local function get_project_data(project, timeline)
     end
   end
 
-
-
   if has_complex_clips then
     print("Complex clips found. Analyzing timeline structure with OTIO...")
     local input_otio_path = TEMP_DIR .. "/temp-timeline.otio"
-    export_timeline_to_otio(timeline, input_otio_path)
+    export_timeline_to_otio(bmd_timeline, input_otio_path)
     populate_nested_clips(input_otio_path) -- This should populate project_data
   end
 
@@ -1281,6 +1277,586 @@ local function get_project_data(project, timeline)
   return true, nil
 end
 
+-- =============================================================================
+-- EDIT UNIFICATION LOGIC (from Python)
+-- =============================================================================
+
+---
+-- Safely gets a nested value from a table.
+-- @param tbl (table) The table to search in.
+-- @param ... (string) A sequence of keys to traverse.
+-- @return The value if found, otherwise nil.
+--
+local function safe_get(tbl, ...)
+  local current = tbl
+  for i = 1, select('#', ...) do
+    local key = select(i, ...)
+    if type(current) ~= 'table' or current[key] == nil then
+      return nil
+    end
+    current = current[key]
+  end
+  return current
+end
+
+---
+-- Unifies edit instructions for a group of linked items.
+-- This is a Lua translation of the Python `unify_edit_instructions` function.
+-- @param items (table) A list of linked timeline items.
+-- @return (table) A list of unified edit instruction tables.
+--
+local function unify_edit_instructions(items)
+  local has_any_edits = false
+  for _, item in ipairs(items) do
+    if item.edit_instructions and #item.edit_instructions > 0 then
+      has_any_edits = true
+      break
+    end
+  end
+  if not has_any_edits then
+    return { { 0.0, nil, true } }
+  end
+
+  local events = {}
+  for _, item in ipairs(items) do
+    if item.edit_instructions then
+      local base = item.source_start_frame or 0.0
+      for _, edit in ipairs(item.edit_instructions) do
+        if edit.source_start_frame and edit.source_end_frame then
+          local rel_start = edit.source_start_frame - base
+          local rel_end = edit.source_end_frame - base
+          local is_enabled = edit.enabled == nil or edit.enabled == true
+          table.insert(events, { frame = rel_start, type = 1, enabled = is_enabled })
+          table.insert(events, { frame = rel_end, type = -1, enabled = is_enabled })
+        end
+      end
+    end
+  end
+
+  if #events == 0 then return {} end
+
+  table.sort(events, function(a, b)
+    if a.frame == b.frame then return a.type > b.type end
+    return a.frame < b.frame
+  end)
+
+  local merged_segments = {}
+  local active_enabled_count = 0
+  local active_disabled_count = 0
+  local last_frame = events[1].frame
+
+  for _, event in ipairs(events) do
+    local frame, type_val, is_enabled = event.frame, event.type, event.enabled
+    local segment_duration = frame - last_frame
+    if segment_duration > 0 then
+      local is_segment_enabled = active_enabled_count > 0
+      local is_segment_active = active_enabled_count > 0 or active_disabled_count > 0
+      if is_segment_active then
+        table.insert(merged_segments, { start_frame = last_frame, end_frame = frame, enabled = is_segment_enabled })
+      end
+    end
+
+    if type_val == 1 then -- Start
+      if is_enabled then
+        active_enabled_count = active_enabled_count + 1
+      else
+        active_disabled_count = active_disabled_count + 1
+      end
+    else -- End
+      if is_enabled then
+        active_enabled_count = active_enabled_count - 1
+      else
+        active_disabled_count = active_disabled_count - 1
+      end
+    end
+    last_frame = frame
+  end
+
+  if #merged_segments == 0 then return {} end
+
+  local final_edits = {}
+  if #merged_segments > 0 then
+    local current_edit = merged_segments[1]
+    table.insert(final_edits, current_edit)
+
+    for i = 2, #merged_segments do
+      local next_edit = merged_segments[i]
+      if next_edit.start_frame == current_edit.end_frame and next_edit.enabled == current_edit.enabled then
+        current_edit.end_frame = next_edit.end_frame -- Merge
+      else
+        current_edit = next_edit
+        table.insert(final_edits, current_edit)
+      end
+    end
+  end
+
+
+  local filtered_edits = {}
+  for _, edit in ipairs(final_edits) do
+    if (edit.end_frame - edit.start_frame) >= 1.0 then
+      table.insert(filtered_edits, { edit.start_frame, edit.end_frame, edit.enabled })
+    end
+  end
+
+  return filtered_edits
+end
+
+---
+-- Processes an OTIO track to find link_group_ids and assign them to project_data items.
+-- Lua translation of `process_track_items`.
+-- @param otio_items (table) The list of items from an OTIO track.
+-- @param pd_timeline (table) The project_data.timeline table.
+-- @param pd_timeline_key (string) "video_track_items" or "audio_track_items".
+-- @param track_index (number) The 1-based index of the track.
+-- @param timeline_start_frame (number) The start frame of the timeline.
+-- @param max_id (number) The current maximum link group ID found.
+-- @return (number) The new maximum link group ID.
+--
+local function process_track_items(otio_items, pd_timeline, pd_timeline_key, track_index, timeline_start_frame, max_id)
+  local FRAME_MATCH_TOLERANCE = 0.5
+  local playhead_frames = 0
+
+  for _, item in ipairs(otio_items) do
+    local item_schema = string.lower(safe_get(item, "OTIO_SCHEMA") or "")
+    local duration_val = safe_get(item, "source_range", "duration", "value") or 0
+
+    if string.find(item_schema, "gap") then
+      playhead_frames = playhead_frames + duration_val
+    elseif string.find(item_schema, "clip") or string.find(item_schema, "stack") then
+      local record_frame_float = playhead_frames + timeline_start_frame
+      local corresponding_items = {}
+      for _, tl_item in ipairs(pd_timeline[pd_timeline_key]) do
+        if tl_item.track_index == track_index and math.abs(tl_item.start_frame - record_frame_float) < FRAME_MATCH_TOLERANCE then
+          table.insert(corresponding_items, tl_item)
+        end
+      end
+
+      if #corresponding_items > 0 then
+        local link_group_id = safe_get(item, "metadata", "Resolve_OTIO", "Link Group ID")
+        if link_group_id then
+          for _, corresponding_item in ipairs(corresponding_items) do
+            corresponding_item.link_group_id = link_group_id
+          end
+          max_id = math.max(max_id, link_group_id)
+        end
+      end
+      playhead_frames = playhead_frames + duration_val
+    end
+  end
+  return max_id
+end
+
+---
+-- Reads an OTIO file, finds linked clips, unifies their edits, and updates project_data.
+-- Lua translation of `unify_linked_items_in_project_data`.
+-- @param input_otio_path (string) Path to the OTIO JSON file.
+--
+local function unify_linked_items_in_project_data(input_otio_path)
+  if not project_data or not project_data.timeline then
+    print("Could not find project data to unify.")
+    return
+  end
+
+  local f = io.open(input_otio_path, "r")
+  if not f then
+    print("Failed to open OTIO file: " .. input_otio_path)
+    return
+  end
+  local otio_json_str = f:read("*a")
+  f:close()
+
+  local ok, otio_data = pcall(json.decode, otio_json_str)
+  if not ok then
+    print("Failed to parse OTIO JSON: " .. tostring(otio_data))
+    return
+  end
+
+  local pd_timeline = project_data.timeline
+  local max_link_group_id = 0
+  local track_type_counters = { video = 0, audio = 0 }
+  local timeline_start_frame = safe_get(otio_data, "global_start_time", "value") or 0.0
+
+  local otio_tracks = safe_get(otio_data, "tracks", "children") or {}
+  for _, track in ipairs(otio_tracks) do
+    local kind = string.lower(safe_get(track, "kind") or "")
+    if track_type_counters[kind] then
+      track_type_counters[kind] = track_type_counters[kind] + 1
+      local current_track_index = track_type_counters[kind]
+      local pd_key = kind .. "_track_items"
+      max_link_group_id = process_track_items(
+        safe_get(track, "children") or {},
+        pd_timeline,
+        pd_key,
+        current_track_index,
+        timeline_start_frame,
+        max_link_group_id
+      )
+    end
+  end
+
+  local all_pd_items = {}
+  for _, item in ipairs(pd_timeline.video_track_items) do table.insert(all_pd_items, item) end
+  for _, item in ipairs(pd_timeline.audio_track_items) do table.insert(all_pd_items, item) end
+
+  local items_by_link_group = {}
+  local next_new_group_id = max_link_group_id + 1
+  for _, item in ipairs(all_pd_items) do
+    if item.link_group_id == nil and item.edit_instructions and #item.edit_instructions > 0 then
+      item.link_group_id = next_new_group_id
+      next_new_group_id = next_new_group_id + 1
+    end
+    if item.link_group_id then
+      if not items_by_link_group[item.link_group_id] then
+        items_by_link_group[item.link_group_id] = {}
+      end
+      table.insert(items_by_link_group[item.link_group_id], item)
+    end
+  end
+
+  for link_id, group_items in pairs(items_by_link_group) do
+    local unified_edits = unify_edit_instructions(group_items)
+    local group_timeline_anchor = math.huge
+    for _, item in ipairs(group_items) do
+      group_timeline_anchor = math.min(group_timeline_anchor, item.start_frame)
+    end
+
+    if group_timeline_anchor ~= math.huge then
+      for _, item in ipairs(group_items) do
+        local new_edit_instructions = {}
+        local base_source_offset = item.source_start_frame or 0.0
+        local timeline_playhead = math.floor(group_timeline_anchor + 0.5)
+
+        for _, unified_edit in ipairs(unified_edits) do
+          local rel_start, rel_end, is_enabled = unified_edit[1], unified_edit[2], unified_edit[3]
+          if rel_start and rel_end then
+            local timeline_duration = math.floor((rel_end - rel_start) + 0.5)
+
+            if timeline_duration >= 1 then
+              local timeline_end = timeline_playhead + timeline_duration
+              table.insert(new_edit_instructions, {
+                source_start_frame = base_source_offset + rel_start,
+                source_end_frame = base_source_offset + rel_end,
+                start_frame = timeline_playhead,
+                end_frame = timeline_end,
+                enabled = is_enabled,
+              })
+              timeline_playhead = timeline_end
+            end
+          end
+        end
+        item.edit_instructions = new_edit_instructions
+      end
+    end
+  end
+  print("Finished unifying linked item edits.")
+end
+
+-- =============================================================================
+-- FINAL TIMELINE CREATION
+-- =============================================================================
+---
+-- Applies 'edit_instructions' from a source project data (from Go) to the target (local).
+-- @param target_project (table) The local project_data table.
+-- @param source_project (table) The project_data table received from Go.
+-- @return (table) The modified target_project table.
+--
+local function apply_edits_from_go(target_project, source_project)
+  print("Applying edit instructions from Go...")
+  local source_audio_items = source_project.timeline and source_project.timeline.audio_track_items or {}
+  local source_items_by_id = {}
+  for _, item in ipairs(source_audio_items) do
+    if item.id then
+      source_items_by_id[item.id] = item
+    end
+  end
+
+  if not next(source_items_by_id) then
+    print("Warning: No audio items with IDs found in data from Go. No edits applied.")
+    return target_project
+  end
+
+  local target_audio_items = target_project.timeline and target_project.timeline.audio_track_items or {}
+  local target_video_items = target_project.timeline and target_project.timeline.video_track_items or {}
+  local all_target_items = {}
+  for _, i in ipairs(target_audio_items) do table.insert(all_target_items, i) end
+  for _, i in ipairs(target_video_items) do table.insert(all_target_items, i) end
+
+
+  local items_updated_count = 0
+  for _, target_item in ipairs(all_target_items) do
+    if target_item.id and source_items_by_id[target_item.id] then
+      local source_item = source_items_by_id[target_item.id]
+      if source_item.edit_instructions then
+        target_item.edit_instructions = source_item.edit_instructions
+        items_updated_count = items_updated_count + 1
+      end
+    end
+  end
+
+  print("Finished applying edits. Updated " .. items_updated_count .. " timeline items.")
+  return target_project
+end
+
+---
+-- Verifies that the clips on the timeline match the expected state.
+-- @param bmd_timeline (bmd.Timeline) The DaVinci Resolve timeline object.
+-- @param expected_clips (table) A list of clip info tables that were intended to be appended.
+-- @return (boolean) True if the timeline state is correct, false otherwise.
+--
+local function _verify_timeline_state(bmd_timeline, expected_clips)
+  print("Verifying timeline state...")
+  -- Build a "checklist" of expected cuts. Key: "mediaType-trackIndex-recordFrame"
+  local expected_cuts = {}
+  for _, clip in ipairs(expected_clips) do
+    local key = table.concat({ tostring(clip.mediaType), tostring(clip.trackIndex), tostring(clip.recordFrame) }, "-")
+    expected_cuts[key] = (expected_cuts[key] or 0) + 1
+  end
+
+  -- Get actual clips and "check them off" the list
+  local actual_video_items = get_items_by_tracktype("video", bmd_timeline)
+  local actual_audio_items = get_items_by_tracktype("audio", bmd_timeline)
+  local all_actual_items = {}
+  for _, item in ipairs(actual_video_items) do table.insert(all_actual_items, item) end
+  for _, item in ipairs(actual_audio_items) do table.insert(all_actual_items, item) end
+
+  for _, item in ipairs(all_actual_items) do
+    local media_type = item.track_type == "video" and 1 or 2
+    local key = table.concat(
+      { tostring(media_type), tostring(item.track_index), tostring(math.floor(item.start_frame + 0.5)) }, "-")
+    if expected_cuts[key] then
+      expected_cuts[key] = expected_cuts[key] - 1
+    end
+  end
+
+  -- Check if any expected cuts are "left over"
+  local missing_cuts = false
+  for key, count in pairs(expected_cuts) do
+    if count > 0 then
+      print("  - Verification FAILED. Missing clip: " .. key .. " (count: " .. count .. ")")
+      missing_cuts = true
+    end
+  end
+
+  if not missing_cuts then
+    print("  - Verification successful. All expected clips were found.")
+    return true
+  end
+  return false
+end
+
+---
+-- Prepares a batch of clips for the AppendToTimeline API call and groups them by link key.
+-- @param timeline_items (table) The list of all timeline items from project_data.
+-- @return (table, table) A tuple containing the list of API-ready clip info and the list of all processed clips with metadata.
+--
+local function _prepare_clips_for_append(timeline_items)
+  local final_api_batch = {}
+  local all_processed_clips = {}
+
+  for _, item in ipairs(timeline_items) do
+    if item.link_group_id and item.edit_instructions and #item.edit_instructions > 0 then
+      local media_type = item.track_type == "video" and 1 or 2
+      for i, edit in ipairs(item.edit_instructions) do
+        local record_frame = math.floor(edit.start_frame + 0.5)
+        local end_frame = math.floor(edit.end_frame + 0.5)
+        local duration = end_frame - record_frame
+        if duration >= 1 then
+          if not item.bmd_mpi then
+            item.bmd_mpi = item.bmd_item:GetMediaPoolItem()
+          end
+
+          local clip_info_for_api = {
+            mediaPoolItem = item.bmd_mpi,
+            startFrame = edit.source_start_frame,
+            endFrame = edit.source_start_frame + duration,
+            recordFrame = record_frame,
+            trackIndex = item.track_index,
+            mediaType = media_type,
+          }
+          table.insert(final_api_batch, clip_info_for_api)
+
+          -- Create a unique key for this specific edit segment to link clips later
+          local link_key = tostring(item.link_group_id) .. "-" .. tostring(i)
+
+          table.insert(all_processed_clips, {
+            clip_info = clip_info_for_api,
+            enabled = edit.enabled,
+            link_key = link_key -- Store the key for later grouping
+          })
+        end
+      end
+    end
+  end
+  return final_api_batch, all_processed_clips
+end
+
+
+---
+-- Main function to create the final timeline with edits.
+-- @param create_new (boolean) Whether to create a new timeline or modify the existing one.
+-- @param task_id (string) The ID of the current task.
+--
+local function append_and_link_timeline_items(create_new, task_id)
+  if not project_data or not project_data.timeline then
+    print("Error: Project data is missing.")
+    return
+  end
+
+  if not project then
+    print("Error: Could not get current project.")
+    return
+  end
+
+  media_pool = project:GetMediaPool()
+  if not media_pool then
+    print("Error: MediaPool not available.")
+    return
+  end
+
+  local timeline_items = {}
+  for _, item in ipairs(project_data.timeline.video_track_items) do table.insert(timeline_items, item) end
+  for _, item in ipairs(project_data.timeline.audio_track_items) do table.insert(timeline_items, item) end
+
+  local max_indices = { video = 0, audio = 0 }
+  for _, item in ipairs(timeline_items) do
+    max_indices[item.track_type] = math.max(max_indices[item.track_type], item.track_index)
+  end
+
+  local target_timeline
+  if create_new then
+    print("Creating a new timeline...")
+    local og_tl_name = project_data.timeline.name
+    local index = (created_timelines[og_tl_name] or 0)
+    local timeline_name
+    repeat
+      index = index + 1
+      timeline_name = string.format("%s-hc-%02d", og_tl_name, index)
+      target_timeline = media_pool:CreateEmptyTimeline(timeline_name)
+    until target_timeline or index > MAX_RETRIES
+
+    if not target_timeline then
+      send_result_with_alert("DaVinci Error", "Could not create new timeline after " .. MAX_RETRIES .. " attempts.",
+        task_id)
+      return
+    end
+    created_timelines[og_tl_name] = index
+    project:SetCurrentTimeline(target_timeline)
+    timeline = target_timeline -- Update global timeline reference
+  else
+    target_timeline = timeline
+    print("Clearing all clips from existing timeline...")
+    -- Clear all tracks
+    for i = 1, target_timeline:GetTrackCount("video") do
+      target_timeline:DeleteClips(target_timeline:GetItemListInTrack("video", i) or {}, false)
+    end
+    for i = 1, target_timeline:GetTrackCount("audio") do
+      target_timeline:DeleteClips(target_timeline:GetItemListInTrack("audio", i) or {}, false)
+    end
+  end
+
+  for track_type, required_count in pairs(max_indices) do
+    local current_count = target_timeline:GetTrackCount(track_type)
+    for _ = 1, required_count - current_count do
+      target_timeline:AddTrack(track_type)
+    end
+  end
+
+  print("Operating on timeline: '" .. target_timeline:GetName() .. "'")
+
+  -- Append, Verify, and Link
+  local success = false
+  for attempt = 1, 3 do
+    local api_batch, processed_clips = _prepare_clips_for_append(timeline_items)
+    local bmd_items = media_pool:AppendToTimeline(api_batch)
+
+    if #processed_clips == 0 then
+      success = true
+      break
+    end
+
+    local expected_clip_infos = {}
+    for _, p_clip in ipairs(processed_clips) do
+      table.insert(expected_clip_infos, p_clip.clip_info)
+    end
+
+    if _verify_timeline_state(target_timeline, expected_clip_infos) then
+      print("Verification successful. Proceeding to modify and link.")
+
+      -- 1. Create a lookup table to map a timeline position back to its link_key
+      local link_key_lookup = {}
+      for _, p_clip in ipairs(processed_clips) do
+        local info = p_clip.clip_info
+        local key = table.concat({ info.mediaType, info.trackIndex, info.recordFrame }, "-")
+        link_key_lookup[key] = p_clip.link_key
+      end
+
+      -- 2. Get all clips that were just added to the timeline
+      local actual_items = get_items_by_tracktype("video", target_timeline)
+      local audio_items = get_items_by_tracktype("audio", target_timeline)
+      for _, item in ipairs(audio_items) do table.insert(actual_items, item) end
+
+      -- 3. Group the actual BMD items by the original link_key
+      local link_groups = {}
+      for _, item_dict in ipairs(actual_items) do
+        local media_type = item_dict.track_type == "video" and 1 or 2
+        local lookup_key = table.concat({ media_type, item_dict.track_index, math.floor(item_dict.start_frame + 0.5) },
+          "-")
+        local link_key = link_key_lookup[lookup_key]
+
+        if link_key then
+          if not link_groups[link_key] then link_groups[link_key] = {} end
+          table.insert(link_groups[link_key], item_dict.bmd_item)
+        end
+      end
+
+      -- 4. Color disabled clips
+      local disabled_keys = {}
+      for _, p_clip in ipairs(processed_clips) do
+        if not p_clip.enabled then
+          local info = p_clip.clip_info
+          local key = table.concat({ info.mediaType, info.trackIndex, info.recordFrame }, "-")
+          disabled_keys[key] = true
+        end
+      end
+      if next(disabled_keys) then
+        for _, item_dict in ipairs(actual_items) do
+          local media_type = item_dict.track_type == "video" and 1 or 2
+          local key = table.concat({ media_type, item_dict.track_index, math.floor(item_dict.start_frame + 0.5) }, "-")
+          if disabled_keys[key] then
+            item_dict.bmd_item:SetClipColor("Violet")
+          end
+        end
+      end
+
+      -- 5. Link the clips in each group
+      print("Performing manual linking for necessary clips...")
+      for key, clips_to_link in pairs(link_groups) do
+        if #clips_to_link >= 2 then
+          print("  - Manually linking group: " .. key)
+          target_timeline:SetClipsLinked(clips_to_link, true)
+        end
+      end
+
+      success = true
+      break
+    else
+      print("Attempt " .. attempt .. " failed. Rolling back changes...")
+      if bmd_items and #bmd_items > 0 then
+        target_timeline:DeleteClips(bmd_items, false)
+      end
+    end
+  end
+
+  if success then
+    print("✅ Operation completed successfully.")
+    local response_payload = { status = "success", message = "Edit successful!" }
+    send_message_to_go("taskResult", response_payload, task_id)
+  else
+    print("❌ Operation failed after all retries.")
+    send_result_with_alert("DaVinci Error", "Failed to apply edits to the timeline after multiple attempts.", task_id)
+  end
+end
+
 
 --- @param sync boolean
 --- @param task_id string|nil
@@ -1297,8 +1873,8 @@ local function main(sync, task_id)
     return
   end
 
+  pm = resolve:GetProjectManager()
   if not pm then
-    pm = resolve:GetProjectManager()
     project = nil
     local alert_title = "DaVinci Resolve Error"
     local message = "Could not connect to DaVinci Resolve. Is it running?"
@@ -1306,6 +1882,7 @@ local function main(sync, task_id)
     return
   end
 
+  project = pm:GetCurrentProject()
   if not project then
     project_data = nil
     media_pool = nil
@@ -1325,7 +1902,6 @@ local function main(sync, task_id)
     return
   end
 
-  -- input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
   local input_otio_path = TEMP_DIR .. "/temp-timeline.otio"
 
   if sync or not project_data then
@@ -1338,39 +1914,26 @@ local function main(sync, task_id)
       return
     end
     print("Project data gathered successfully.")
-    print(project_data)
+    -- Export the timeline to OTIO format
+    export_timeline_to_otio(timeline, input_otio_path)
 
     if project_data then
-      local mt = { __jsontype = 'object' }
-      setmetatable(project_data, mt)
-      setmetatable(project_data.files, mt)
-
-      local state = {
-        indent = true, -- Enable pretty-printing
-        exception = function(reason, value)
-          if reason == 'unsupported type' then
-            -- Fallback to a string representation for any unserializable type
-            return "<BMD_Object>"
-          end
-          error(reason, 0)
-        end
-      }
-
-      print(json.encode(project_data, state))
-
       local payload = {
         status = "success",
         message = "sync successful!",
         data = project_data
       }
-
-      local json_string = json.encode(project_data, state)
-      print("DEBUG ENCODED JSON:", json_string)
-      -- Now, send the data. The encoder will respect the metatable.
-      --send_message_to_go("projectData", project_data)
       send_message_to_go("taskResult", payload, task_id)
       return
     end
+  end
+
+  -- If not syncing, we are making the final timeline
+  if not sync then
+    -- This is the new step: unify the edits before creating the timeline
+    unify_linked_items_in_project_data(input_otio_path)
+    print("Proceeding to create final timeline...")
+    append_and_link_timeline_items(make_new_timeline, task_id)
   end
 end
 
@@ -1465,6 +2028,28 @@ if go_app_path and free_port then
         main(true, task_id)
       elseif command == "makeFinalTimeline" then
         print("Make final timeline command detected.")
+        if params and params.projectData then
+          if project_data then
+            project_data = apply_edits_from_go(project_data, params.projectData)
+          else
+            -- If there's no local project data, we can't apply edits.
+            -- A sync should happen first.
+            send_result_with_alert("Sync Required", "Please sync with the timeline before applying edits.", task_id)
+          end
+          make_new_timeline = params.makeNewTimeline or false
+          print("Creating final timeline with makeNewTimeline = " .. tostring(make_new_timeline))
+          main(false, task_id) -- Call main to execute the timeline creation
+        else
+          send_result_with_alert("Data Error", "makeFinalTimeline command received without projectData.", task_id)
+        end
+      elseif command == "saveProject" then
+        if project then
+          pm:SaveProject()
+          print("Project saved.")
+          send_message_to_go("taskResult", { status = "success", message = "Project saved!" }, task_id)
+        else
+          send_result_with_alert("Error", "No project is open to save.", task_id)
+        end
       elseif command == "setPlayhead" then
         if params then
           local time_value = params.time
@@ -1474,7 +2059,8 @@ if go_app_path and free_port then
               status = "success",
               message = "Playhead set to " .. time_value,
             }
-            send_message_to_go("taskResult", payload, task_id)
+            -- #TODO: send ack or result to Go afterwards (ack doesn't work atm because it's not the same http request)
+            -- send_message_to_go("taskResult", payload, task_id)
           end
         end
       end

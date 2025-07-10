@@ -1091,7 +1091,6 @@ def export_timeline_to_otio(timeline: Any, file_path: str) -> None:
         print("No timeline to export.")
         return
 
-    # Assuming the Resolve API has a method to export timelines
     success = timeline.Export(file_path, RESOLVE.EXPORT_OTIO)
     if success:
         print(f"Timeline exported successfully to {file_path}")

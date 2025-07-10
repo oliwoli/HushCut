@@ -168,6 +168,27 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(response)
 
+		case "makeFinalTimeline":
+			// Log the request metadata
+			log.Printf("%s %s %s", r.Method, r.URL.Path, r.Proto)
+			for name, values := range r.Header {
+				for _, value := range values {
+					log.Printf("Header: %s: %s", name, value)
+				}
+			}
+			if len(bodyBytes) > 0 {
+				log.Printf("Body: %s", string(bodyBytes))
+			}
+
+			// send response
+			response := map[string]string{
+				"status":  "success",
+				"message": "Set playhead command received.",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
 		default:
 			// Unsupported command
 			w.Header().Set("Content-Type", "application/json")
