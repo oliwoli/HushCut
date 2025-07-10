@@ -44,7 +44,7 @@ copy_files() {
   cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
   chmod +x "$TARGET_FOLDER/HushCut"
 
-  cp "python-backend/src/HushCutLua.lua" "$TARGET_FOLDER/HushCutLua.lua"
+  cp "python-backend/src/HushCut.lua" "$TARGET_FOLDER/HushCut.lua"
   cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
   
   cd "lua-go-http"

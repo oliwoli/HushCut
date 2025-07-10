@@ -71,7 +71,7 @@ jobs:
         with:
           build-name: HushCut
           build-platform: ${{ matrix.platform }}
-          package: true
+          package: false
           go-version: '1.22'
 
       - name: Move Python backend to macOS Resources folder
