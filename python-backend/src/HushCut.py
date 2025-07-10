@@ -1515,7 +1515,7 @@ def send_progress_update(
     )
 
 
-def setTimecode(timecode: str, task_id: str = "") -> bool:
+def set_timecode(timecode: str, task_id: str = "") -> bool:
     global RESOLVE
     global PROJECT
     global TIMELINE
@@ -1559,11 +1559,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
         send_result_with_alert(alert_title, message, task_id)
-
-        send_message_to_go(
-            "projectData",
-            PROJECT_DATA,
-        )
         return False
 
     if not RESOLVE.GetProjectManager():
@@ -1593,10 +1588,6 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
             "taskResult",
             response_payload,
             task_id=task_id,
-        )
-        send_message_to_go(
-            "projectData",
-            PROJECT_DATA,
         )
         return False
 
@@ -2268,7 +2259,7 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
 
                 elif command == "setPlayhead":
                     time_value = params.get("time")
-                    if time_value is not None and setTimecode(time_value, task_id):
+                    if time_value is not None and set_timecode(time_value, task_id):
                         self._send_json_response(
                             200,
                             {

@@ -864,10 +864,10 @@ func (a *App) SetDavinciPlayhead(timecode string) (bool, error) {
 	// 3. Send the command and just check the acknowledgement
 	pyResponse, err := a.SendCommandToPython("setPlayhead", params)
 	if err != nil {
-		return false, fmt.Errorf("failed to send 'makeFinalTimeline' command: %w", err)
+		return false, fmt.Errorf("failed to send 'SetDavinciPlayhead' command: %w", err)
 	}
 	if pyResponse.Status != "success" {
-		return false, fmt.Errorf("python 'makeFinalTimeline' ack error: %s", pyResponse.Message)
+		return false, fmt.Errorf("python 'SetDavinciPlayhead' ack error: %s", pyResponse.Message)
 	}
 
 	if pyResponse.Status != "success" {

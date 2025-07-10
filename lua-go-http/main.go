@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/md5"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -97,6 +98,85 @@ func main() {
 		}
 
 		fmt.Fprintln(w, "Request logged.")
+	})
+
+	mux.HandleFunc("/command", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Read and store the body once
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read request body", http.StatusBadRequest)
+			return
+		}
+
+		var payload struct {
+			Command string                 `json:"command"`
+			Params  map[string]interface{} `json:"params"`
+		}
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("Received command: %s", payload.Command)
+
+		switch payload.Command {
+		case "sync":
+			// Log the request metadata
+			log.Printf("%s %s %s", r.Method, r.URL.Path, r.Proto)
+			for name, values := range r.Header {
+				for _, value := range values {
+					log.Printf("Header: %s: %s", name, value)
+				}
+			}
+			if len(bodyBytes) > 0 {
+				log.Printf("Body: %s", string(bodyBytes))
+			}
+
+			// Send response
+			response := map[string]string{
+				"status":  "success",
+				"message": "Sync command received.",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
+		case "setPlayhead":
+			// Log the request metadata
+			log.Printf("%s %s %s", r.Method, r.URL.Path, r.Proto)
+			for name, values := range r.Header {
+				for _, value := range values {
+					log.Printf("Header: %s: %s", name, value)
+				}
+			}
+			if len(bodyBytes) > 0 {
+				log.Printf("Body: %s", string(bodyBytes))
+			}
+
+			// send response
+			response := map[string]string{
+				"status":  "success",
+				"message": "Set playhead command received.",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
+		default:
+			// Unsupported command
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "error",
+				"message": fmt.Sprintf("Unknown command: %s", payload.Command),
+			})
+		}
 	})
 
 	// The shutdown handler now only sends a signal

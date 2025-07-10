@@ -1367,13 +1367,34 @@ local function main(sync, task_id)
       local json_string = json.encode(project_data, state)
       print("DEBUG ENCODED JSON:", json_string)
       -- Now, send the data. The encoder will respect the metatable.
-      send_message_to_go("projectData", project_data)
+      --send_message_to_go("projectData", project_data)
       send_message_to_go("taskResult", payload, task_id)
       return
     end
   end
 end
 
+
+local function set_timecode(time_value)
+  if not resolve then
+    print("Resolve not found. Cannot set playhead.")
+    return
+  end
+
+  if not timeline then
+    print("No timeline found. Cannot set playhead.")
+    return
+  end
+
+  local success = timeline:SetCurrentTimecode(time_value)
+  if not success then
+    print("Failed to set playhead to: " .. time_value)
+    return false
+  else
+    print("Playhead set to: " .. time_value)
+    return true
+  end
+end
 
 
 if go_app_path and free_port then
@@ -1429,12 +1450,8 @@ if go_app_path and free_port then
       end
     end
 
-
-
-    -- if taskId is in the params, print it
     if params and params.taskId then
       task_id = params.taskId
-      print("Task ID detected: " .. task_id)
     end
 
     if json_data and json_data.go_server_port then
@@ -1449,10 +1466,16 @@ if go_app_path and free_port then
       elseif command == "makeFinalTimeline" then
         print("Make final timeline command detected.")
       elseif command == "setPlayhead" then
-        local time_value = json_data.time
-        print("Set playhead command detected. Time value: " .. time_value)
-        if time_value then
-          print("Setting playhead to: " .. time_value)
+        if params then
+          local time_value = params.time
+          if time_value and set_timecode(time_value) then
+            print("Setting playhead to: " .. time_value)
+            local payload = {
+              status = "success",
+              message = "Playhead set to " .. time_value,
+            }
+            send_message_to_go("taskResult", payload, task_id)
+          end
         end
       end
     end
