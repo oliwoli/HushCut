@@ -19,10 +19,8 @@ PROJECT_ROOT="$SCRIPT_DIR/../../"
 
 # Define both user and system-level folders
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  SYSTEM_DAVINCI_FOLDER="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit"
   USER_DAVINCI_FOLDER="$HOME/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit"
 else
-  SYSTEM_DAVINCI_FOLDER="$HOME/.local/share/DaVinciResolve/Fusion/Scripts/Edit"
   USER_DAVINCI_FOLDER="$HOME/.local/share/DaVinciResolve/Fusion/Scripts/Edit"
 fi
 
@@ -35,17 +33,15 @@ copy_files() {
   echo "Copying files to: $TARGET_FOLDER"
   mkdir -p "$TARGET_FOLDER"
 
-  cp "python-backend/src/HushCut.py" "$TARGET_FOLDER/HushCut.py"
-  chmod +x "$TARGET_FOLDER/HushCut.py"
+  # cp "python-backend/src/HushCut.py" "$TARGET_FOLDER/HushCut.py"
+  # chmod +x "$TARGET_FOLDER/HushCut.py"
   
-  cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
-  chmod +x "$TARGET_FOLDER/HushCut"
+  # cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
+  # chmod +x "$TARGET_FOLDER/HushCut"
 
-  cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
-  chmod +x "$TARGET_FOLDER/HushCut"
 
   cp "python-backend/src/HushCut.lua" "$TARGET_FOLDER/HushCut.lua"
-  cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
+  # cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
   
   cd "lua-go-http"
   go build .
@@ -75,7 +71,6 @@ copy_files() {
 if [[ "$OSTYPE" == "darwin"* ]]; then
   echo "Detected macOS. Copying to both user and system DaVinci Resolve folders."
   copy_files "$USER_DAVINCI_FOLDER"
-  copy_files "$SYSTEM_DAVINCI_FOLDER"
 else
   # For other OS, defaulting to USER_DAVINCI_FOLDER
   echo "Detected non-macOS. Copying to user DaVinci Resolve folder."

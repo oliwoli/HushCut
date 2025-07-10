@@ -691,9 +691,26 @@ local json = (function()
   return internal_json_module
 end)()
 
+-- helper function to quote app paths
+local function quote(str)
+  return '"' .. str:gsub('"', '\\"') .. '"'
+end
+
+local function get_script_dir()
+  local source = debug.getinfo(1, "S").source
+  if source:sub(1, 1) == "@" then
+    local script_path = source:sub(2)
+    local sep = package.config:sub(1, 1) -- '/' or '\'
+    return script_path:match("(.*" .. sep .. ")") or "./"
+  else
+    -- source is something like =stdin or =...
+    return "./"
+  end
+end
+
+local script_dir = get_script_dir()
+
 local go_server_port = nil
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:gsub("[^/\\]+$", "")
 local TEMP_DIR = script_dir .. "wav_files"
 
 
@@ -798,7 +815,6 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
   end
 
 
-
   -- Construct the message payload
   local payload = {
     status = "error",
@@ -808,7 +824,6 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
     alertMessage = alertMessage,
     alertSeverity = alertSeverity or "error",
   }
-
 
 
   -- Send the message to the Go server
@@ -855,7 +870,7 @@ end
 
 
 local function find_free_port(go_script_path)
-  local handle = io.popen(go_script_path .. " --find-port")
+  local handle = io.popen(quote(go_script_path) .. " --find-port")
   if handle then
     local port = handle:read("*a")
     handle:close()
@@ -876,14 +891,13 @@ local function get_resolve()
     return Resolve()
   end)
 
-
-
   if success and result then
     return result
   else
     print("Warning: Failed to obtain Resolve object.")
     print("Details:", result)
-    return nil
+
+    return resolve
   end
 end
 
@@ -895,8 +909,8 @@ local free_port = find_free_port(go_script_path)
 
 
 ---@diagnostic disable-next-line: undefined-global
-local resolve = get_resolve()
-if not resolve then
+local resolve_obj = get_resolve()
+if not resolve_obj then
   print("Lua Error: Resolve object not found. Ensure this script is run inside DaVinci Resolve.")
   return
 end
@@ -908,8 +922,8 @@ local created_timelines = {}
 
 
 
-if resolve then
-  pm = resolve:GetProjectManager()
+if resolve_obj then
+  pm = resolve_obj:GetProjectManager()
   if pm then
     project = pm:GetCurrentProject()
     if project then
@@ -921,15 +935,36 @@ end
 
 
 
-if not os.execute("mkdir -p " .. TEMP_DIR) then
-  print("Failed to create temp directory: " .. TEMP_DIR)
+local function create_temp_dir(path)
+  local is_windows = package.config:sub(1, 1) == '\\'
+
+  local command
+  if is_windows then
+    -- Enclose in quotes to handle spaces in path
+    command = 'mkdir "' .. path .. '"'
+  else
+    command = 'mkdir -p "' .. path .. '"'
+  end
+
+  local success = os.execute(command)
+  if not success then
+    print("Failed to create temp directory: " .. path)
+    return false
+  end
+
+  return true
+end
+
+-- Usage
+if not create_temp_dir(TEMP_DIR) then
   return
 end
+
 local make_new_timeline = true
 local MAX_RETRIES = 100
 local project_data = nil
 
-if not resolve then
+if not resolve_obj then
   print("Resolve not found. Make sure this script is run inside DaVinci Resolve.")
   return
 end
@@ -974,7 +1009,7 @@ end
 -- Placeholder for a function that creates a UUID from a file path.
 local function uuid_from_path(path)
   -- call the script with --uuid-from-str <path>
-  local command = string.format("%s --uuid-from-str '%s'", go_script_path, path)
+  local command = string.format("%s --uuid-from-str '%s'", quote(go_script_path), path)
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from path: " .. path)
@@ -1150,13 +1185,13 @@ end
 
 -- Placeholder function, needs implementation.
 local function export_timeline_to_otio(davinci_tl, file_path)
-  if not resolve then return end
+  if not resolve_obj then return end
   if not davinci_tl then
     print("No timeline to export.")
     return
   end
   -- In a real implementation, this would use Resolve's API to export the timeline.
-  local success = davinci_tl:Export(file_path, resolve.EXPORT_OTIO)
+  local success = davinci_tl:Export(file_path, resolve_obj.EXPORT_OTIO)
   if success then
     print("Timeline exported successfully to " .. file_path)
   else
@@ -1861,11 +1896,11 @@ end
 --- @param sync boolean
 --- @param task_id string|nil
 local function main(sync, task_id)
-  if not resolve then
-    resolve = get_resolve()
+  if not resolve_obj then
+    resolve_obj = get_resolve()
   end
 
-  if not resolve then
+  if not resolve_obj then
     local alert_title = "Resolve Not Found"
     local alert_message = "This script must be run inside DaVinci Resolve."
     local alert_severity = "error"
@@ -1873,7 +1908,7 @@ local function main(sync, task_id)
     return
   end
 
-  pm = resolve:GetProjectManager()
+  pm = resolve_obj:GetProjectManager()
   if not pm then
     project = nil
     local alert_title = "DaVinci Resolve Error"
@@ -1939,7 +1974,7 @@ end
 
 
 local function set_timecode(time_value)
-  if not resolve then
+  if not resolve_obj then
     print("Resolve not found. Cannot set playhead.")
     return
   end
@@ -1966,15 +2001,16 @@ if go_app_path and free_port then
 
   local hushcut_command
   if os_type == "Linux" then
-    hushcut_command = "GDK_BACKEND=x11 " .. go_app_path .. " --python-port=" .. free_port .. " &"
+    hushcut_command = "GDK_BACKEND=x11 " .. quote(go_app_path) .. " --python-port=" .. free_port .. " &"
   else
-    hushcut_command = go_app_path .. " --python-port=" .. free_port .. " &"
+    hushcut_command = quote(go_app_path) .. " --python-port=" .. free_port .. " &"
   end
+
 
   print("Starting HushCut app with command: " .. hushcut_command)
   os.execute(hushcut_command)
 
-  local server_command = go_script_path .. " --port=" .. free_port .. " 2>&1"
+  local server_command = quote(go_script_path) .. " --port=" .. free_port .. " 2>&1"
   print("Starting http server with command: " .. server_command)
   local handle = io.popen(server_command)
   if not handle then
