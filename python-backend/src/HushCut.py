@@ -1924,6 +1924,7 @@ def append_and_link_timeline_items(
     print(f"Operating on timeline: '{timeline.GetName()}'")
     TIMELINE = timeline
 
+    TRACKER.update_task_progress("append", 10.0, "Adding Clips to Timeline")
     # === STEP 4: APPEND, VERIFY, AND LINK CLIPS ===
     success = False
     num_retries = 4

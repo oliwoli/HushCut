@@ -59,8 +59,7 @@ import { InfoDialog } from "./InfoDialog";
 import Timecode, { FRAMERATE } from "smpte-timecode";
 import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
-import { LoaderCircleIcon } from "lucide-react";
-import { useWaveformStore } from "./stores/waveformStore";
+import { initializeProgressListeners } from "./stores/progressStore";
 
 
 
@@ -401,6 +400,7 @@ function AppContent() {
   useEffect(() => {
     const hasBlur = supportsRealBackdrop();
     document.body.classList.add(hasBlur ? "has-blur" : "no-blur");
+    initializeProgressListeners()
   }, []);
 
 

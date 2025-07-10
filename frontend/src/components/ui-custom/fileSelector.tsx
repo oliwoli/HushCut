@@ -9,6 +9,7 @@ import { Progress } from "../ui/progress";
 import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
 import { useClipStore } from "@/stores/clipStore";
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useProgressStore } from "@/stores/progressStore";
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -73,134 +74,86 @@ const TARGET_PEAK_COUNT = 64;
 const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related audio
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
-
-const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, conversionProgress: progress, waveformProgress, hasError }: {
-  item: main.TimelineItem,
-  index: string,
-  isSelected: boolean,
-  onClipClick: () => void,
-  disabled?: boolean,
-  fps?: number,
-  conversionProgress?: number,
-  waveformProgress?: number,
-  hasError?: boolean,
+const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }: {
+  item: main.TimelineItem;
+  index: string;
+  isSelected: boolean;
+  onClipClick: (id: string) => void;
+  disabled?: boolean;
+  fps?: number;
 }) => {
-  if (!fps) return;
-  const clipRef = useRef<HTMLDivElement>(null); // <-- NEW: Ref to attach to the component's root element.
-  const [isInView, setIsInView] = useState(false); // <-- NEW: State to track if the component is visible.
+  if (!fps) return null;
 
   const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
-  const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
-  const [isFetchingWaveform, setIsFetchingWaveform] = useState(true);
-  const isLoading = isConverting || isFetchingWaveform;
-  const isModified = useClipStore(s => Object.prototype.hasOwnProperty.call(s.parameters, item.id));
-
-  const isNested = !!item.type;
+  const [isFetchingWaveform, setIsFetchingWaveform] = useState(false);
 
   const { startSeconds, endSeconds } = useMemo(() => {
     if (!fps || typeof item.source_start_frame !== 'number' || typeof item.source_end_frame !== 'number' || fps <= 0) {
       return { startSeconds: 0, endSeconds: 0 };
     }
-    // For compounds, source start/end is relative to its own beginning.
-    const start = isNested ? 0 : item.source_start_frame;
-    const end = isNested ? (item.end_frame - item.start_frame) : item.source_end_frame;
-    return {
-      startSeconds: start / fps,
-      endSeconds: end / fps,
-    };
-  }, [item, fps, isNested]);
+    const start = item.type === 'Compound' ? 0 : item.source_start_frame;
+    const end = item.type === 'Compound' ? (item.end_frame - item.start_frame) : item.source_end_frame;
+    return { startSeconds: start / fps, endSeconds: end / fps };
+  }, [item, fps]);
 
-  const clipDuration = endSeconds - startSeconds;
+  // SELECTIVELY SUBSCRIBE TO THE STORE
+  // This component now only re-renders if ITS OWN progress changes.
+  const progress = useProgressStore(state => item.processed_file_name ? state.conversionProgress[item.processed_file_name] : undefined);
+  const hasError = useProgressStore(state => item.processed_file_name ? state.conversionErrors[item.processed_file_name] : false);
+  const jobKey = useMemo(() => item.processed_file_name ? generateWaveformJobKey(item.processed_file_name, startSeconds, endSeconds) : '', [item.processed_file_name, startSeconds, endSeconds]);
+  const waveformProgress = useProgressStore(state => state.waveformProgress[jobKey]);
 
-  // <-- NEW: Effect to observe the component's visibility.
+  const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
+  const isLoading = isConverting || isFetchingWaveform;
+  const isModified = useClipStore(s => Object.prototype.hasOwnProperty.call(s.parameters, item.id));
+
   useEffect(() => {
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        // If the component is intersecting the viewport, update the state.
-        if (entry.isIntersecting) {
-          setIsInView(true);
-          // Once it's visible, we don't need to observe it anymore.
-          observer.unobserve(entry.target);
-        }
-      },
-      {
-        // The root is the viewport.
-        // `rootMargin` will trigger the fetch when the clip is 300px away from the screen,
-        // making it likely to be loaded by the time the user scrolls to it.
-        rootMargin: "0px 300px 0px 300px",
-      }
-    );
-
-    const currentRef = clipRef.current;
-    if (currentRef) {
-      observer.observe(currentRef);
-    }
-
-    return () => {
-      if (currentRef) {
-        observer.unobserve(currentRef);
-      }
-    };
-  }, []); // Empty dependency array ensures this runs only once on mount.
-
-
-  // <-- MODIFIED: The data fetching effect now depends on `isInView`.
-  useEffect(() => {
-    // Wait until the component is in view before doing anything.
-    if (!isInView) {
+    const clipDuration = endSeconds - startSeconds;
+    if (waveformPeaks || !item.processed_file_name || clipDuration <= 0 || isConverting) {
       return;
     }
 
     let isCancelled = false;
-    const delayMs = isSelected ? 5 : 15;
-
     const fetchWaveform = async () => {
-      if (!item.processed_file_name || clipDuration <= 0) {
-        // No need to set fetching state here, as it's not a fetchable item.
-        return;
-      }
-
       setIsFetchingWaveform(true);
-
-      const totalSamplesInClip = clipDuration * ASSUMED_SAMPLE_RATE;
-      let dynamicSamplesPerPixel = Math.ceil(totalSamplesInClip / TARGET_PEAK_COUNT);
-      dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, dynamicSamplesPerPixel);
+      const dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, Math.ceil((clipDuration * ASSUMED_SAMPLE_RATE) / TARGET_PEAK_COUNT));
 
       try {
-        await new Promise((res) => setTimeout(res, delayMs));
+        await new Promise((res) => setTimeout(res, 25));
         if (isCancelled) return;
 
-        const peakData = await GetWaveform(
-          item.processed_file_name,
-          dynamicSamplesPerPixel,
-          "linear", -60.0,
-          startSeconds, endSeconds
-        );
-
-        if (!isCancelled) {
-          setWaveformPeaks(peakData?.peaks ?? null);
+        if (item.processed_file_name) {
+          const peakData = await GetWaveform(item.processed_file_name, dynamicSamplesPerPixel, "linear", -60.0, startSeconds, endSeconds);
+          if (!isCancelled) setWaveformPeaks(peakData?.peaks ?? null);
         }
       } catch (error) {
-        console.error(`Failed to fetch waveform for ${item.name}:`, error);
-        if (!isCancelled) setWaveformPeaks(null);
+        if (!isCancelled) console.error(`Failed to fetch waveform for ${item.name}:`, error);
       } finally {
         if (!isCancelled) setIsFetchingWaveform(false);
       }
     };
-
     fetchWaveform();
     return () => { isCancelled = true; };
-  }, [
-    // This effect now correctly runs when the component comes into view.
-    isInView,
-    item.id, item.processed_file_name,
-    startSeconds, endSeconds, clipDuration,
-    isConverting, isSelected // isSelected is here to re-prioritize fetching
-  ]);
+  }, [item.id, item.processed_file_name, startSeconds, endSeconds, isConverting, waveformPeaks]);
 
+  const handleClipClick = useCallback(() => onClipClick(item.id), [item.id, onClipClick]);
+
+  const isNested = item.type !== null;
+
+
+  const renderCount = useRef(0);
+  useEffect(() => {
+    renderCount.current += 1;
+    console.log(
+      `Clip ${item.name} (ID: ${item.id}) re-rendered.`,
+      `Count: ${renderCount.current}`,
+      `FPS: ${fps}`,
+      `Start Frame: ${item.source_start_frame}`
+    );
+  }, [item, fps]); // This effect runs only when these props change
 
   return (
-    <div ref={clipRef} className="flex flex-col flex-shrink-0 max-w-44 min-w-24">
+    <div className="flex flex-col flex-shrink-0 max-w-44 min-w-24">
       <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
         <span className="text-stone-200 p-1 rounded-xs border-1 flex items-center">{index}</span>
         <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
@@ -208,7 +161,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, c
       </div>
       <button
         type="button"
-        onClick={onClipClick}
+        onClick={handleClipClick}
         disabled={disabled}
         className={cn(
           "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
@@ -307,6 +260,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   }, [onFileChange]);
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+
   if (sortedItems.length === 0) {
     return (
       <div className={cn("flex flex-col items-center justify-center text-center p-8 bg-zinc-800/50 border-2 border-dashed border-zinc-700 rounded-sm", className)}>
@@ -317,85 +271,15 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     );
   }
   const columnVirtualizer = useVirtualizer({
-    // The total number of items in your list
     count: sortedItems.length,
-    // A function to get the scrollable element
-    getScrollElement: () => scrollAreaRef.current,
-    // The estimated width of each item. This is crucial for the virtualizer
-    // to calculate the total width and positions.
-    // Your clips are min-w-24 (96px) and max-w-44 (176px). Let's pick an average.
-    // You can also make this a function for dynamic sizes: (index) => number
-    estimateSize: () => 120, // e.g., an average width of 120px
-    // We are scrolling horizontally
+    getScrollElement: () => scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null,
+    estimateSize: () => 150, // e.g., an average width of 120px
     horizontal: true,
-    // Render a few items on either side of the viewport to prevent flickering on fast scrolls
-    overscan: 5,
+    overscan: 10, // A slightly larger overscan can help with perceived smoothness
   });
 
   // Get the virtual items to render
   const virtualItems = columnVirtualizer.getVirtualItems();
-
-  const [conversionProgress, setConversionProgress] = useState<Record<string, number>>({});
-  const [waveformProgress, setWaveformProgress] = useState<Record<string, number>>({});
-
-
-  useEffect(() => {
-    const getFileName = (fullPath: string): string => {
-      if (!fullPath) return '';
-      return fullPath.split(/[\\/]/).pop() || '';
-    }
-
-    const unsubProgress = EventsOn('conversion:progress', (e: { filePath: string; percentage: number }) => {
-      const fileName = getFileName(e.filePath);
-      if (fileName) {
-        setConversionProgress(prev => ({ ...prev, [fileName]: e.percentage }));
-        console.log(`${fileName}: ${e.percentage}`)
-      }
-    });
-
-    const unsubDone = EventsOn('conversion:done', (e: { filePath: string }) => {
-      const fileName = getFileName(e.filePath);
-      if (fileName) {
-        // Set to 100 to show completion, then clear after a short delay
-        setConversionProgress(prev => ({ ...prev, [fileName]: 100 }));
-        setTimeout(() => {
-          setConversionProgress(prev => {
-            const { [fileName]: _, ...rest } = prev;
-            return rest;
-          });
-        }, 500);
-      }
-    });
-
-    const unsubError = EventsOn('conversion:error', (e: { filePath: string }) => {
-      const fileName = getFileName(e.filePath);
-      if (fileName) {
-        // Use a negative number to signify an error state
-        setConversionProgress(prev => ({ ...prev, [fileName]: -1 }));
-      }
-    });
-
-    const unsubWaveformProgress = EventsOn('waveform:progress', (e: { filePath: string; clipStart: number; clipEnd: number; percentage: number }) => {
-      const jobKey = generateWaveformJobKey(e.filePath, e.clipStart, e.clipEnd);
-      setWaveformProgress(prev => ({ ...prev, [jobKey]: e.percentage }));
-    });
-    const unsubWaveformDone = EventsOn('waveform:done', (e: { filePath: string; clipStart: number; clipEnd: number; }) => {
-      const jobKey = generateWaveformJobKey(e.filePath, e.clipStart, e.clipEnd);
-      setWaveformProgress(prev => {
-        const { [jobKey]: _, ...rest } = prev;
-        return rest;
-      });
-    });
-
-
-    return () => {
-      unsubProgress();
-      unsubDone();
-      unsubError();
-      unsubWaveformProgress();
-      unsubWaveformDone();
-    };
-  }, []);
 
   useEffect(() => {
     const element = scrollAreaRef.current;
@@ -403,7 +287,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 
     const handleWheel = (e: globalThis.WheelEvent) => {
       // Find the scrollable viewport inside the component
-      const viewport = element.querySelector<HTMLDivElement>(':scope > [data-radix-scroll-area-viewport]');
+      const viewport = element.querySelector<HTMLDivElement>('[data-slot="scroll-area-viewport"]');
       if (!viewport || e.deltaY === 0) return;
 
       // This will now work because the listener is not passive
@@ -429,42 +313,37 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
+      {/* We only need one container for the virtualizer */}
       <div
+        className="relative h-full"
         style={{
+          height: `112px`,
           width: `${columnVirtualizer.getTotalSize()}px`,
-          position: 'relative',
-          height: '100%',
         }}
       >
-        {/*
-          We now map over the VIRTUAL items, not the original sortedItems.
-          The virtualizer provides the correct style to position each item.
-        */}
         {virtualItems.map((virtualItem) => {
-          // Get the actual data for the item we're rendering
           const item = sortedItems[virtualItem.index];
           const itemUniqueIdentifier = item.id || item.processed_file_name;
           if (!itemUniqueIdentifier) return null;
 
-          const paddedIndex = String(virtualItem.index + 1).padStart(digits, '0');
+          // ❌ DELETED: No need to calculate convProgress or waveProgress here anymore.
 
           return (
             <div
               key={virtualItem.key}
               data-index={virtualItem.index}
-              ref={columnVirtualizer.measureElement} // Helps the virtualizer correct its estimates
+              ref={columnVirtualizer.measureElement}
               style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
-                transform: `translateX(${virtualItem.start}px)`, // THIS IS THE MAGIC!
-                paddingLeft: '4px', // Half of your original space-x-1
-                paddingRight: '4px',
+                width: `${virtualItem.size}px`,
+                transform: `translateX(${virtualItem.start}px)`,
+                padding: '0 2px', // Use padding on the wrapper for spacing
               }}
             >
               <AudioClip
-                // Note: key is now on the wrapper div, not here.
-                index={paddedIndex}
+                index={String(virtualItem.index + 1).padStart(String(sortedItems.length).length, '0')}
                 item={item}
                 isSelected={currentFileId === itemUniqueIdentifier}
                 onClipClick={handleFileChange}
