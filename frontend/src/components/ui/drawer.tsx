@@ -8,12 +8,11 @@ function Drawer({
 }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
   const container = document.getElementById('overlays');
 
-  // We must return null if the container doesn't exist to prevent errors.
   if (!container) {
     console.error("Portal target #overlays not found in the DOM.");
     return null;
   }
-  return <DrawerPrimitive.Root container={container} data-slot="drawer" {...props} />
+  return <DrawerPrimitive.Root container={container} data-slot="drawer" {...props} dismissible={false} />
 }
 
 function DrawerTrigger({
@@ -76,7 +75,7 @@ function DrawerContent({
         )}
         {...props}
       >
-        <div className="bg-muted mx-auto mt-4 hidden h-2 w-[100px] shrink-0 rounded-full group-data-[vaul-drawer-direction=bottom]/drawer-content:block" />
+        {/* <div className="bg-muted mx-auto mt-4 hidden h-2 w-[100px] shrink-0 rounded-full group-data-[vaul-drawer-direction=bottom]/drawer-content:block" /> */}
         {children}
       </DrawerPrimitive.Content>
     </DrawerPortal>
