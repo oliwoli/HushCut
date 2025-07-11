@@ -171,7 +171,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const setWaveform = useWaveformStore((s) => s.setWaveform);
 
   useEffect(() => {
-    console.log("")
     setWaveform(cutAudioSegmentUrl ?? undefined, peakData ?? null);
   }, [activeClip, cutAudioSegmentUrl, peakData, setWaveform]);
 
@@ -370,9 +369,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   useEffect(() => {
     if (!cutAudioSegmentUrl) return;
     if (!peakData) return;
-    console.log("cut audio segment URL: ", cutAudioSegmentUrl);
-    console.log("peak data? ", peakData.peaks);
-
 
     const audioUrlChanged = prevAudioUrlRef.current !== audioUrl;
 

@@ -310,10 +310,10 @@ class AudioFromVideo(TypedDict):
 PROJECT_DATA: Optional[ProjectData] = None
 
 TASKS: dict[str, int] = {
-    "prepare": 30,
-    "append": 30,
-    "verify": 15,
-    "link": 35,
+    "prepare": 10,
+    "append": 40,
+    "verify": 10,
+    "link": 40,
 }
 
 
@@ -915,14 +915,17 @@ class ProgressTracker:
         self._task_progress = {task: 0.0 for task in self._tasks}
         # self._report_progress("Initialized")
 
-    def _report_progress(self, message: str):
+    def _report_progress(self, message: str, important: bool = False):
         """
         Submits the send_progress_update function to the thread pool
         to be executed in the background.
         """
         # 3. Instead of calling the function directly, submit it to the executor.
         #    The main thread will not wait for this to complete.
-        if time() - self._last_report > 0.25:
+        if self.get_percentage() == 100.0:
+            important = True  # Always report completion immediately
+
+        if (time() - self._last_report > 0.125) or important:
             self._executor.submit(
                 send_progress_update, self.task_id, self.get_percentage(), message
             )
@@ -931,7 +934,6 @@ class ProgressTracker:
     def update_task_progress(
         self, task_name: str, percentage: float, message: str = ""
     ):
-        # ... (logic is identical)
         if not self.task_id:
             print("Warning: Tracker not initialized. Call start_new_run() first.")
             return
@@ -939,12 +941,16 @@ class ProgressTracker:
             print(f"Warning: Task '{task_name}' not found.")
             return
         percentage = max(0, min(100, percentage))
+        important = percentage == 100.0
+        if message and not important:
+            important = True
+
         self._task_progress[task_name] = self._tasks[task_name] * (percentage / 100.0)
         update_message = message if message is not None else task_name
         print(
             f"Updating '{task_name}' to {percentage:.1f}%. Overall: {self.get_percentage():.2f}%"
         )
-        self._report_progress(update_message)
+        self._report_progress(update_message, important=important)
 
     def complete_task(self, task_name: str):
         self.update_task_progress(task_name, 100.0)
@@ -1810,9 +1816,20 @@ def _append_clips_to_timeline(
 
     all_processed_clips.sort(key=lambda item: item["clip_info"].get("recordFrame", 0))
 
-    # --- Make a single, unified API call ---
+    # --- Make unified API calls with a defined batch size ---
     print(f"Appending {len(final_api_batch)} total clip instructions to timeline...")
-    appended_bmd_items: List[Any] = media_pool.AppendToTimeline(final_api_batch) or []
+    BATCH_SIZE = 100
+    appended_bmd_items: List[Any] = []
+
+    for i in range(0, len(final_api_batch), BATCH_SIZE):
+        chunk = final_api_batch[i : i + BATCH_SIZE]
+        appended = media_pool.AppendToTimeline(chunk) or []
+        appended_bmd_items.extend(appended)
+        if appended:
+            TRACKER.update_task_progress(
+                "append",
+                10.0 + (i / len(final_api_batch)) * 80.0,
+            )
 
     return all_processed_clips, appended_bmd_items
 

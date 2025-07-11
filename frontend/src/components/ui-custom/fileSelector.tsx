@@ -140,18 +140,6 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }:
 
   const isNested = item.type !== null;
 
-
-  const renderCount = useRef(0);
-  useEffect(() => {
-    renderCount.current += 1;
-    console.log(
-      `Clip ${item.name} (ID: ${item.id}) re-rendered.`,
-      `Count: ${renderCount.current}`,
-      `FPS: ${fps}`,
-      `Start Frame: ${item.source_start_frame}`
-    );
-  }, [item, fps]); // This effect runs only when these props change
-
   return (
     <div className="flex flex-col flex-shrink-0 max-w-44 min-w-24">
       <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
