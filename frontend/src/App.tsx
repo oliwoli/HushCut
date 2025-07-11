@@ -667,7 +667,7 @@ function AppContent() {
                     {!projectData ? (
                       <p className="text-gray-500">No active timeline.</p>
                     ) : (
-                      <p className="text-gray-500">No audio clip selected.</p>
+                      <p className="text-gray-500">No audio clips in timeline.</p>
                     )}
 
                   </div>
@@ -684,8 +684,8 @@ function AppContent() {
                 )}
               </div>
             </div>
-            <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 overflow-hidden shadow-xl h-min flex flex-col">
-              <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow overflow-auto">
+            <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 shadow-xl h-min flex flex-col">
+              <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow">
                 <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
                   <SilenceControls key={currentClipId} />
                 </div>
@@ -745,8 +745,8 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
         style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
         disableRadixAnimations={dialogOpacity === 0}
       >
-        <div className="max-w-full p-4 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
-          <DrawerTitle className="text-2xl sm:text-4xl md:text-6xl mt-12 font-medium">{displayMessage}</DrawerTitle>
+        <div className="max-w-full p-4 px-8 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
+          <DrawerTitle className="text-2xl sm:text-4xl md:text-5xl mt-12 font-medium">{displayMessage}</DrawerTitle>
           {Number.isFinite(progressPercentage) && (
             <Progress value={progressPercentage} className="h-0.5" />
           )}
