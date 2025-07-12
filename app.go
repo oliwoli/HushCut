@@ -1039,6 +1039,85 @@ func parseDuration(s string) (time.Duration, error) {
 
 }
 
+// calculateMP3DelaySec calculates the specific delay for MP3 files.
+// It uses a set of hardcoded values for known sample rates from the user's
+// provided data for perfect accuracy, and falls back to a predictive model
+// for all other sample rates.
+func calculateMP3DelaySec(sampleRate int) float64 {
+	// Use a switch for high performance and clarity.
+	switch sampleRate {
+	// --- Hardcoded values from your delay-data.csv for perfect precision ---
+	case 8000:
+		return 0.210
+	case 16000:
+		return 0.104994792
+	case 44100:
+		return 0.051177083
+	case 48000:
+		return 0.047015625
+	default:
+		// --- Fallback to the predictive model for any other sample rate ---
+		// This ensures we can handle any MP3 file gracefully.
+		const a = 1.30299795e+07
+		const k = 1.24413193
+		const b = 28.43853540
+
+		fs := float64(sampleRate)
+
+		// Calculate the delay in milliseconds using the model.
+		delayMilliseconds := (a / math.Pow(fs, k)) + b
+
+		// Convert the delay from milliseconds to seconds.
+		return delayMilliseconds / 1000.0
+	}
+}
+
+func (a *App) getStartTimeWithFFmpeg(inputPath string) (float64, error) {
+	cmd := exec.Command(a.ffmpegBinaryPath, "-i", inputPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+
+	output := stderr.String()
+
+	// Regex for "start: <value>"
+	re := regexp.MustCompile(`(?m)start:\s+([0-9.]+)`)
+	matches := re.FindStringSubmatch(output)
+	if len(matches) >= 2 {
+		startTime := strings.TrimSpace(matches[1])
+		return strconv.ParseFloat(startTime, 64)
+	}
+
+	// Fallback regex for "pts_time:<value>"
+	rePTS := regexp.MustCompile(`(?m)pts_time:([0-9.]+)`)
+	matches = rePTS.FindStringSubmatch(output)
+	if len(matches) >= 2 {
+		startTime := strings.TrimSpace(matches[1])
+		return strconv.ParseFloat(startTime, 64)
+	}
+
+	return 0.0, fmt.Errorf("start time not found in ffmpeg output")
+}
+
+func (a *App) createSilenceFile(tempDir string, delaySec float64, sampleRate int, outputPath string) (string, error) {
+	filename := filepath.Base(outputPath)
+
+	silencePath := filepath.Join(tempDir, fmt.Sprintf("silence_%s.wav", filename))
+	durationStr := fmt.Sprintf("%.9f", delaySec)
+
+	cmd := exec.Command(a.ffmpegBinaryPath,
+		"-f", "lavfi",
+		"-i", fmt.Sprintf("anullsrc=channel_layout=mono:sample_rate=%d", sampleRate),
+		"-t", durationStr,
+		"-y", silencePath)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate silence WAV: %w\n%s", err, output)
+	}
+	return silencePath, nil
+}
+
 func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *int) error {
 	tracker := &ConversionTracker{Done: make(chan error, 1)}
 	actualTracker, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker)
@@ -1075,7 +1154,8 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	infoCmd := exec.Command(a.ffmpegBinaryPath, "-i", inputPath)
 	var infoOutput bytes.Buffer
 	infoCmd.Stderr = &infoOutput
-	infoCmd.Run() // We can ignore the error, as ffmpeg errors on no output file but still prints info to stderr
+	_ = infoCmd.Run() // Ignore error as ffmpeg prints info to stderr even on failure
+	infoStr := infoOutput.String()
 
 	totalDuration, err := parseDuration(infoOutput.String())
 	if err != nil {
@@ -1084,17 +1164,70 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	}
 	totalDurationUs := float64(totalDuration.Microseconds())
 
+	// --- START OF MODIFIED LOGIC ---
+	var startTime float64
+
+	// Regex to find the audio stream, its codec, and sample rate.
+
+	reAudioStream := regexp.MustCompile(`Stream #\d+:\d+.*: Audio: (\w+).*?(\d+)\s+Hz`)
+	matches := reAudioStream.FindStringSubmatch(infoStr)
+
+	var sampleRate int = 44100 // Default sample rate if not found
+	// Check if the audio stream is MP3.
+	if len(matches) >= 3 && matches[1] == "mp3" {
+		codec := matches[1]
+		sampleRateStr := matches[2]
+		sampleRate, err = strconv.Atoi(sampleRateStr)
+		if err == nil && sampleRate > 0 {
+			// If it's an MP3, use the custom calculation.
+			startTime = calculateMP3DelaySec(sampleRate)
+			log.Printf("Detected MP3 audio stream (codec: %s, rate: %d Hz). Applying calculated delay of %.6f seconds.", codec, sampleRate, startTime)
+		}
+	}
+
+	// If startTime is still 0, it's not an MP3 or parsing failed. Fall back to the original metadata method.
+	if startTime == 0.0 {
+		log.Printf("File is not MP3 or info not found; falling back to metadata start_time.")
+		startTime, err = a.getStartTimeWithFFmpeg(inputPath)
+		if err != nil {
+			log.Printf("Could not get start time for %s via metadata: %v", inputPath, err)
+			startTime = 0.0 // Default to 0 if we can't determine it
+		}
+	}
+
 	// 3. Assemble the correct ffmpeg command (channel-aware or mono-mixdown)
-	args := []string{"-y", "-i", inputPath}
+	args := []string{
+		"-y",
+		"-i", inputPath,
+	}
+
+	var filterChain []string
+
+	tempDir := os.TempDir()
+
+	// 2. Add channel mapping or mono mixdown filters to the SAME chain.
 	if sourceChannel != nil && *sourceChannel > 0 {
 		channelIndex := *sourceChannel - 1
 		log.Printf("Extracting channel %d from '%s' using channelmap filter", *sourceChannel, filepath.Base(inputPath))
 		mapFilter := fmt.Sprintf("channelmap=map=%d", channelIndex)
-		args = append(args, "-af", mapFilter)
+		filterChain = append(filterChain, mapFilter)
 	} else {
+		// For a standard mono mixdown, it's cleaner to use the 'pan' filter
+		// than the '-ac 1' output option when other filters are in use.
 		log.Printf("Standardizing '%s' to mono", filepath.Base(inputPath))
-		args = append(args, "-vn", "-acodec", "pcm_s16le", "-ac", "1")
+		panFilter := "pan=mono|c0=0.5*FL+0.5*FR"
+		filterChain = append(filterChain, panFilter)
 	}
+
+	// 3. If we have any filters in our chain, join them with commas and add them to the args.
+	if len(filterChain) > 0 {
+		finalFilterString := strings.Join(filterChain, ",")
+		args = append(args, "-af", finalFilterString)
+	}
+
+	// 4. Add the final output codec and other options.
+	// The -acodec option is now outside the if/else block for clarity.
+	args = append(args, "-acodec", "pcm_s16le")
 	// Add the progress flag and output path to complete the command
 	args = append(args, "-progress", "pipe:1", outputPath)
 
@@ -1176,12 +1309,51 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		return finalErr
 	}
 
+	// Now handle silence and concat
+	if startTime > 0 {
+		//startTime *= 2
+		log.Printf("Detected start time %.6f for '%s'. Adding silence at the beginning.", startTime, filepath.Base(inputPath))
+		silenceWav, err := a.createSilenceFile(tempDir, startTime, sampleRate, outputPath)
+		if err != nil {
+			log.Printf("Failed to create silence file for '%s': %v", filepath.Base(inputPath), err)
+			tracker.Done <- err
+			return err
+		}
+		// rename the outputPath to a temporary, intermediate file
+		tempOutputPath := outputPath + ".temp.wav"
+		if err := os.Rename(outputPath, tempOutputPath); err != nil {
+			tracker.Done <- fmt.Errorf("failed to rename output file: %w", err)
+			return err
+		}
+		concatListPath := filepath.Join(tempDir, "concat_list.txt")
+		concatContent := fmt.Sprintf("file '%s'\nfile '%s'\n", silenceWav, tempOutputPath)
+		if err := os.WriteFile(concatListPath, []byte(concatContent), 0644); err != nil {
+			tracker.Done <- err
+			return err
+		}
+
+		concatCmd := exec.Command(a.ffmpegBinaryPath,
+			"-f", "concat", "-safe", "0", "-i", concatListPath,
+			"-acodec", "pcm_s16le", "-y", outputPath)
+
+		concatOut, err := concatCmd.CombinedOutput()
+		defer os.Remove(tempOutputPath)
+		defer os.Remove(silenceWav)
+		defer os.Remove(concatListPath)
+		if err != nil {
+			tracker.Done <- fmt.Errorf("concat failed: %w\n%s", err, concatOut)
+			return err
+		}
+		log.Printf("Successfully concatenated silence to '%s'.", filepath.Base(outputPath))
+	}
+
 	// On success, signal 100% and completion
 	tracker.mu.Lock()
 	tracker.Percentage = 100.0
 	tracker.mu.Unlock()
 	runtime.EventsEmit(a.ctx, "conversion:done", ConversionProgress{FilePath: outputPath, Percentage: 100})
 	tracker.Done <- nil
+
 	return nil
 }
 
