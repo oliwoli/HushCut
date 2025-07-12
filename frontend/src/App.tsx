@@ -60,6 +60,7 @@ import Timecode, { FRAMERATE } from "smpte-timecode";
 import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
+import SliderZag from "./components/ui/sliderZag";
 
 
 
@@ -99,6 +100,7 @@ const createActiveFileFromTimelineItem = (
     sourceStartFrame: item.source_start_frame,
     sourceEndFrame: item.source_end_frame,
     startFrame: item.start_frame,
+    duration: item.duration
   };
 };
 
@@ -122,6 +124,7 @@ function supportsRealBackdrop() {
 // });
 
 function AppContent() {
+  const [sliderValue, setSliderValue] = useState(50);
   const [ffmpegReady, setFFmpegReady] = useState<boolean | null>(null)
   const prevFfmpegReady = usePrevious(ffmpegReady);
 
@@ -697,6 +700,7 @@ function AppContent() {
                       defaultDetectionParams={getDefaultDetectionParams()}
                       onPendingAction={() => setPendingRemoveSilences(true)}
                     />
+                    <SliderZag />
                   </div>
                 )}
               </div>
