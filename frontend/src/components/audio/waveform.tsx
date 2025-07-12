@@ -166,8 +166,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     httpPort
   );
 
-
-
   const setWaveform = useWaveformStore((s) => s.setWaveform);
 
   useEffect(() => {
@@ -203,8 +201,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  const clipFrameDuration =
-    activeClip.sourceEndFrame - activeClip.sourceStartFrame;
+  const clipFrameDuration = activeClip.sourceEndFrame - activeClip.sourceStartFrame
   const duration = peakData?.duration || clipFrameDuration;
 
   const currTimecode = useTimecodeStore((s) => s.timecode);

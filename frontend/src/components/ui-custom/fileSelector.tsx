@@ -4,7 +4,6 @@ import { cn, frameToTimecode } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
-import { EventsOn } from "@wails/runtime/runtime";
 import { Progress } from "../ui/progress";
 import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
 import { useClipStore } from "@/stores/clipStore";
