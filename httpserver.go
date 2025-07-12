@@ -475,9 +475,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 	// --- FFMPEG Command Setup ---
 	cmd := exec.Command(a.ffmpegBinaryPath,
 		"-i", originalFilePath,
-		"-ss", fmt.Sprintf("%f", startSeconds),
-		"-to", fmt.Sprintf("%f", endSeconds),
-		"-c", "copy",
+		"-af", fmt.Sprintf("atrim=start=%.6f:end=%.6f", startSeconds, endSeconds),
 		"-f", "wav",
 		"-vn",
 		"-hide_banner",
