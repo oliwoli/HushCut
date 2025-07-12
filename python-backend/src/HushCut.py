@@ -1142,7 +1142,7 @@ def get_items_by_tracktype(
             timeline_item: TimelineItem = {
                 "bmd_item": item_bmd,
                 "bmd_mpi": media_pool_item,
-                "duration": 0,  # unused, therefore 0 #item.GetDuration(),
+                "duration": duration,
                 "name": item_name,
                 "edit_instructions": [],
                 "start_frame": start_frame,

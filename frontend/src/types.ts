@@ -13,6 +13,7 @@ export interface ActiveClip {
   sourceStartFrame: number;     // For WaveformPlayer region (TimelineItem.SourceStartFrame)
   sourceEndFrame: number;       // For WaveformPlayer region (TimelineItem.SourceEndFrame)
   startFrame: number;
+  duration: number;          // Duration of the clip in frames
   // Optional: Store original timeline item data if needed elsewhere for convenience
   // trackIndex: number;
   // timelineStartFrame: number; // To distinguish from sourceStartFrame for other uses
