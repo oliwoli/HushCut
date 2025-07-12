@@ -903,7 +903,16 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   };
 
   const handlePlayPause = useCallback(() => {
-    if (wavesurferRef.current && !isLoading) wavesurferRef.current.playPause();
+    if (wavesurferRef.current && !isLoading) {
+      const promise = wavesurferRef.current.playPause();
+      if (promise) {
+        promise.catch((err) => {
+          if (err.name !== "AbortError") {
+            console.error("Playback error:", err);
+          }
+        });
+      }
+    }
   }, [isLoading]);
 
   usePlaybackControls({
