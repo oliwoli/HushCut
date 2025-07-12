@@ -97,24 +97,6 @@ jobs:
           mv -v build/bin/lua-go-http "$RESOURCE_DIR/"
           mv -v build/bin/HushCut.lua "$RESOURCE_DIR/"
 
-      - name: Download FFmpeg
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          if [[ "${{ matrix.label }}" == "linux" ]]; then
-            curl -L -o ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-            tar -xf ffmpeg.tar.xz
-            mv -v ffmpeg-*-amd64-static/ffmpeg build/bin/
-            chmod +x build/bin/ffmpeg
-          elif [[ "${{ matrix.label }}" == "windows" ]]; then
-            curl -L -o ffmpeg.7z https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z
-            7z x ffmpeg.7z
-            mv -v ffmpeg-*/bin/ffmpeg.exe build/bin/
-          elif [[ "${{ matrix.label }}" == "macos" ]]; then
-            curl -JL -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
-            unzip ffmpeg.zip -d build/bin/HushCut.app/Contents/Resources
-            chmod +x build/bin/HushCut.app/Contents/Resources/ffmpeg
-          fi
-
       - name: Zip bin folder
         if: startsWith(github.ref, 'refs/tags/')
         run: zip -r HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
