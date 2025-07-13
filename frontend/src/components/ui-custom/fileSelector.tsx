@@ -5,8 +5,8 @@ import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Progress } from "../ui/progress";
-import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, LayersIcon } from "lucide-react";
-import { useClipStore } from "@/stores/clipStore";
+import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
+import { useClipStore, useIsClipModified } from "@/stores/clipStore";
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
 
@@ -73,13 +73,14 @@ const TARGET_PEAK_COUNT = 64;
 const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related audio
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
-const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }: {
+const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, allClipIds }: {
   item: main.TimelineItem;
   index: string;
   isSelected: boolean;
   onClipClick: (id: string) => void;
   disabled?: boolean;
   fps?: number;
+  allClipIds: string[];
 }) => {
   if (!fps) return null;
 
@@ -104,7 +105,32 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }:
 
   const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
   const isLoading = isConverting || isFetchingWaveform;
-  const isModified = useClipStore(s => Object.prototype.hasOwnProperty.call(s.parameters, item.id));
+  const isModified = useIsClipModified(item.id);
+
+  const bypassed = useClipStore(s => s.getParameter(item.id, 'bypassed'));
+
+
+  const setBypassed = (value: boolean) => {
+    useClipStore.getState().setParameter(item.id, 'bypassed', value);
+    console.log(`Set bypassed for ${item.id} to ${value}`);
+  };
+
+  const handleBypassClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    // The new bypass value for *this* clip:
+    const newBypass = !bypassed;
+
+    if (e.shiftKey) {
+      // Apply to *all* clips:
+      allClipIds.forEach(id =>
+        useClipStore.getState().setParameter(id, 'bypassed', newBypass)
+      );
+    } else {
+      // Just this clip:
+      setBypassed(newBypass);
+    }
+  };
 
   useEffect(() => {
     const clipDuration = endSeconds - startSeconds;
@@ -140,9 +166,11 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }:
   const isNested = item.type !== null;
 
   return (
-    <div className="flex flex-col flex-shrink-0 max-w-44 min-w-24">
+    <div className={cn(
+      "flex flex-col flex-shrink-0 max-w-44 min-w-24",
+    )}>
       <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
-        <span className="text-stone-200 p-1 rounded-xs border-1 flex items-center">{index}</span>
+        <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border-1 flex items-center")}>{index}</span>
         <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
         <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
       </div>
@@ -151,9 +179,11 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }:
         onClick={handleClipClick}
         disabled={disabled}
         className={cn(
+          "group",
           "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 focus-visible:ring-blue-400",
-          "bg-gray-700/40 border",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400",
+          "border",
+          bypassed ? "bg-transparent" : "bg-gray-700/40",
           {
             "border-zinc-700 hover:border-zinc-600": !isSelected,
             "border-orange-500 ": isSelected,
@@ -182,7 +212,25 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }:
           </div>
         )}
 
-        <div className={cn("absolute inset-0 flex items-center justify-center text-teal-400/60 p-1 bottom-6 [@media(max-height:800px)]:bottom-5", isLoading && "animate-pulse")}>
+        <div className={cn(
+          bypassed ? "flex" : "group-hover:flex hidden",
+          "text-zinc-400 z-30 top-0 right-1.5 p-2 pl-4 absolute items-center space-x-1",
+          "hover:text-zinc-100"
+        )} role="button" onClick={handleBypassClick}>
+          {bypassed ? (
+            <PowerOffIcon size={15} className="text-orange-400 hover:text-orange-200" />
+          ) : (
+            <PowerIcon size={15} />
+          )}
+        </div>
+
+
+        <div className={cn(
+          "absolute inset-0 flex items-center justify-center  p-1 bottom-6 [@media(max-height:800px)]:bottom-5",
+          bypassed ? "text-gray-600" : "text-teal-400/60",
+          isLoading && "animate-pulse")
+        }>
+
           {isLoading ? <SimulatedWaveform /> : (
             waveformPeaks ?
               <LinearWaveform
@@ -201,7 +249,9 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps }:
             {!isNested && (
               <AudioLinesIcon className={cn("text-sm h-[14px] text-stone-400 p-0 mr-1")} />
             )}
-            <div className="flex items-baseline space-x-1">
+            <div className={cn(
+              bypassed ? "opacity-80" : "opacity-100",
+              "flex items-baseline space-x-1")}>
               <p className="font-medium text-xs text-zinc-200/90 truncate max-w-28">{item.name}</p>
               <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="p-0 m-0 ml-[-4px] mb-[2px]" /></span>
             </div>
@@ -289,18 +339,18 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     // Add the event listener with the crucial `{ passive: false }` option
     element.addEventListener('wheel', handleWheel, { passive: false });
 
-    // Return a cleanup function to remove the listener when the component unmounts
     return () => {
       element.removeEventListener('wheel', handleWheel);
     };
-  }, []); // The empty dependency array ensures this effect runs only once
+  }, []);
 
   const totalItems = sortedItems.length;
   const digits = String(totalItems).length;
 
+  const allClipIds = sortedItems.map(item => item.id);
+
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
-      {/* We only need one container for the virtualizer */}
       <div
         className="relative h-full"
         style={{
@@ -312,8 +362,6 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
           const item = sortedItems[virtualItem.index];
           const itemUniqueIdentifier = item.id || item.processed_file_name;
           if (!itemUniqueIdentifier) return null;
-
-          // ❌ DELETED: No need to calculate convProgress or waveProgress here anymore.
 
           return (
             <div
@@ -336,6 +384,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
                 onClipClick={handleFileChange}
                 disabled={disabled}
                 fps={fps}
+                allClipIds={allClipIds}
               />
             </div>
           );

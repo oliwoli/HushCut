@@ -30,6 +30,11 @@ export function deriveAllClipDetectionParams(
     // It checks for clip-specific params, then falls back to live defaults.
     const correctClipParams = clipStoreState.parameters[clipId] ?? clipStoreState.liveDefaultParameters;
 
+    // If a clip is bypassed, it should be excluded from processing.
+    if (correctClipParams.bypassed) {
+      continue;
+    }
+
     detectionParams[clipId] = {
       loudnessThreshold: correctClipParams.threshold,
       minSilenceDurationSeconds: correctClipParams.minDuration,
@@ -81,9 +86,17 @@ export async function prepareProjectDataWithEdits(
     workingProjectData.timeline.audio_track_items.map(async (item) => {
       const clipId = item.id; // Ensure item.id is the correct key used in allClipParams
 
+      // If a clip was bypassed, it will not be in `allClipParams`.
+      // We must skip silence detection for it entirely.
+      if (!clipId || !allClipParams.hasOwnProperty(clipId)) {
+        if (clipId) {
+          allClipSilencesMapForGo[clipId] = []; // Ensure an entry for Go, but with no edits.
+        }
+        return; // Skip this item.
+      }
+
       if (
         !item.processed_file_name ||
-        !clipId ||
         typeof item.source_start_frame !== "number" ||
         typeof item.source_end_frame !== "number"
       ) {
@@ -170,19 +183,16 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     onPendingAction,
   } = props;
 
-  // Zustand state
   const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
   const keepSilence = useGlobalStore(s => s.keepSilence);
   const setBusy = useSyncBusyState(s => s.setBusy);
 
-  // --- REFACTORED STATE ---
   // Single ref to manage the entire cache. No more duplicating Zustand state.
   const cacheRef = useRef<ProcessedDataCache | null>(null);
 
   // State for UI purposes only (button text, disabled status)
   const [isProcessingClick, setIsProcessingClick] = useState(false);
   const [isProcessingHover, setIsProcessingHover] = useState(false);
-  // --- END REFACTORED STATE ---
 
   // Invalidate the cache if the base project data prop changes.
   useEffect(() => {

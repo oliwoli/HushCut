@@ -1191,7 +1191,7 @@ def _verify_timeline_state(
     # We use a Counter to handle multiple clips starting at the same frame on the same track.
     expected_cuts = Counter()
     for clip in expected_clips:
-        key = (clip["mediaType"], clip["trackIndex"], clip["recordFrame"])
+        key = (clip["mediaType"], clip["trackIndex"], int(clip["recordFrame"]))
         expected_cuts[key] += 1
 
     # 2. Get the actual clips from the timeline.
@@ -1201,7 +1201,7 @@ def _verify_timeline_state(
     # 3. "Check off" items from our checklist.
     for item in actual_video_items + actual_audio_items:
         media_type = 1 if item["track_type"] == "video" else 2
-        key = (media_type, item["track_index"], item["start_frame"])
+        key = (media_type, item["track_index"], int(item["start_frame"]))
         if key in expected_cuts:
             expected_cuts[key] -= 1  # Decrement the count for this cut
         else:
@@ -1834,6 +1834,29 @@ def _append_clips_to_timeline(
     return all_processed_clips, appended_bmd_items
 
 
+def clip_is_uncut(item: TimelineItem) -> bool:
+    """
+    Checks if a clip is uncut, meaning it has no edit instructions.
+    """
+    if not item.get("edit_instructions") or len(item["edit_instructions"]) == 0:
+        return True
+
+    if len(item["edit_instructions"]) > 1:
+        return False
+
+    # check if the only edit instruction is a full clip
+    edit_instruction = item["edit_instructions"][0]
+    if (
+        edit_instruction["start_frame"] == item["start_frame"]
+        and edit_instruction["end_frame"] == item["end_frame"]
+        and edit_instruction["source_start_frame"] == item["source_start_frame"]
+        and edit_instruction["source_end_frame"] == item["source_end_frame"]
+    ):
+        return True
+
+    return False
+
+
 def append_and_link_timeline_items(
     create_new_timeline: bool = True, task_id=""
 ) -> None:
@@ -1907,16 +1930,44 @@ def append_and_link_timeline_items(
             all_clips_to_delete = []
 
             # Iterate through all video tracks that might have content
-            for i in range(1, timeline.GetTrackCount("video") + 1):
-                clips_in_track = timeline.GetItemListInTrack("video", i)
-                if clips_in_track:
-                    all_clips_to_delete.extend(clips_in_track)
+            for item in PROJECT_DATA["timeline"]["video_track_items"]:
+                type = item["type"]
+                if type:
+                    all_clips_to_delete.extend(item["bmd_item"])
+                if not item["bmd_mpi"]:
+                    item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
+                if not item["bmd_mpi"]:
+                    print(
+                        f"Warning: No MediaPoolItem found for item '{item['name']}'. Skipping."
+                    )
+                    continue
+                # don't delete items with no edit instructions, or empty edit instructions
+                if not item.get("edit_instructions"):
+                    print(f"Skipping item '{item['name']}' with no edit instructions.")
+                    continue
 
-            # Iterate through all audio tracks that might have content
-            for i in range(1, timeline.GetTrackCount("audio") + 1):
-                clips_in_track = timeline.GetItemListInTrack("audio", i)
-                if clips_in_track:
-                    all_clips_to_delete.extend(clips_in_track)
+                if clip_is_uncut(item):
+                    print(f"Skipping uncut item '{item['name']}' with no edits.")
+                    continue
+
+                all_clips_to_delete.append(item["bmd_item"])
+
+            for item in PROJECT_DATA["timeline"]["audio_track_items"]:
+                type = item["type"]
+                if type:
+                    all_clips_to_delete.extend(item["bmd_item"])
+                if not item["bmd_mpi"]:
+                    continue
+
+                if not item.get("edit_instructions"):
+                    print(f"Skipping item '{item['name']}' with no edit instructions.")
+                    continue
+
+                if clip_is_uncut(item):
+                    print(f"Skipping uncut item '{item['name']}' with no edits.")
+                    continue
+
+                all_clips_to_delete.append(item["bmd_item"])
 
             if all_clips_to_delete:
                 print(f"Deleting {len(all_clips_to_delete)} existing clips...")

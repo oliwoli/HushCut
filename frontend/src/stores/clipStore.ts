@@ -67,6 +67,7 @@ export const defaultParameters = {
   paddingRight: 0.5,
   minContent: 0.0,
   paddingLocked: true,
+  bypassed: false
 };
 
 export interface ClipParameters {
@@ -76,6 +77,7 @@ export interface ClipParameters {
   paddingRight: number;
   minContent: number;
   paddingLocked: boolean;
+  bypassed: boolean;
 }
 
 // Export the main store interface
@@ -122,15 +124,20 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         [key]: value,
       };
       
-      const shouldUpdateLiveDefaults = state.syncDefaultsToLastEdit;
+      const shouldUpdateLiveDefaults = state.syncDefaultsToLastEdit && key !== 'bypassed';
 
       return {
         parameters: {
           ...state.parameters,
           [clipId]: newClipParams,
         },
+        // --- FIX ---
+        // When updating live defaults, create them from the new clip params,
+        // but explicitly preserve the existing `bypassed` value from the
+        // previous live defaults. This prevents the clip's specific bypass
+        // state from "leaking" into the global defaults.
         liveDefaultParameters: shouldUpdateLiveDefaults
-          ? { ...newClipParams }
+          ? { ...newClipParams, bypassed: state.liveDefaultParameters.bypassed }
           : state.liveDefaultParameters,
       };
     });
@@ -151,7 +158,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         ...newParams,
       };
 
-      // --- THIS IS THE FIX (applied here too for consistency) ---
       const shouldUpdateLiveDefaults = state.syncDefaultsToLastEdit;
 
       return {
@@ -159,8 +165,11 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           ...state.parameters,
           [clipId]: newClipParams,
         },
+        // --- FIX (Applied here for consistency) ---
+        // The same logic is applied here to prevent a bulk update from
+        // unintentionally changing the global default bypass state.
         liveDefaultParameters: shouldUpdateLiveDefaults
-          ? { ...newClipParams }
+          ? { ...newClipParams, bypassed: state.liveDefaultParameters.bypassed }
           : state.liveDefaultParameters,
       };
     });
@@ -195,16 +204,33 @@ export function useClipParameter<K extends keyof ClipParameters>(
   return [value, set];
 }
 
-export function useIsClipModified(): boolean {
-  const isModified = useStoreWithEqualityFn(
+export function useIsClipModified(clipIdToCheck?: string): boolean {
+  return useStoreWithEqualityFn(
     useClipStore,
     (state) => {
-      if (!state.currentClipId) {
+      const clipId = clipIdToCheck ?? state.currentClipId;
+      if (!clipId) return false;
+
+      // A clip can't be "modified" if it doesn't have its own specific parameters.
+      // This is the crucial first check.
+      if (!Object.prototype.hasOwnProperty.call(state.parameters, clipId)) {
         return false;
       }
-      return Object.prototype.hasOwnProperty.call(state.parameters, state.currentClipId);
+
+      // The clip has its own parameters, so let's get them.
+      const clipParams = state.parameters[clipId];
+      const staticDefaults = defaultParameters;
+
+      // Now, we check if any of the clip's OWN parameters (excluding 'bypassed')
+      // have a value that is different from the static, hardcoded default.
+      return (Object.keys(clipParams) as (keyof ClipParameters)[]).some(key => {
+        if (key === 'bypassed') {
+          return false; // Always ignore the 'bypassed' key in the comparison.
+        }
+        // If the clip's value for this key is different from the default,
+        // then the clip is considered modified.
+        return clipParams[key] !== staticDefaults[key];
+      });
     }
   );
-
-  return isModified;
 }
