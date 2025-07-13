@@ -568,6 +568,42 @@ def populate_nested_clips(input_otio_path: str) -> None:
             playhead_frames += duration_val
 
 
+def find_closest_match(
+    pd_items: list,
+    record_frame: float,
+    duration_val: float,
+    track_index: int,
+    frame_tolerance: float = 0.5,
+    search_range: int = 5,
+) -> list:
+    """
+    Try to find items that match the record_frame and duration_val approximately.
+    If no exact match within tolerance, find the closest one by scanning ±search_range.
+    """
+    best_match = None
+    best_distance = float("inf")
+
+    for offset in range(-search_range, search_range + 1):
+        frame_try = record_frame + offset
+        for item in pd_items:
+            if item.get("track_index") != track_index:
+                continue
+
+            frame_diff = abs(item.get("start_frame", -1) - frame_try)
+            duration_diff = abs(item.get("duration", -1) - duration_val)
+
+            if frame_diff < frame_tolerance and duration_diff < frame_tolerance:
+                return [item]  # Early return on valid match
+
+            # Save closest one in case no good match is found
+            distance = frame_diff + duration_diff
+            if distance < best_distance:
+                best_distance = distance
+                best_match = item
+
+    return [best_match] if best_match else []
+
+
 def process_track_items(
     items: list,
     pd_timeline: Timeline,
@@ -583,7 +619,7 @@ def process_track_items(
     Now handles both Clips and Stacks (Compound Clips).
     """
     FRAME_MATCH_TOLERANCE = 0.5
-    playhead_frames = 0
+    playhead_frames = 0.0
 
     for item in items:
         if not item:
@@ -603,13 +639,12 @@ def process_track_items(
 
             # Find all project data items that correspond to this OTIO item.
             # A compound clip will match both its video and audio parts.
-            corresponding_items = [
-                tl_item
-                for tl_item in pd_timeline.get(pd_timeline_key, [])
-                if tl_item.get("track_index") == track_index
-                and abs(tl_item.get("start_frame", -1) - record_frame_float)
-                < FRAME_MATCH_TOLERANCE
-            ]
+            corresponding_items = find_closest_match(
+                pd_timeline.get(pd_timeline_key, []),
+                record_frame_float,
+                duration_val,
+                track_index,
+            )
 
             if not corresponding_items:
                 logging.warning(
@@ -824,7 +859,11 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             if len(unified_edits) == 1:
                 edit_start, edit_end, _ = unified_edits[0]
                 # Use a small tolerance for float comparison
-                if edit_start == 0.0 and abs(edit_end - item_duration) < 0.01:
+                if (
+                    edit_end is not None
+                    and edit_start == 0.0
+                    and abs(edit_end - item_duration) < 0.01
+                ):
                     is_effectively_uncut = True
 
             new_edit_instructions = []
@@ -832,7 +871,12 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
 
             if is_effectively_uncut:
                 # This is the "uncut" path. We must preserve the original values exactly.
-                original_edit = item.get("edit_instructions", [{}])[0]
+
+                original_edit = (
+                    item.get("edit_instructions", [{}])[0]
+                    if item.get("edit_instructions")
+                    else {}
+                )
                 new_edit_instructions.append(
                     {
                         "source_start_frame": item["source_start_frame"],
@@ -847,14 +891,18 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
 
                 # Unpack the correct boolean for each specific segment
                 for rel_start, rel_end, is_enabled in unified_edits:
-                    source_duration = cast(float, rel_end) - rel_start
+                    source_duration = (
+                        item["source_end_frame"] - item["source_start_frame"]
+                        if rel_end is None
+                        else cast(float, rel_end) - rel_start
+                    )
                     timeline_duration = round(source_duration)
 
                     if timeline_duration < 1:
                         continue
 
                     source_start = base_source_offset + rel_start
-                    source_end = source_start + timeline_duration
+                    source_end = source_start + source_duration
 
                     timeline_start = timeline_playhead
                     timeline_end = timeline_playhead + timeline_duration
@@ -1856,8 +1904,10 @@ def clip_is_uncut(item: TimelineItem) -> bool:
     if (
         abs(edit_instruction["start_frame"] - item["start_frame"]) < TOLERANCE
         and abs(edit_instruction["end_frame"] - item["end_frame"]) < TOLERANCE
-        and abs(edit_instruction["source_start_frame"] - item["source_start_frame"]) < TOLERANCE
-        and abs(edit_instruction["source_end_frame"] - item["source_end_frame"]) < TOLERANCE
+        and abs(edit_instruction["source_start_frame"] - item["source_start_frame"])
+        < TOLERANCE
+        and abs(edit_instruction["source_end_frame"] - item["source_end_frame"])
+        < TOLERANCE
     ):
         return True
 
