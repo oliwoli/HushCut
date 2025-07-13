@@ -801,6 +801,10 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         if not group_items:
             continue
 
+        # if len(group_items) <= 1:
+        #     # don't need to unify if there is just one item
+        #     continue
+
         # This function now returns the correctly processed, granular edit data
         unified_edits = unify_edit_instructions(group_items)
 
@@ -814,28 +818,30 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             )
             continue
 
-        is_uncut = not unified_edits or (unified_edits and unified_edits[0][1] is None)
-
         for item in group_items:
-            new_edit_instructions = []
-            base_source_offset = item.get("source_start_frame", 0.0)
+            item_duration = item["end_frame"] - item["start_frame"]
+            is_effectively_uncut = False
+            if len(unified_edits) == 1:
+                edit_start, edit_end, _ = unified_edits[0]
+                # Use a small tolerance for float comparison
+                if edit_start == 0.0 and abs(edit_end - item_duration) < 0.01:
+                    is_effectively_uncut = True
 
-            if is_uncut:
-                source_end = item.get("source_end_frame", base_source_offset)
-                if source_end > base_source_offset:
-                    is_item_enabled = bool(
-                        item.get("edit_instructions")
-                        and item["edit_instructions"][0].get("enabled", True)
-                    )
-                    new_edit_instructions.append(
-                        {
-                            "source_start_frame": base_source_offset,
-                            "source_end_frame": source_end,
-                            "start_frame": item.get("start_frame"),
-                            "end_frame": item.get("end_frame"),
-                            "enabled": is_item_enabled,
-                        }
-                    )
+            new_edit_instructions = []
+            base_source_offset = item["source_start_frame"]
+
+            if is_effectively_uncut:
+                # This is the "uncut" path. We must preserve the original values exactly.
+                original_edit = item.get("edit_instructions", [{}])[0]
+                new_edit_instructions.append(
+                    {
+                        "source_start_frame": item["source_start_frame"],
+                        "source_end_frame": item["source_end_frame"],
+                        "start_frame": item.get("start_frame"),
+                        "end_frame": item.get("end_frame"),
+                        "enabled": original_edit.get("enabled", True),
+                    }
+                )
             else:
                 timeline_playhead = round(group_timeline_anchor)
 
@@ -1846,11 +1852,12 @@ def clip_is_uncut(item: TimelineItem) -> bool:
 
     # check if the only edit instruction is a full clip
     edit_instruction = item["edit_instructions"][0]
+    TOLERANCE = 0.01
     if (
-        edit_instruction["start_frame"] == item["start_frame"]
-        and edit_instruction["end_frame"] == item["end_frame"]
-        and edit_instruction["source_start_frame"] == item["source_start_frame"]
-        and edit_instruction["source_end_frame"] == item["source_end_frame"]
+        abs(edit_instruction["start_frame"] - item["start_frame"]) < TOLERANCE
+        and abs(edit_instruction["end_frame"] - item["end_frame"]) < TOLERANCE
+        and abs(edit_instruction["source_start_frame"] - item["source_start_frame"]) < TOLERANCE
+        and abs(edit_instruction["source_end_frame"] - item["source_end_frame"]) < TOLERANCE
     ):
         return True
 
@@ -1950,6 +1957,8 @@ def append_and_link_timeline_items(
                     print(f"Skipping uncut item '{item['name']}' with no edits.")
                     continue
 
+                print(f"marking {item} for deletion")
+
                 all_clips_to_delete.append(item["bmd_item"])
 
             for item in PROJECT_DATA["timeline"]["audio_track_items"]:
@@ -1966,6 +1975,8 @@ def append_and_link_timeline_items(
                 if clip_is_uncut(item):
                     print(f"Skipping uncut item '{item['name']}' with no edits.")
                     continue
+
+                print(f"marking {item} for deletion")
 
                 all_clips_to_delete.append(item["bmd_item"])
 
