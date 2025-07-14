@@ -428,8 +428,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const wsOptions: WaveSurferOptions = {
       container: waveformContainerRef.current,
       dragToSeek: true,
-      waveColor: "#777777",
-      progressColor: "#777777",
+      waveColor: peakData.duration < 1 ? "#9d9c9e" : "#777777",
+      progressColor: peakData.duration < 1 ? "#9d9c9e" : "#777777",
       cursorColor: "#e64b3d",
       cursorWidth: 2,
       height: "auto",
@@ -1044,7 +1044,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       <div className="rounded-none border-0 mt-0 pt-1 overflow-hidden flex-shrink-0">
         <div
           ref={minimapContainerRef}
-          className="max-h-[40px] w-full bg-neutral-900 border-0 border-t-0 rounded-b-xs box-border overflow-hidden"
+          className="max-h-[40px] w-full bg-[#131316] border-1 rounded-b-xs box-border overflow-hidden"
         ></div>
         <div className="flex items-center gap-1">
           <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">
