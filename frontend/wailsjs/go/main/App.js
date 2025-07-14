@@ -22,6 +22,10 @@ export function ExecuteAndTrackMixdown(arg1, arg2, arg3) {
   return window['go']['main']['App']['ExecuteAndTrackMixdown'](arg1, arg2, arg3);
 }
 
+export function GetAppVersion() {
+  return window['go']['main']['App']['GetAppVersion']();
+}
+
 export function GetCurrentConversionProgress() {
   return window['go']['main']['App']['GetCurrentConversionProgress']();
 }

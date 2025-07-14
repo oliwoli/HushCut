@@ -13,6 +13,9 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { useEffect, useState } from "react";
+import { GetAppVersion } from "@wails/go/main/App";
+import { CopyrightIcon, ExternalLinkIcon } from "lucide-react";
+import { BrowserOpenURL } from "@wails/runtime/runtime";
 
 // This component is now "controlled" by its parent via these props.
 interface InfoDialogProps {
@@ -21,6 +24,7 @@ interface InfoDialogProps {
 }
 
 export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
+    const [appVersion, setAppVersion] = useState("Unknown");
     const [md, setMd] = useState('');
     const [internalOpen, setInternalOpen] = useState(false); // Controls the Dialog's 'open' prop
     const [dialogOpacity, setDialogOpacity] = useState(1); // Controls the DialogContent's opacity
@@ -45,7 +49,13 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
         fetch('/ffmpeg-notice.md')
             .then((res) => res.text())
             .then(setMd);
+
+        GetAppVersion().then((version: string) => {
+            setAppVersion(version);
+        });
     }, []);
+
+    const discordLink = "https://discord.gg/xNY5MFCE"
 
     // Only render the Dialog if internalOpen is true
     if (!internalOpen) return null;
@@ -61,7 +71,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                 <DialogHeader>
                     <DialogTitle>HushCut</DialogTitle>
                     <DialogDescription>
-                        Version 1.0.0 (Alpha) - {new Date().getFullYear()}
+                        v{appVersion} - {new Date().getFullYear()}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -69,8 +79,12 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                     {/* <p>A simple, efficient application built with Wails and React.</p> */}
                     {md && (
                         <ScrollArea className="max-h-[60vh] overflow-y-auto pr-2">
+                            <p>Found a bug, share feedback, or just chat?</p>
+                            <a href="#" onClick={() => discordLink && BrowserOpenURL(discordLink)} className="text-orange-400 flex gap-1 underline">{discordLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
+
+
                             <h3 className="font-bold text-foreground mt-4 mb-2">License</h3>
-                            <p>All rights reserved.</p>
+                            <p className="flex items-center gap-1"><CopyrightIcon size={14} className="" /> Oliver Weiss | All rights reserved.</p>
                             <div className="prose prose-sm dark:prose-invert max-w-none mt-4 max-h-2xl">
                                 <MarkdownRenderer markdown={md} />
                             </div>

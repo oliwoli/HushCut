@@ -12,6 +12,8 @@ export function DownloadFFmpeg():Promise<void>;
 
 export function ExecuteAndTrackMixdown(arg1:number,arg2:string,arg3:Array<main.NestedAudioTimelineItem>):Promise<void>;
 
+export function GetAppVersion():Promise<string>;
+
 export function GetCurrentConversionProgress():Promise<Record<string, number>>;
 
 export function GetFFmpegStatus():Promise<boolean>;

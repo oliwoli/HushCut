@@ -48,6 +48,7 @@ type App struct {
 	ffmpegMutex     sync.RWMutex  // Protects hasFfmpeg flag
 	ffmpegReadyChan chan struct{} // Used to signal when FFmpeg is ready
 	ffmpegOnce      sync.Once     // Ensures the ready channel is closed only once
+	AppVersion string
 }
 
 // NewApp creates a new App application struct
@@ -67,6 +68,7 @@ func NewApp() *App {
 			Timeout: 30 * time.Second,
 		},
 		ffmpegReadyChan: make(chan struct{}),
+		AppVersion: AppVersion,
 	}
 }
 
@@ -1003,6 +1005,10 @@ func (a *App) GetPythonReadyStatus() bool {
 
 func (a *App) GetFFmpegStatus() bool {
 	return a.hasFfmpeg
+}
+
+func (a *App) GetAppVersion() string {
+	return a.AppVersion
 }
 
 func isValidWav(path string) bool {
