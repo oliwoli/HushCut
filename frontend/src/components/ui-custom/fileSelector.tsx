@@ -183,7 +183,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400",
           "border",
-          bypassed ? "bg-transparent" : "bg-gray-700/40",
+          bypassed ? "bg-none" : "bg-gray-700/40",
           {
             "border-zinc-700 hover:border-zinc-600": !isSelected,
             "border-orange-500 ": isSelected,
@@ -240,6 +240,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           )}
         </div>
         <div className={cn(
+          bypassed ? "opacity-80" : "opacity-100",
           "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-gradient-to-t from-black/50 via-black/20 to-transparent"
         )}>
           <div className="flex items-center space-x-1.5">
@@ -250,7 +251,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
               <AudioLinesIcon className={cn("text-sm h-[14px] text-stone-400 p-0 mr-1")} />
             )}
             <div className={cn(
-              bypassed ? "opacity-80" : "opacity-100",
+
               "flex items-baseline space-x-1")}>
               <p className="font-medium text-xs text-zinc-200/90 truncate max-w-28">{item.name}</p>
               <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="p-0 m-0 ml-[-4px] mb-[2px]" /></span>

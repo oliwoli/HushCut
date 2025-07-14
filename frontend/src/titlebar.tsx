@@ -67,19 +67,19 @@ const _TitleBar = () => {
             </Button>
             <Button
               size={"sm"}
-              className={`px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 hover:text-zinc-200 scale-90 transition-colors duration-150 ${alwaysOnTop
-                ? "text-teal-600 hover:text-teal-500" // Pinned style
-                : "text-zinc-500" // Default style
+              className={`group px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 scale-90 transition-colors duration-50 ${alwaysOnTop
+                ? "text-teal-600 hover:text-zinc-100" // Pinned style
+                : "text-zinc-500 hover:text-zinc-200 " // Default style
                 }`}
               onClick={handlePinClick}
             >
               <PinIcon
                 // 2. Apply dynamic classes for styling
                 className={`${alwaysOnTop
-                  ? "fill-teal-600 hover:fill-teal-200" // Pinned style
+                  ? "fill-teal-600 group-hover:fill-teal-200" // Pinned style
                   : "" // Default style
                   }`}
-                strokeWidth={`${alwaysOnTop ? 1.5 : 2.5}`}
+                strokeWidth={`${alwaysOnTop ? 1.8 : 2.5}`}
               />
             </Button>
           </div>
