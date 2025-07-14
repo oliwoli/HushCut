@@ -12,11 +12,7 @@ const __dirname = path.dirname(__filename);
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
-    react({
-      babel: {
-        plugins: [["babel-plugin-react-compiler"]],
-      }
-    }), // Uses Babel with .babelrc or babel.config.js
+    react(), // Uses Babel with .babelrc or babel.config.js
     tailwindcss(),
   ],
   resolve: {

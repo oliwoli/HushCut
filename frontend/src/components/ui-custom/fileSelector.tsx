@@ -279,10 +279,6 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   disabled,
   className,
 }) => {
-  //const projectData = useGlobalStore(s => s.projectData);
-  //const audioItems = projectData?.timeline?.audio_track_items || [];
-  //const fps = projectData?.timeline?.fps || 30;
-
   const sortedItems = useMemo(() => {
     if (!audioItems || audioItems.length === 0) return [];
     return [...audioItems]
@@ -311,9 +307,9 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   const columnVirtualizer = useVirtualizer({
     count: sortedItems.length,
     getScrollElement: () => scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null,
-    estimateSize: () => 150, // e.g., an average width of 120px
+    estimateSize: () => 150,
     horizontal: true,
-    overscan: 10, // A slightly larger overscan can help with perceived smoothness
+    overscan: 10,
   });
 
   // Get the virtual items to render
