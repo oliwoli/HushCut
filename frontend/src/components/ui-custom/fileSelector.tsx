@@ -16,11 +16,11 @@ const AudioFileIcon = ({ className }: { className?: string }) => (
     <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
   </svg>
 );
-const SimulatedWaveform = ({ className }: { className?: string }) => (
+const SimulatedWaveform = memo(({ className }: { className?: string }) => (
   <svg viewBox="0 0 200 50" preserveAspectRatio="none" className={cn("w-full h-full", className)}>
     <path d="M 0 25 L 10 15 L 20 35 L 30 10 L 40 40 L 50 20 L 60 30 L 70 15 L 80 35 L 90 5 L 100 45 L 110 25 L 120 10 L 130 40 L 140 20 L 150 30 L 160 15 L 170 35 L 180 10 L 190 40 L 200 25" stroke="currentColor" strokeWidth="1.5" fill="none" vectorEffect="non-scaling-stroke" />
   </svg>
-);
+));
 
 const generateWaveformJobKey = (fileName: string, start: number, end: number): string => {
   // Use toFixed() to prevent inconsistencies from floating point numbers
@@ -28,39 +28,36 @@ const generateWaveformJobKey = (fileName: string, start: number, end: number): s
 };
 
 
-const LinearWaveform = ({ peaks, className }: { peaks: number[], className?: string }) => {
-  if (!peaks || peaks.length === 0) return null;
-
+const LinearWaveform = memo(({ peaks, className }: { peaks: number[]; className?: string }) => {
   const width = 200;
   const height = 50;
-  const centerY = height / 2;
+  const pathData = useMemo(() => {
+    if (!peaks || peaks.length === 0) return '';
+    const centerY = 25;
+    const stepX = width / peaks.length;
+    let d = '';
+    for (let i = 0; i < peaks.length; i++) {
+      const x = i * stepX;
+      const p = peaks[i];
+      const y1 = centerY * (1 - p);
+      const y2 = centerY * (1 + p);
+      d += `M${x.toFixed(2)} ${y1.toFixed(2)} L${x.toFixed(2)} ${y2.toFixed(2)} `;
+    }
+    return d;
+  }, [peaks]);
 
-  // Since the backend now gives us pairs of [max, min], we can draw them.
-  // If it only gives max, we can draw symmetrically. Let's assume symmetric for simplicity.
-  const stepX = width / peaks.length;
-
-  let pathData = '';
-  for (let i = 0; i < peaks.length; i++) {
-    const peak = peaks[i]; // A value from 0.0 to 1.0
-    const x = i * stepX;
-
-    // Draw a symmetric line from top to bottom around the center
-    const y1 = centerY * (1 - peak); // Top of the line
-    const y2 = centerY * (1 + peak); // Bottom of the line
-
-    pathData += `M ${x.toFixed(2)} ${y1.toFixed(1)} L ${x.toFixed(2)} ${y2.toFixed(2)} `;
-  }
+  if (!pathData) return null;
 
   return (
     <svg
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
-      className={cn("w-full h-[80%]", className)} // Changed this line
+      className={cn("w-full h-[80%]", className)}
     >
       <path d={pathData} stroke="currentColor" strokeWidth="2" fill="none" />
     </svg>
   );
-};
+});
 
 // Icon to represent a linked file
 const ClipLinkIcon = ({ className }: { className?: string }) => (
@@ -73,6 +70,8 @@ const TARGET_PEAK_COUNT = 64;
 const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related audio
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
+
+const waveformCache = new Map<string, number[]>();
 const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, allClipIds }: {
   item: main.TimelineItem;
   index: string;
@@ -84,36 +83,137 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
 }) => {
   if (!fps) return null;
 
-  const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
-  const [isFetchingWaveform, setIsFetchingWaveform] = useState(false);
-
+  // compute jobKey before state hooks
   const { startSeconds, endSeconds } = useMemo(() => {
-    if (!fps || typeof item.source_start_frame !== 'number' || typeof item.source_end_frame !== 'number' || fps <= 0) {
+    if (
+      typeof item.source_start_frame !== "number" ||
+      typeof item.source_end_frame !== "number" ||
+      fps <= 0
+    ) {
       return { startSeconds: 0, endSeconds: 0 };
     }
-    const start = item.type === 'Compound' ? 0 : item.source_start_frame;
-    const end = item.type === 'Compound' ? (item.end_frame - item.start_frame) : item.source_end_frame;
-    return { startSeconds: start / fps, endSeconds: end / fps };
+    const start =
+      item.type === "Compound" ? 0 : item.source_start_frame;
+    const end =
+      item.type === "Compound"
+        ? item.end_frame - item.start_frame
+        : item.source_end_frame;
+    return {
+      startSeconds: start / fps,
+      endSeconds: end / fps,
+    };
   }, [item, fps]);
 
-  // SELECTIVELY SUBSCRIBE TO THE STORE
-  // This component now only re-renders if ITS OWN progress changes.
-  const progress = useProgressStore(state => item.processed_file_name ? state.conversionProgress[item.processed_file_name] : undefined);
-  const hasError = useProgressStore(state => item.processed_file_name ? state.conversionErrors[item.processed_file_name] : false);
-  const jobKey = useMemo(() => item.processed_file_name ? generateWaveformJobKey(item.processed_file_name, startSeconds, endSeconds) : '', [item.processed_file_name, startSeconds, endSeconds]);
-  const waveformProgress = useProgressStore(state => state.waveformProgress[jobKey]);
+  const jobKey = useMemo(
+    () =>
+      item.processed_file_name
+        ? generateWaveformJobKey(
+          item.processed_file_name,
+          startSeconds,
+          endSeconds
+        )
+        : "",
+    [item.processed_file_name, startSeconds, endSeconds]
+  );
 
-  const isConverting = typeof progress === 'number' && progress >= 0 && progress < 100;
+  // initialize from cache if present
+  const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(
+    () => waveformCache.get(jobKey) ?? null
+  );
+  const [isFetchingWaveform, setIsFetchingWaveform] = useState(false);
+
+  // progress / error from zustand
+  const progress = useProgressStore((s) =>
+    item.processed_file_name
+      ? s.conversionProgress[item.processed_file_name]
+      : undefined
+  );
+  const hasError = useProgressStore((s) =>
+    item.processed_file_name
+      ? s.conversionErrors[item.processed_file_name]
+      : false
+  );
+  const waveformProgress = useProgressStore((s) => s.waveformProgress[jobKey]);
+
+  const isConverting =
+    typeof progress === "number" && progress >= 0 && progress < 100;
   const isLoading = isConverting || isFetchingWaveform;
   const isModified = useIsClipModified(item.id);
 
-  const bypassed = useClipStore(s => s.getParameter(item.id, 'bypassed'));
+  const bypassed = useClipStore((s) =>
+    s.getParameter(item.id, "bypassed")
+  );
 
+  // bypass toggle
+  const setBypassed = (val: boolean) =>
+    useClipStore.getState().setParameter(item.id, "bypassed", val);
 
-  const setBypassed = (value: boolean) => {
-    useClipStore.getState().setParameter(item.id, 'bypassed', value);
-    console.log(`Set bypassed for ${item.id} to ${value}`);
-  };
+  // effect to fetch & cache waveform
+  useEffect(() => {
+    const clipDuration = endSeconds - startSeconds;
+    if (
+      waveformCache.has(jobKey) ||
+      !item.processed_file_name ||
+      clipDuration <= 0 ||
+      isConverting
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsFetchingWaveform(true);
+
+    const fetchWaveform = async () => {
+      const dynamicSamplesPerPixel = Math.max(
+        MIN_SAMPLES_PER_PIXEL,
+        Math.ceil(
+          (clipDuration * ASSUMED_SAMPLE_RATE) / TARGET_PEAK_COUNT
+        )
+      );
+
+      try {
+        // small debounce before actual call
+        await new Promise((r) => setTimeout(r, 25));
+        if (cancelled) return;
+
+        const peakData = await GetWaveform(
+          item.processed_file_name!,
+          dynamicSamplesPerPixel,
+          "linear",
+          -60.0,
+          startSeconds,
+          endSeconds
+        );
+        if (!cancelled && peakData?.peaks) {
+          waveformCache.set(jobKey, peakData.peaks);
+          setWaveformPeaks(peakData.peaks);
+        }
+      } catch (e) {
+        if (!cancelled)
+          console.error("Waveform fetch failed for", item.name, e);
+      } finally {
+        if (!cancelled) setIsFetchingWaveform(false);
+      }
+    };
+
+    fetchWaveform();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    jobKey,
+    item.processed_file_name,
+    startSeconds,
+    endSeconds,
+    isConverting,
+  ]);
+
+  const handleClipClick = useCallback(
+    () => onClipClick(item.id),
+    [item.id, onClipClick]
+  );
+
+  const isNested = item.type !== null;
 
   const handleBypassClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -131,39 +231,6 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
       setBypassed(newBypass);
     }
   };
-
-  useEffect(() => {
-    const clipDuration = endSeconds - startSeconds;
-    if (waveformPeaks || !item.processed_file_name || clipDuration <= 0 || isConverting) {
-      return;
-    }
-
-    let isCancelled = false;
-    const fetchWaveform = async () => {
-      setIsFetchingWaveform(true);
-      const dynamicSamplesPerPixel = Math.max(MIN_SAMPLES_PER_PIXEL, Math.ceil((clipDuration * ASSUMED_SAMPLE_RATE) / TARGET_PEAK_COUNT));
-
-      try {
-        await new Promise((res) => setTimeout(res, 25));
-        if (isCancelled) return;
-
-        if (item.processed_file_name) {
-          const peakData = await GetWaveform(item.processed_file_name, dynamicSamplesPerPixel, "linear", -60.0, startSeconds, endSeconds);
-          if (!isCancelled) setWaveformPeaks(peakData?.peaks ?? null);
-        }
-      } catch (error) {
-        if (!isCancelled) console.error(`Failed to fetch waveform for ${item.name}:`, error);
-      } finally {
-        if (!isCancelled) setIsFetchingWaveform(false);
-      }
-    };
-    fetchWaveform();
-    return () => { isCancelled = true; };
-  }, [item.id, item.processed_file_name, startSeconds, endSeconds, isConverting, waveformPeaks]);
-
-  const handleClipClick = useCallback(() => onClipClick(item.id), [item.id, onClipClick]);
-
-  const isNested = item.type !== null;
 
   return (
     <div className={cn(
@@ -227,7 +294,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
 
         <div className={cn(
           "absolute inset-0 flex items-center justify-center  p-1 bottom-6 [@media(max-height:800px)]:bottom-5",
-          bypassed ? "text-gray-600" : "text-teal-400/60",
+          bypassed ? "text-gray-600" : "text-teal-600",
           isLoading && "animate-pulse")
         }>
 
@@ -310,6 +377,9 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     estimateSize: () => 150,
     horizontal: true,
     overscan: 10,
+    isScrollingResetDelay: 200,
+    useScrollendEvent: false,
+    useAnimationFrameWithResizeObserver: true,
   });
 
   // Get the virtual items to render
@@ -341,10 +411,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     };
   }, []);
 
-  const totalItems = sortedItems.length;
-  const digits = String(totalItems).length;
-
-  const allClipIds = sortedItems.map(item => item.id);
+  const allClipIds = useMemo(() => sortedItems.map(item => item.id), [sortedItems]);
 
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
