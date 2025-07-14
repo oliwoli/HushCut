@@ -62,6 +62,7 @@ import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import SliderZag from "./components/ui/sliderZag";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 
 
@@ -683,12 +684,21 @@ function AppContent() {
                 ) : (
                   currentActiveClip &&
                   projectData?.timeline && (
-                    <WaveformPlayer
-                      key={currentActiveClip.id}
-                      activeClip={currentActiveClip}
-                      projectFrameRate={projectData.timeline.fps}
-                      httpPort={httpPort}
-                    />
+                    <ErrorBoundary
+                      fallback={
+                        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+                          <p className="text-gray-500">Failed to load waveform. Please try again.</p>
+                        </div>
+                      }
+                      maxRetries={3}
+                    >
+                      <WaveformPlayer
+                        key={currentActiveClip.id}
+                        activeClip={currentActiveClip}
+                        projectFrameRate={projectData.timeline.fps}
+                        httpPort={httpPort}
+                      />
+                    </ErrorBoundary>
                   )
                 )}
               </div>
