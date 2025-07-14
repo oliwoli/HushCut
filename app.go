@@ -703,7 +703,26 @@ func (a *App) RunPythonScriptWithArgs(args []string) error {
 }
 
 func (a *App) SelectDirectory() (string, error) {
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{})
+	settings, err := a.GetSettings()
+	if err != nil {
+		// Log the error but don't prevent the dialog from opening
+		log.Printf("Error getting settings for default directory: %v", err)
+	}
+
+	defaultDir := ""
+	if davinciPath, ok := settings["davinciFolderPath"].(string); ok && davinciPath != "" {
+		// Check if the path exists and is a directory
+		info, err := os.Stat(davinciPath)
+		if err == nil && info.IsDir() {
+			defaultDir = davinciPath
+		} else {
+			log.Printf("Davinci folder path from settings is not a valid directory or does not exist: %s", davinciPath)
+		}
+	}
+
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		DefaultDirectory: defaultDir,
+	})
 }
 
 func (a *App) CloseApp() {

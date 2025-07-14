@@ -14,7 +14,7 @@ export const MarkdownRenderer = ({ markdown }: Props) => {
                 overrides: {
                     a: {
                         component: ({ href, children, ...props }) => (
-                            <div className=' flex gap-1 items-center'>
+                            <span className=' flex gap-1 items-center'>
                                 <a
                                     {...props}
                                     href="#"
@@ -24,7 +24,7 @@ export const MarkdownRenderer = ({ markdown }: Props) => {
                                     {children}
                                 </a>
                                 <ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} />
-                            </div>
+                            </span>
                         )
                     }
                 }

@@ -416,9 +416,11 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
       <div
-        className="relative h-full"
+        className={cn(
+          "relative h-[112px]",
+          "[@media(max-height:800px)]:h-[95px]"
+        )}
         style={{
-          height: `112px`,
           width: `${columnVirtualizer.getTotalSize()}px`,
         }}
       >

@@ -87,9 +87,11 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "HushCut",
-		Width:  1024,
-		Height: 801,
+		Title:     "HushCut",
+		Width:     1024,
+		Height:    801,
+		MinWidth:  500,
+		MinHeight: 550,
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: NewFileLoader(),

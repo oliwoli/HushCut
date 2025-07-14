@@ -30,12 +30,11 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
             setInternalOpen(true);
             setDialogOpacity(1);
         } else { // Parent wants to close
-            // Start fading out immediately
-            setDialogOpacity(0);
+            setDialogOpacity(0); // Start fading out
 
-            // After 150ms (fade out duration), set internalOpen to false to trigger Radix's close animation
             const fadeOutTimer = setTimeout(() => {
                 setInternalOpen(false);
+                // No need to set internalOpen here again
             }, 150);
 
             return () => clearTimeout(fadeOutTimer);
@@ -57,6 +56,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                 className="sm:max-w-xl md:max-w-2xl xl:max-w-5xl"
                 style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
                 disableRadixAnimations={dialogOpacity === 0}
+                disableOutsideClick={true}
             >
                 <DialogHeader>
                     <DialogTitle>HushCut</DialogTitle>

@@ -5,9 +5,27 @@ import { XIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 function Dialog({
+  onOpenChange,
+  open,
+  disableOutsideClick = false,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+}: React.ComponentProps<typeof DialogPrimitive.Root> & {
+  disableOutsideClick?: boolean;
+}) {
+  const handleOpenChange = (newOpen: boolean) => {
+    // If disableOutsideClick is true and the dialog is trying to close (newOpen is false),
+    // we prevent it from closing *unless* it's explicitly triggered by the DialogClose component.
+    // Radix UI's DialogPrimitive.Root handles outside clicks by calling onOpenChange(false).
+    // By not calling onOpenChange here when newOpen is false and disableOutsideClick is true,
+    // we effectively prevent outside clicks from closing the dialog.
+    // Clicks on DialogPrimitive.Close will still trigger onOpenChange(false) and pass through this check.
+    if (disableOutsideClick && !newOpen) {
+      return; // Prevent closing from outside clicks
+    }
+    onOpenChange?.(newOpen);
+  };
+
+  return <DialogPrimitive.Root data-slot="dialog" open={open} onOpenChange={handleOpenChange} {...props} />
 }
 
 function DialogTrigger({
@@ -45,6 +63,8 @@ function DialogOverlay({
       data-slot="dialog-overlay"
       className={cn(
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
+        "top-[2.25rem]", // Exclude titlebar area
+        "pointer-events-none", // Allow clicks to pass through
         className
       )}
       {...props}
@@ -56,14 +76,14 @@ function DialogContent({
   className,
   children,
   hideCloseButton = false,
-  disableRadixAnimations = false, // New prop
+  disableRadixAnimations = false,
+  disableOutsideClick = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   hideCloseButton?: boolean;
-  disableRadixAnimations?: boolean; // New prop type
+  disableRadixAnimations?: boolean;
+  disableOutsideClick?: boolean;
 }) {
-  const baseClasses = "bg-background fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg";
-
   const animationClasses = disableRadixAnimations
     ? "" // No animations
     : "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95";
@@ -74,10 +94,13 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          baseClasses,
+          // base classes
+          "bg-zinc-900 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
           animationClasses, // Conditionally apply animations
+          "pointer-events-auto", // Re-enable pointer events for the content
           className
         )}
+        onPointerDownOutside={disableOutsideClick ? (e) => e.preventDefault() : undefined}
         {...props}
       >
         {children}

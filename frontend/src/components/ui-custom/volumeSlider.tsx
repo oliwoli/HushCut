@@ -104,7 +104,7 @@ export function _ThresholdSlider({
               className={cn(
                 "absolute left-0 -translate-y-1/2",
                 // At the smallest size, hide the minor ticks (1,2,3,4,6,7,8,9, etc.)
-                { "[@media(max-height:670px)]:hidden [@container(max-height:100px)]:hidden": isSmall }
+                { "[@media(max-height:750px)]:hidden [@container(max-height:100px)]:hidden": isSmall }
               )}
               style={{ bottom: `${pct}%` }}
             >
@@ -118,12 +118,12 @@ export function _ThresholdSlider({
                   // Hide the -5 label on medium-compact screens
                   { "[@media(max-height:920px)]:hidden [@container(max-height:508px)]:hidden": dB === -5 },
                   // Hide all non-major labels on the most compact screens
-                  { "[@media(max-height:500px)]:hidden [@container(max-height:100px)]:hidden": !isMajor }
+                  { "[@media(max-height:750px)]:hidden [@container(max-height:100px)]:hidden": !isMajor }
                 )}>
                   <span
                     className={cn(
                       isMajor ? "font-bold" : "font-light",
-                      "[@media(max-height:700px)]:text-[11px]")}
+                      "[@media(max-height:750px)]:text-[11px]")}
                   >
                     {absVal}
                   </span>

@@ -1,5 +1,5 @@
 import { CloseApp, SetWindowAlwaysOnTop } from "@wails/go/main/App";
-import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart, CircleIcon } from "lucide-react";
+import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart, CircleIcon, Settings2Icon } from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
   DropdownMenu,
@@ -117,7 +117,7 @@ const _TitleBar = () => {
                   {/* <DropdownMenuLabel>Menu</DropdownMenuLabel> */}
                   {/* <DropdownMenuSeparator /> */}
                   <DropdownMenuItem onSelect={() => setSettingsDialogOpen(true)}>
-                    <Info className="mr-2 h-4 w-4" />
+                    <Settings2Icon className="mr-2 h-4 w-4" />
                     <span>Settings</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setInfoDialogOpen(true)}>

@@ -656,7 +656,7 @@ function AppContent() {
             </div>
           )}
           <div className="flex flex-col flex-1 space-y-1 px-3 flex-grow min-h-0 py-2">
-            <div className="flex flex-row space-x-1 items-start flex-1 min-h-[180px] max-h-[600px]">
+            <div className="flex flex-row space-x-1 items-start flex-1 min-h-[200px] max-h-[600px]">
               {currentActiveClip &&
                 projectData?.timeline && (
                   <div className="flex w-min h-full">
