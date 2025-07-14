@@ -47,6 +47,7 @@ const _TitleBar = () => {
   };
 
   const setInfoDialogOpen = useUiStore((s) => s.setInfoDialogOpen);
+  const setSettingsDialogOpen = useUiStore((s) => s.setSettingsDialogOpen);
 
   const handleDonateClick = () => {
     BrowserOpenURL("https://buymeacoffee.com/hushcut");
@@ -115,6 +116,10 @@ const _TitleBar = () => {
                 >
                   {/* <DropdownMenuLabel>Menu</DropdownMenuLabel> */}
                   {/* <DropdownMenuSeparator /> */}
+                  <DropdownMenuItem onSelect={() => setSettingsDialogOpen(true)}>
+                    <Info className="mr-2 h-4 w-4" />
+                    <span>Settings</span>
+                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setInfoDialogOpen(true)}>
                     <Info className="mr-2 h-4 w-4" />
                     <span>Info</span>

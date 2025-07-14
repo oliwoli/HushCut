@@ -29,7 +29,7 @@ type App struct {
 	silenceCache             map[CacheKey][]SilencePeriod
 	waveformCache            map[WaveformCacheKey]*PrecomputedWaveformData
 	cacheMutex               sync.RWMutex
-	configPath               string
+	settingsPath             string
 	pythonCmd                *exec.Cmd
 	pythonReadyChan          chan bool
 	pythonReady              bool
@@ -52,10 +52,8 @@ type App struct {
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	configPath := "shared/config.json"
-
 	return &App{
-		configPath:               configPath,
+		settingsPath:             "settings.json",
 		silenceCache:             make(map[CacheKey][]SilencePeriod),
 		waveformCache:            make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
 		pythonReadyChan:          make(chan bool, 1),                                  // Buffered channel
@@ -600,60 +598,60 @@ func (a *App) registerWithPython(goPort int) error {
 	return fmt.Errorf("failed to register with Python after multiple attempts")
 }
 
-// GetConfig reads config.json. Creates it with defaults if it doesn't exist.
-func (a *App) GetConfig() (map[string]any, error) {
-	var configData map[string]any
+// GetSettings reads settings.json. Creates it with defaults if it doesn't exist.
+func (a *App) GetSettings() (map[string]any, error) {
+	var settingsData map[string]any
 
-	fileBytes, err := os.ReadFile(a.configPath)
+	fileBytes, err := os.ReadFile(a.settingsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist, create it
-			defaultConfig := make(map[string]any)
+			defaultSettings := make(map[string]any)
 			// Add default key-value pairs here if needed
-			// Example: defaultConfig["theme"] = "dark"
+			defaultSettings["davinciFolderPath"] = ""
 
-			jsonData, marshalErr := json.MarshalIndent(defaultConfig, "", "  ")
+			jsonData, marshalErr := json.MarshalIndent(defaultSettings, "", "  ")
 			if marshalErr != nil {
-				return nil, fmt.Errorf("failed to marshal default config: %w", marshalErr)
+				return nil, fmt.Errorf("failed to marshal default settings: %w", marshalErr)
 			}
 
-			dir := filepath.Dir(a.configPath)
+			dir := filepath.Dir(a.settingsPath)
 			if mkDirErr := os.MkdirAll(dir, 0755); mkDirErr != nil {
-				return nil, fmt.Errorf("failed to create config directory %s: %w", dir, mkDirErr)
+				return nil, fmt.Errorf("failed to create settings directory %s: %w", dir, mkDirErr)
 			}
 
-			if writeErr := os.WriteFile(a.configPath, jsonData, 0644); writeErr != nil {
-				return nil, fmt.Errorf("failed to write default config file %s: %w", a.configPath, writeErr)
+			if writeErr := os.WriteFile(a.settingsPath, jsonData, 0644); writeErr != nil {
+				return nil, fmt.Errorf("failed to write default settings file %s: %w", a.settingsPath, writeErr)
 			}
-			configData = defaultConfig
+			settingsData = defaultSettings
 		} else {
 			// Other error reading file
-			return nil, fmt.Errorf("failed to read config file %s: %w", a.configPath, err)
+			return nil, fmt.Errorf("failed to read settings file %s: %w", a.settingsPath, err)
 		}
 	} else {
 		// File exists, unmarshal it
-		if unmarshalErr := json.Unmarshal(fileBytes, &configData); unmarshalErr != nil {
-			// If JSON is malformed, consider returning default or empty config instead of erroring out.
-			return nil, fmt.Errorf("failed to unmarshal config file %s: %w", a.configPath, unmarshalErr)
+		if unmarshalErr := json.Unmarshal(fileBytes, &settingsData); unmarshalErr != nil {
+			// If JSON is malformed, consider returning default or empty settings instead of erroring out.
+			return nil, fmt.Errorf("failed to unmarshal settings file %s: %w", a.settingsPath, unmarshalErr)
 		}
 	}
-	return configData, nil
+	return settingsData, nil
 }
 
-// SaveConfig saves the given configuration data to config.json.
-func (a *App) SaveConfig(configData map[string]interface{}) error {
-	jsonData, err := json.MarshalIndent(configData, "", "  ")
+// SaveSettings saves the given configuration data to settings.json.
+func (a *App) SaveSettings(settingsData map[string]interface{}) error {
+	jsonData, err := json.MarshalIndent(settingsData, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal config data for saving: %w", err)
+		return fmt.Errorf("failed to marshal settings data for saving: %w", err)
 	}
 
-	dir := filepath.Dir(a.configPath)
+	dir := filepath.Dir(a.settingsPath)
 	if mkDirErr := os.MkdirAll(dir, 0755); mkDirErr != nil {
-		return fmt.Errorf("failed to create config directory %s for saving: %w", dir, mkDirErr)
+		return fmt.Errorf("failed to create settings directory %s for saving: %w", dir, mkDirErr)
 	}
 
-	if err := os.WriteFile(a.configPath, jsonData, 0644); err != nil {
-		return fmt.Errorf("failed to write config file %s: %w", a.configPath, err)
+	if err := os.WriteFile(a.settingsPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write settings file %s: %w", a.settingsPath, err)
 	}
 	return nil
 }
@@ -702,6 +700,10 @@ func (a *App) RunPythonScriptWithArgs(args []string) error {
 	}()
 
 	return nil
+}
+
+func (a *App) SelectDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{})
 }
 
 func (a *App) CloseApp() {

@@ -56,6 +56,7 @@ import { Progress } from "./components/ui/progress";
 import { DavinciSettings } from "./components/controls/DavinciSettings";
 import { useUiStore } from "./stores/uiStore";
 import { InfoDialog } from "./InfoDialog";
+import { SettingsDialog } from "./SettingsDialog";
 import Timecode, { FRAMERATE } from "smpte-timecode";
 import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
@@ -816,6 +817,8 @@ export default function App() {
   const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
   const isInfoDialogOpen = useUiStore((state) => state.isInfoDialogOpen);
   const setInfoDialogOpen = useUiStore((state) => state.setInfoDialogOpen);
+  const isSettingsDialogOpen = useUiStore((state) => state.isSettingsDialogOpen);
+  const setSettingsDialogOpen = useUiStore((state) => state.setSettingsDialogOpen);
 
   const [showFinalProgress, setShowFinalProgress] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
@@ -886,6 +889,7 @@ export default function App() {
           onOpenChange={setShowFinalProgress}
         />
         <InfoDialog open={isInfoDialogOpen} onOpenChange={setInfoDialogOpen} />
+        <SettingsDialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen} />
         <Toaster />
       </ClientPortal>
 

@@ -22,10 +22,6 @@ export function ExecuteAndTrackMixdown(arg1, arg2, arg3) {
   return window['go']['main']['App']['ExecuteAndTrackMixdown'](arg1, arg2, arg3);
 }
 
-export function GetConfig() {
-  return window['go']['main']['App']['GetConfig']();
-}
-
 export function GetCurrentConversionProgress() {
   return window['go']['main']['App']['GetCurrentConversionProgress']();
 }
@@ -52,6 +48,10 @@ export function GetProjectDataPayloadType() {
 
 export function GetPythonReadyStatus() {
   return window['go']['main']['App']['GetPythonReadyStatus']();
+}
+
+export function GetSettings() {
+  return window['go']['main']['App']['GetSettings']();
 }
 
 export function GetWaveform(arg1, arg2, arg3, arg4, arg5, arg6) {
@@ -98,8 +98,12 @@ export function RunPythonScriptWithArgs(arg1) {
   return window['go']['main']['App']['RunPythonScriptWithArgs'](arg1);
 }
 
-export function SaveConfig(arg1) {
-  return window['go']['main']['App']['SaveConfig'](arg1);
+export function SaveSettings(arg1) {
+  return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function SelectDirectory() {
+  return window['go']['main']['App']['SelectDirectory']();
 }
 
 export function SendCommandToPython(arg1, arg2) {

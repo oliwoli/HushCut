@@ -12,8 +12,6 @@ export function DownloadFFmpeg():Promise<void>;
 
 export function ExecuteAndTrackMixdown(arg1:number,arg2:string,arg3:Array<main.NestedAudioTimelineItem>):Promise<void>;
 
-export function GetConfig():Promise<Record<string, any>>;
-
 export function GetCurrentConversionProgress():Promise<Record<string, number>>;
 
 export function GetFFmpegStatus():Promise<boolean>;
@@ -27,6 +25,8 @@ export function GetOrGenerateWaveformWithCache(arg1:string,arg2:number,arg3:stri
 export function GetProjectDataPayloadType():Promise<main.ProjectDataPayload>;
 
 export function GetPythonReadyStatus():Promise<boolean>;
+
+export function GetSettings():Promise<Record<string, any>>;
 
 export function GetWaveform(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
 
@@ -50,7 +50,9 @@ export function ResolveBinaryPath(arg1:string):Promise<string>;
 
 export function RunPythonScriptWithArgs(arg1:Array<string>):Promise<void>;
 
-export function SaveConfig(arg1:Record<string, any>):Promise<void>;
+export function SaveSettings(arg1:Record<string, any>):Promise<void>;
+
+export function SelectDirectory():Promise<string>;
 
 export function SendCommandToPython(arg1:string,arg2:Record<string, any>):Promise<main.PythonCommandResponse>;
 
