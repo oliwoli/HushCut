@@ -77,7 +77,8 @@ const getDefaultDetectionParams = (): DetectionParams => ({
 
 const createActiveFileFromTimelineItem = (
   item: main.TimelineItem,
-  port: Number
+  port: number,
+  fps: number
 ): ActiveClip | null => {
   if (
     !item.processed_file_name ||
@@ -91,13 +92,17 @@ const createActiveFileFromTimelineItem = (
     return null;
   }
   const id = item.id || item.processed_file_name; // Prefer item.ID if available and unique
+  const clipStartSeconds = item.source_start_frame / fps;
+  const clipEndSeconds = item.source_end_frame / fps;
 
   return {
     id: id,
     name: item.name || "Unnamed Track Item", // Fallback for name
     sourceFilePath: item.source_file_path,
     processedFileName: item.processed_file_name,
-    previewUrl: `http://localhost:${port}/${item.processed_file_name}.wav`,
+    previewUrl: `http://localhost:${port}/render_clip?file=${encodeURIComponent(
+      item.processed_file_name
+    )}&start=${clipStartSeconds}&end=${clipEndSeconds}`,
     sourceStartFrame: item.source_start_frame,
     sourceEndFrame: item.source_end_frame,
     startFrame: item.start_frame,
@@ -226,7 +231,7 @@ function AppContent() {
       itemToDisplay = audioItems[0];
     }
 
-    return createActiveFileFromTimelineItem(itemToDisplay, httpPort);
+    return createActiveFileFromTimelineItem(itemToDisplay, httpPort, projectData.timeline.fps);
   }, [projectData, httpPort, currentClipId]);
 
 

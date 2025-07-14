@@ -187,6 +187,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   }, [clipOriginalStartSeconds]);
 
   const audioUrl = activeClip?.previewUrl;
+
   const [threshold] = useClipParameter("threshold");
   const isThresholdDragging = useGlobalStore(s => s.isThresholdDragging);
 
@@ -238,7 +239,6 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   const currTimelineFrameRef = useRef<number | null>(null);
   const lastRenderedFrameRef = useRef(-1);
-
 
   const lastTimecodeRef = useRef<string | null>(null);
   const lastCallTimeRef = useRef<number>(0);
