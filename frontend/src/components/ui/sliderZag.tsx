@@ -95,7 +95,7 @@ export default function SliderZag({
           <div
             key={index}
             {...api.getThumbProps({ index })}
-            className="absolute top-1/2 -translate-y-1/2 size-[16px] bg-zinc-200 rounded-full cursor-pointer z-10 border-1 border-zinc-600"
+            className="absolute top-1/2 -translate-y-1/2 size-[18px] bg-zinc-300 rounded-full z-10 border-2 border-zinc-800"
           >
             <input {...api.getHiddenInputProps({ index })} />
           </div>

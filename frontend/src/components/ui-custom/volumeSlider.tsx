@@ -22,7 +22,7 @@ export function ThresholdSlider({
   maxDb = 0,
   defaultDb = -20,
   onGainChange,
-  onDoubleClick = () => {},
+  onDoubleClick = () => { },
 }: SliderProps) {
   const [currentDbValue, setCurrentDbValue] = useState(defaultDb);
 
@@ -52,6 +52,7 @@ export function ThresholdSlider({
     step: rangeDb > 0 ? rangeDb / 500 : 0.1,
     orientation: "vertical",
     onValueChange: (details: { value: number[] }) => {
+      setIsThresholdDragging(true);
       handleChange(details.value);
     },
     onValueChangeEnd: () => {
@@ -61,7 +62,7 @@ export function ThresholdSlider({
   const api = slider.connect(service, normalizeProps);
 
   return (
-    <div className="flex items-center h-[calc(100%-92px)] select-none pb-[5px] pt-0 px-5">
+    <div className="flex items-center h-[calc(100%-91px)] select-none pb-[5px] pt-0 px-5">
       <div
         {...api.getRootProps()}
         onDoubleClick={onDoubleClick}
@@ -72,7 +73,7 @@ export function ThresholdSlider({
           {/* Track */}
           <div
             {...api.getTrackProps()}
-            className="absolute top-0 bottom-0 left-1/2 w-1 bg-black rounded-full transform -translate-x-1/2 outline-1 outline-zinc-800"
+            className="absolute top-0 bottom-0 hidden left-1/2 w-1 rounded-full transform -translate-x-1/2"
           >
             {/* Range Fill */}
             <div
@@ -87,22 +88,24 @@ export function ThresholdSlider({
               key={index}
               {...api.getThumbProps({ index })}
               className={cn(
-                "block h-2 w-8 bg-zinc-300 rounded-xs relative shadow-md shadow-zinc-950/80",
-                "left-[0px], right-[25%]",
-                "border-2 border-t-zinc-100",
+                "block h-8 w-4 bg-zinc-400 rounded-[1px] relative shadow-md shadow-zinc-950/80",
                 "ring-offset-0 transition-colors",
                 "focus-visible:outline-none focus-visible:ring-8 focus-visible:ring-zinc-200/10 focus-visible:ring-offset-0",
                 "disabled:pointer-events-none disabled:opacity-50",
-                "hover:bg-zinc-200",
-                "absolute left-1/2 -translate-x-1/2"
+                "overflow-hidden"
               )}
             >
               <input {...api.getHiddenInputProps({ index })} />
-              <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-3 bg-zinc-500 pointer-events-none left-1/2 transform -translate-x-1/2" />
+              <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-3 bg-zinc-800 pointer-events-none left-1/2 transform -translate-x-1/2 z-2" />
+              <div className="absolute top-1/2 -translate-y-[45%] h-[40%] w-full bg-zinc-400 pointer-events-none left-1/2 transform -translate-x-1/2 z-1" />
+              <div className="absolute bottom-0 -translate-y-0 h-[5px] w-full bg-zinc-600 pointer-events-none left-1/2 transform -translate-x-1/2 z-1" />
+              <div className="absolute top-0 h-[3px] w-full bg-zinc-300 pointer-events-none left-1/2 transform -translate-x-1/2 z-1" />
+
             </div>
           ))}
+
           {/* Markings */}
-          <div
+          {/* <div
             {...api.getMarkerGroupProps()}
             className="absolute inset-0 pointer-events-none left-[-8px]"
           >
@@ -110,28 +113,27 @@ export function ThresholdSlider({
               <span
                 key={i}
                 {...api.getMarkerProps({ value })}
-                className={`absolute w-2 h-[1px] ${
-                  value === (actualMinDb + actualMaxDb) / 2
-                    ? "bg-zinc-300"
-                    : "bg-zinc-600"
-                }`}
+                className={`absolute w-2 h-[1px] ${value === (actualMinDb + actualMaxDb) / 2
+                  ? "bg-zinc-300"
+                  : "bg-zinc-600"
+                  }`}
               />
             ))}
-          </div>
+          </div> */}
         </div>
       </div>
 
-      <div className="relative h-full bottom-0 bg-zinc-950/80 border-1 border-black drop-shadow-zinc-700 drop-shadow-xs w-1 z-0 right-[18px] rounded-xs"></div>
+      <div className="relative h-[calc(100%+5px)] bottom-0 bg-zinc-950/80 outline-1 outline-zinc-800 w-1 z-0 right-[18px] rounded-xs"></div>
 
-      <div className="relative h-[97.8%] ml-0 top-0 mt-[3.2525%] right-3 font-mono px-1">
+      <div className="relative h-full ml-0 top-0 mt-[3.2525%] right-3 font-mono px-1">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {
           const dB = actualMinDb + i;
           const pct =
             rangeDb > 0
               ? ((dB - actualMinDb) / rangeDb) * 100
               : dB === actualMinDb
-              ? 0
-              : 100;
+                ? 0
+                : 100;
 
           const absVal = Math.abs(dB);
           const isLabeled = marks.includes(dB);
@@ -144,8 +146,8 @@ export function ThresholdSlider({
           const tickWidth = isMajor
             ? "w-[12px]"
             : isMedium || isLabeled
-            ? "w-[8px]"
-            : "w-[4px]";
+              ? "w-[8px]"
+              : "w-[4px]";
           const tickOpacity = isLabeled ? "opacity-80" : "opacity-80";
 
           return (

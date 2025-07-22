@@ -127,8 +127,7 @@ const _PaddingControl = React.memo(() => {
 
 const _MinContentControl = React.memo(() => {
     const currentClipId = useClipStore(s => s.currentClipId);
-    // const [minContent, setMinContent] = useClipParameter('minContent');
-    const [minContent, setMinContent] = useState(1);
+    const [minContent, setMinContent] = useClipParameter('minContent');
 
 
     const resetMinDuration = useCallback(() => {
