@@ -716,7 +716,6 @@ function AppContent() {
                       defaultDetectionParams={getDefaultDetectionParams()}
                       onPendingAction={() => setPendingRemoveSilences(true)}
                     />
-                    <SliderZag />
                   </div>
                 )}
               </div>

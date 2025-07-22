@@ -7,7 +7,7 @@ import React, { useCallback, useState } from 'react';
 // Import your reusable UI components
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
+import SliderZag from '@/components/ui/sliderZag';
 import ResetButton from './ResetButton';
 import { Separator } from '@radix-ui/react-dropdown-menu';
 
@@ -31,10 +31,10 @@ const _MinDurationControl = React.memo(() => {
             </Label>
             <div className="flex items-center space-x-5">
                 <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
-                    <Slider
+                    <SliderZag
                         min={0} max={5} step={0.001}
                         value={[minDuration]}
-                        onValueChange={(vals) => setMinDuration(vals[0])}
+                        onChange={(vals) => setMinDuration(vals[0])}
                         onDoubleClick={resetMinDuration}
                         className="w-[128px] max-w-[128px] min-w-[128px]"
                         disabled={isDisabled}
@@ -88,10 +88,10 @@ const _PaddingControl = React.memo(() => {
                     {/* Left Padding */}
                     <div className="flex flex-col space-y-1 w-full">
                         <div className="flex items-center">
-                            <Slider
+                            <SliderZag
                                 min={0} max={1} step={0.01}
                                 value={[paddingLeft]}
-                                onValueChange={(vals) => handlePaddingChange("left", vals[0])}
+                                onChange={(vals) => handlePaddingChange("left", vals[0])}
                                 onDoubleClick={() => handlePaddingChange("left", defaultParameters.paddingLeft)}
                                 className="w-32"
                                 disabled={isDisabled}
@@ -106,12 +106,12 @@ const _PaddingControl = React.memo(() => {
                     {/* Right Padding */}
                     <div className="flex flex-col space-y-1 w-full">
                         <div className="flex items-center space-x-2">
-                            <Slider
+                            <SliderZag
                                 min={0} max={1} step={0.01}
                                 value={[paddingRight]}
-                                onValueChange={(vals) => handlePaddingChange("right", vals[0])}
+                                onChange={(vals) => handlePaddingChange("right", vals[0])}
                                 onDoubleClick={() => handlePaddingChange("right", defaultParameters.paddingRight)}
-                                className="w-32"
+                                className="w-[128px] max-w-[128px] min-w-[128px]"
                                 disabled={isDisabled}
                                 dir='rtl'
                             />
@@ -127,7 +127,9 @@ const _PaddingControl = React.memo(() => {
 
 const _MinContentControl = React.memo(() => {
     const currentClipId = useClipStore(s => s.currentClipId);
-    const [minContent, setMinContent] = useClipParameter('minContent');
+    // const [minContent, setMinContent] = useClipParameter('minContent');
+    const [minContent, setMinContent] = useState(1);
+
 
     const resetMinDuration = useCallback(() => {
         if (!currentClipId) return;
@@ -144,11 +146,11 @@ const _MinContentControl = React.memo(() => {
             </Label>
             <div className="flex items-center space-x-5">
                 <div className="flex w-56 items-center space-x-2" aria-disabled={isDisabled}>
-                    <Slider
-                        min={0} max={5} step={0.001}
+                    <SliderZag
+                        min={0} max={5} step={0.01}
                         value={[minContent]}
-                        onValueChange={(vals) => setMinContent(vals[0])}
-                        onDoubleClick={() => setMinContent(defaultParameters.minContent)}
+                        onChange={(vals) => setMinContent(vals[0])}
+                        onDoubleClick={resetMinDuration}
                         className="w-[128px] max-w-[128px] min-w-[128px]"
                         disabled={isDisabled}
                     />
