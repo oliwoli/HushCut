@@ -20,6 +20,7 @@ import { ZoomSlider } from "@/components/ui/zoomSlider";
 import { useWaveformData } from "@/hooks/useWaveformData";
 import { useWaveformStore } from "@/stores/waveformStore";
 
+import hcLogo512 from "@/assets/images/hc-512.png?inline";
 
 function usePlaybackControls({
   wavesurfer,
@@ -556,10 +557,14 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if ('mediaSession' in navigator) {
           navigator.mediaSession.metadata = new MediaMetadata({
             title: activeClip.name,
-            artist: 'mhm',
+            artist: 'HushCut',
             album: 'HushCut App',
             artwork: [
-              { src: 'logo512.png', sizes: '512x512', type: 'image/png' }
+              {
+                src: `http://localhost:${httpPort}/logo`,
+                sizes: '512x512',
+                type: 'image/png'
+              }
             ]
           });
         }
@@ -567,12 +572,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       ws.on("play", () => {
         setPlaybackState({ isPlaying: true });
         setIsPlaying(true);
-        if (ws.isPlaying()) return;
         // cursed webkit fix
-        if (ws.getVolume() != 1) {
-          console.log("Volume was not 1, setting it to 1 webkit is cursed.");
-          ws.setVolume(1);
-        }
+        ws.setVolume(1);
+        if (ws.isPlaying()) return;
       });
       ws.on("pause", () => {
         if (wavesurferRef.current) {

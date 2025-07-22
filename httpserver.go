@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+//go:embed frontend/src/assets/images/hc-512.png
+var logo []byte
 
 const relativeAudioFolderName = "wav_files" // User-defined relative folder
 
@@ -297,6 +301,12 @@ func (a *App) LaunchHttpServer() error {
 	mux := http.NewServeMux()
 
 	// --- ENDPOINTS --- //
+
+	// Logo endpoint
+	mux.HandleFunc("/logo", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(logo)
+	})
 
 	// Audio files
 	coreAudioHandler := http.HandlerFunc(a.audioFileEndpoint)
