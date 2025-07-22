@@ -30,7 +30,7 @@ interface GlobalStore {
 }
 
 export const useGlobalStore = create<GlobalStore>((set) => ({
-  makeNewTimeline: false,
+  makeNewTimeline: true,
   isThresholdDragging: false,
   keepSilence: false,
   setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
