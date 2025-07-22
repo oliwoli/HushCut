@@ -285,7 +285,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           "hover:text-zinc-100"
         )} role="button" onClick={handleBypassClick}>
           {bypassed ? (
-            <PowerOffIcon size={15} className="text-orange-400 hover:text-orange-200" />
+            <PowerOffIcon size={15} className="text-orange-400/60 hover:text-orange-200" />
           ) : (
             <PowerIcon size={15} />
           )}
@@ -294,7 +294,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
 
         <div className={cn(
           "absolute inset-0 flex items-center justify-center  p-1 bottom-6 [@media(max-height:800px)]:bottom-5",
-          bypassed ? "text-gray-600" : "text-teal-600",
+          bypassed ? "text-gray-600/50" : "text-teal-600",
           isLoading && "animate-pulse")
         }>
 
@@ -307,7 +307,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           )}
         </div>
         <div className={cn(
-          bypassed ? "opacity-45" : "opacity-100",
+          bypassed ? "opacity-35" : "opacity-100",
           "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-gradient-to-t from-black/50 via-black/20 to-transparent"
         )}>
           <div className="flex items-center space-x-1.5">
