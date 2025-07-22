@@ -106,7 +106,7 @@ const GlobalAlertDialog = () => {
           <AlertDialogDescription>{alertData.message}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction>Continue</AlertDialogAction>
           {alertData.actions && alertData.actions.map((action, index) => (
             <AlertDialogAction key={index} onClick={action.onClick}>
               {action.label}
