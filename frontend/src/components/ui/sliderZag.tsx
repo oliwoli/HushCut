@@ -18,6 +18,7 @@ interface SliderZagProps {
   showMarkers?: boolean
   markings?: number[]
   onDoubleClick?: (e: React.MouseEvent<HTMLDivElement>) => void
+  id?: string
 }
 
 export default function SliderZag({
@@ -35,10 +36,11 @@ export default function SliderZag({
   dir,
   showMarkers = true,
   markings,
+  id,
   ...rest
 }: SliderZagProps) {
   const service = useMachine(slider.machine, {
-    id: React.useId(),
+    id: id,
     value,
     defaultValue: defaultValue,
     thumbAlignment: thumbAlignment,

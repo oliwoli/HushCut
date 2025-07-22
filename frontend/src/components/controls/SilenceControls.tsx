@@ -1,7 +1,7 @@
 // components/SilenceControls.tsx
 
 import { ClipStore, defaultParameters, useClipParameter, useClipStore } from '@/stores/clipStore';
-import { Link, Unlink } from 'lucide-react';
+import { InfoIcon, Link, Unlink } from 'lucide-react';
 import React, { useCallback, useState } from 'react';
 
 // Import your reusable UI components
@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import SliderZag from '@/components/ui/sliderZag';
 import ResetButton from './ResetButton';
 import { Separator } from '@radix-ui/react-dropdown-menu';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 
 
 const _MinDurationControl = React.memo(() => {
@@ -32,6 +33,7 @@ const _MinDurationControl = React.memo(() => {
             <div className="flex items-center space-x-5">
                 <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
                     <SliderZag
+                        id={`min-duration-${currentClipId}`}
                         min={0} max={5} step={0.001}
                         value={[minDuration]}
                         onChange={(vals) => setMinDuration(vals[0])}
@@ -89,6 +91,7 @@ const _PaddingControl = React.memo(() => {
                     <div className="flex flex-col space-y-1 w-full">
                         <div className="flex items-center">
                             <SliderZag
+                                id={`padding-l-${currentClipId}`}
                                 min={0} max={1} step={0.01}
                                 value={[paddingLeft]}
                                 onChange={(vals) => handlePaddingChange("left", vals[0])}
@@ -100,13 +103,26 @@ const _PaddingControl = React.memo(() => {
                                 {paddingLocked ? <Link className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
                             </Button>
                         </div>
-                        <span className="text-sm text-zinc-400">Left: <span className="text-zinc-100 font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
+                        <div className='flex gap-2 text-center'>
+                            <span className="text-sm text-zinc-400">Left: <span className="text-zinc-100 font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <InfoIcon size={16} className='text-teal-600/60 hover:text-teal-600' />
+                                </TooltipTrigger>
+                                <TooltipContent className='max-w-[200px]'>
+                                    <h1 className='font-extrabold'>Padding Left</h1>
+                                    <p>Trims the start of the silence.</p>
+                                    <p>Content before the detected silence extends.</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </div>
                     </div>
 
                     {/* Right Padding */}
                     <div className="flex flex-col space-y-1 w-full">
                         <div className="flex items-center space-x-2">
                             <SliderZag
+                                id={`padding-r-${currentClipId}`}
                                 min={0} max={1} step={0.01}
                                 value={[paddingRight]}
                                 onChange={(vals) => handlePaddingChange("right", vals[0])}
@@ -117,7 +133,19 @@ const _PaddingControl = React.memo(() => {
                             />
                             <ResetButton onClick={resetPadding} disabled={isDisabled} />
                         </div>
-                        <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
+                        <div className='flex gap-2 text-center'>
+                            <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <InfoIcon size={16} className='text-teal-600/60 hover:text-teal-600' />
+                                </TooltipTrigger>
+                                <TooltipContent className='max-w-[200px]'>
+                                    <h1 className='font-extrabold'>Padding Right</h1>
+                                    <p>Trims the end of the silence.</p>
+                                    <p>The content after the detected silence starts sooner.</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -140,12 +168,24 @@ const _MinContentControl = React.memo(() => {
 
     return (
         <div className='space-y-1'>
-            <Label className="font-medium w-52 text-stone-400">
-                Minimum Content Duration
-            </Label>
+            <Tooltip>
+                <Label className="font-medium w-52 text-stone-400 flex text-center gap-2">
+                    Threshold Content Duration
+                    <TooltipTrigger asChild>
+                        <InfoIcon size={16} className='text-teal-600/60 hover:text-teal-600' />
+                    </TooltipTrigger>
+                </Label>
+                <TooltipContent className='max-w-[200px]'>
+                    <h1 className='font-extrabold'>Threshold Content Duration</h1>
+                    <p>Segments shorter than this will be considered as silence.</p>
+                    <p>Use this to remove short blips, mic bumps, etc.</p>
+
+                </TooltipContent>
+            </Tooltip>
             <div className="flex items-center space-x-5">
                 <div className="flex w-56 items-center space-x-2" aria-disabled={isDisabled}>
                     <SliderZag
+                        id={`min-content-${currentClipId}`}
                         min={0} max={5} step={0.01}
                         value={[minContent]}
                         onChange={(vals) => setMinContent(vals[0])}

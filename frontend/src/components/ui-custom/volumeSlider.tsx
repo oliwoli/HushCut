@@ -43,7 +43,7 @@ export function ThresholdSlider({
   const setIsThresholdDragging = useGlobalStore((s) => s.setIsThresholdDragging);
 
   const service = useMachine(slider.machine, {
-    id: React.useId(),
+    id: "volume-slider",
     value: [currentDbValue],
     defaultValue: [defaultDb],
     thumbAlignment: "center",

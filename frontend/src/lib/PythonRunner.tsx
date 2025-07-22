@@ -136,7 +136,8 @@ export async function prepareProjectDataWithEdits(
             itemSpecificParams.paddingRightSeconds,
             itemSpecificParams.minContent,
             clipStartSeconds,
-            clipEndSeconds
+            clipEndSeconds,
+            timelineFps
           );
         allClipSilencesMapForGo[clipId] = silencePeriodsForGo;
       } catch (err) {
