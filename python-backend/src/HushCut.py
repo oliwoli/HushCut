@@ -1089,7 +1089,9 @@ def get_resolve(task_id: str = "") -> None:
     davinci_folder_path_from_settings: Optional[str] = None
 
     # Try to load settings.json
-    settings_file_path = os.path.join(os.getcwd(), "settings.json") # In production, settings.json is next to the binary
+    settings_file_path = os.path.join(
+        os.getcwd(), "settings.json"
+    )  # In production, settings.json is next to the binary
     settings_file_path = os.path.abspath(settings_file_path)
 
     if os.path.exists(settings_file_path):
@@ -1098,30 +1100,46 @@ def get_resolve(task_id: str = "") -> None:
                 settings = json.load(f)
                 davinci_folder_path_from_settings = settings.get("davinciFolderPath")
                 if davinci_folder_path_from_settings:
-                    print(f"Found davinciFolderPath in settings.json: {davinci_folder_path_from_settings}")
+                    print(
+                        f"Found davinciFolderPath in settings.json: {davinci_folder_path_from_settings}"
+                    )
         except json.JSONDecodeError:
             print(f"Error decoding settings.json at {settings_file_path}. Skipping.")
         except Exception as e:
-            print(f"Error reading settings.json at {settings_file_path}: {e}. Skipping.")
+            print(
+                f"Error reading settings.json at {settings_file_path}: {e}. Skipping."
+            )
 
     if davinci_folder_path_from_settings:
         # Normalize path and handle potential 'bin' directory for Linux
         normalized_path = os.path.normpath(davinci_folder_path_from_settings)
-        if sys.platform.startswith("linux") and os.path.basename(normalized_path) == "bin":
+        if (
+            sys.platform.startswith("linux")
+            and os.path.basename(normalized_path) == "bin"
+        ):
             # If it's /opt/resolve/bin, we want /opt/resolve
             normalized_path = os.path.dirname(normalized_path)
-            print(f"Adjusted davinciFolderPath for Linux 'bin' directory: {normalized_path}")
+            print(
+                f"Adjusted davinciFolderPath for Linux 'bin' directory: {normalized_path}"
+            )
 
         # Construct the full path to the scripting modules
         if sys.platform.startswith("darwin"):
-            resolve_modules_path = os.path.join(normalized_path, "Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/")
+            resolve_modules_path = os.path.join(
+                normalized_path,
+                "Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules/",
+            )
         elif sys.platform.startswith("win") or sys.platform.startswith("cygwin"):
             # On Windows, the path from settings might be the Resolve install dir (e.g., C:\Program Files\Blackmagic Design\DaVinci Resolve)
             # We need to append the rest of the path
-            resolve_modules_path = os.path.join(normalized_path, "Support", "Developer", "Scripting", "Modules")
+            resolve_modules_path = os.path.join(
+                normalized_path, "Support", "Developer", "Scripting", "Modules"
+            )
         elif sys.platform.startswith("linux"):
-            resolve_modules_path = os.path.join(normalized_path, "Developer", "Scripting", "Modules")
-        
+            resolve_modules_path = os.path.join(
+                normalized_path, "Developer", "Scripting", "Modules"
+            )
+
         print(f"Using davinciFolderPath from settings: {resolve_modules_path}")
     else:
         # Fallback to existing platform-specific paths if no path from settings or error

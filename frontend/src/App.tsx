@@ -61,7 +61,6 @@ import Timecode, { FRAMERATE } from "smpte-timecode";
 import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
-import SliderZag from "./components/ui/sliderZag";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 
@@ -636,7 +635,7 @@ function AppContent() {
   return (
     <>
       <div
-        className="pt-3 bg-[#1b1b1f] border-t-0"
+        className="pt-3 bg-[#1b1b1f] border-t-0 border-1 border-zinc-950"
         style={{
           marginTop: titleBarHeight,
           height: `calc(100vh - ${titleBarHeight})`,
@@ -814,19 +813,21 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
 }
 
 
+interface ClientPortalProps {
+  children: React.ReactNode; // The standard type for any valid React child
+  targetId: string;
+}
+
+const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
+  if (typeof window === 'undefined') return null; // Skip SSR
+
+  const container = document.getElementById(targetId);
+  return container ? createPortal(children, container) : null;
+};
+
 export default function App() {
 
-  interface ClientPortalProps {
-    children: React.ReactNode; // The standard type for any valid React child
-    targetId: string;
-  }
 
-  const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
-    if (typeof window === 'undefined') return null; // Skip SSR
-
-    const container = document.getElementById(targetId);
-    return container ? createPortal(children, container) : null;
-  };
 
   const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
   const isInfoDialogOpen = useUiStore((state) => state.isInfoDialogOpen);

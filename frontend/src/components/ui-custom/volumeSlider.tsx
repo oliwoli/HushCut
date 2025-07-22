@@ -88,7 +88,7 @@ export function ThresholdSlider({
               key={index}
               {...api.getThumbProps({ index })}
               className={cn(
-                "block h-8 w-4 bg-zinc-400 rounded-[1px] relative shadow-md shadow-zinc-950/80",
+                "block h-8 w-4 bg-zinc-400 rounded-[1px] relative",
                 "ring-offset-0 transition-colors",
                 "focus-visible:outline-none focus-visible:ring-8 focus-visible:ring-zinc-200/10 focus-visible:ring-offset-0",
                 "disabled:pointer-events-none disabled:opacity-50",

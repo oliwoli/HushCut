@@ -21,4 +21,5 @@ export default defineConfig({
       '@wails': path.resolve(__dirname, './wailsjs'), // 👈 Alias for wailsjs
     },
   },
+  assetsInclude: ['**/*.png', '**/*.jpg', '**/*.jpeg', '**/*.svg'],
 })
