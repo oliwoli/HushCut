@@ -1,4 +1,4 @@
-import { AudioWaveformIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, SkipForwardIcon } from "lucide-react";
+import { AudioWaveformIcon, ChevronLeftIcon, ChevronRightIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, SkipForwardIcon } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
@@ -26,10 +26,14 @@ function usePlaybackControls({
   wavesurfer,
   onPlayPause,
   onRateChange,
+  onJumpToPreviousSilencePoint,
+  onJumpToNextSilencePoint,
 }: {
   wavesurfer: WaveSurfer | null;
   onPlayPause: () => void;
   onRateChange: (newRate: number) => void;
+  onJumpToPreviousSilencePoint: () => void;
+  onJumpToNextSilencePoint: () => void;
 }) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -72,6 +76,14 @@ function usePlaybackControls({
           onRateChange(newRate); // Notify component of the change
           break;
         }
+        case 'arrowup':
+          e.preventDefault();
+          onJumpToPreviousSilencePoint();
+          break;
+        case 'arrowdown':
+          e.preventDefault();
+          onJumpToNextSilencePoint();
+          break;
         default:
           break;
       }
@@ -79,7 +91,7 @@ function usePlaybackControls({
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [wavesurfer, onPlayPause, onRateChange]);
+  }, [wavesurfer, onPlayPause, onRateChange, onJumpToPreviousSilencePoint, onJumpToNextSilencePoint]);
 }
 
 const formatAudioTime = (
@@ -917,10 +929,58 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     }
   }, [isLoading]);
 
+  const getSilencePoints = useCallback(() => {
+    if (!silenceData) return [];
+    const points: number[] = [];
+    silenceData.forEach(period => {
+      points.push(period.start - clipOriginalStartSecondsRef.current);
+      points.push(period.end - clipOriginalStartSecondsRef.current);
+    });
+    return points.sort((a, b) => a - b);
+  }, [silenceData]);
+
+  const handleJumpToPreviousSilencePoint = useCallback(() => {
+    if (!wavesurferRef.current || !silenceData || silenceData.length === 0) return;
+
+    const currentTime = wavesurferRef.current.getCurrentTime();
+    const points = getSilencePoints();
+
+    const epsilon = 0.001; // Small value to avoid floating point issues and ensure movement
+
+    let targetTime = 0;
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (points[i] < currentTime - epsilon) {
+        targetTime = points[i];
+        break;
+      }
+    }
+    wavesurferRef.current.setTime(targetTime);
+  }, [silenceData, getSilencePoints]);
+
+  const handleJumpToNextSilencePoint = useCallback(() => {
+    if (!wavesurferRef.current || !silenceData || silenceData.length === 0) return;
+
+    const currentTime = wavesurferRef.current.getCurrentTime();
+    const points = getSilencePoints();
+
+    const epsilon = 0.001; // Small value to avoid floating point issues and ensure movement
+
+    let targetTime = wavesurferRef.current.getDuration();
+    for (let i = 0; i < points.length; i++) {
+      if (points[i] > currentTime + epsilon) {
+        targetTime = points[i];
+        break;
+      }
+    }
+    wavesurferRef.current.setTime(targetTime);
+  }, [silenceData, getSilencePoints]);
+
   usePlaybackControls({
     wavesurfer: wavesurferRef.current,
     onPlayPause: handlePlayPause,
     onRateChange: setPlaybackRate,
+    onJumpToPreviousSilencePoint: handleJumpToPreviousSilencePoint,
+    onJumpToNextSilencePoint: handleJumpToNextSilencePoint,
   });
 
   const toggleSkipRegions = useCallback(
@@ -1080,20 +1140,42 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
               <span>{playbackRate.toFixed(2)}x</span>
             </div>
           )}
-          <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm">
-            <AudioWaveformIcon size={21} className="text-gray-500" />
-            <span>{silenceData?.length}</span>
-            <span className="text-gray-600 invisible sm:visible">|</span>
-            <span className="hidden sm:flex space-x-0 gap-1">
-              {formatDuration(totalSilenceDuration).map((part, index) => (
-                <React.Fragment key={index}>
-                  <span className="text-white">{part.value}</span>
-                  <span className="text-gray-400">{part.unit}</span>
-                  {index < formatDuration(totalSilenceDuration).length - 1 &&
-                    " "}
-                </React.Fragment>
-              ))}
-            </span>
+          <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm items-center">
+            <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm items-center">
+              <div className="flex items-center gap-1 text-sm">
+                {silenceData && silenceData.length > 0 && (
+                  <button
+                    onClick={handleJumpToPreviousSilencePoint}
+                    className="text-gray-500 hover:text-zinc-300"
+                    title="Jump to previous silence point"
+                  >
+                    <ChevronLeftIcon size={18} />
+                  </button>
+                )}
+                <AudioWaveformIcon size={21} className="text-gray-500" />
+                {silenceData && silenceData.length > 0 && (
+                  <button
+                    onClick={handleJumpToNextSilencePoint}
+                    className="text-gray-500 hover:text-zinc-300"
+                    title="Jump to next silence point"
+                  >
+                    <ChevronRightIcon size={18} />
+                  </button>
+                )}
+              </div>
+              <span>{silenceData?.length}</span>
+              <span className="text-gray-600 invisible sm:visible">|</span>
+              <span className="hidden sm:flex space-x-0 gap-1">
+                {formatDuration(totalSilenceDuration).map((part, index) => (
+                  <React.Fragment key={index}>
+                    <span className="text-white">{part.value}</span>
+                    <span className="text-gray-400">{part.unit}</span>
+                    {index < formatDuration(totalSilenceDuration).length - 1 &&
+                      " "}
+                  </React.Fragment>
+                ))}
+              </span>
+            </div>
           </div>
         </div>
       </div>
