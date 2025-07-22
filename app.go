@@ -48,7 +48,7 @@ type App struct {
 	ffmpegMutex     sync.RWMutex  // Protects hasFfmpeg flag
 	ffmpegReadyChan chan struct{} // Used to signal when FFmpeg is ready
 	ffmpegOnce      sync.Once     // Ensures the ready channel is closed only once
-	AppVersion string
+	AppVersion      string
 }
 
 // NewApp creates a new App application struct
@@ -68,7 +68,7 @@ func NewApp() *App {
 			Timeout: 30 * time.Second,
 		},
 		ffmpegReadyChan: make(chan struct{}),
-		AppVersion: AppVersion,
+		AppVersion:      AppVersion,
 	}
 }
 
@@ -742,6 +742,7 @@ func (a *App) DetectSilences(
 	minContentDuration float64,
 	clipStartSeconds float64,
 	clipEndSeconds float64,
+	framerate float64,
 ) ([]SilencePeriod, error) {
 	if err := a.waitForFfmpeg(); err != nil {
 		return nil, err
@@ -759,6 +760,7 @@ func (a *App) DetectSilences(
 	if minSilenceDurationSeconds < 0.009 {
 		minSilenceDurationSeconds = 0.009
 	}
+
 	minSilenceDurationForFFmpeg := fmt.Sprintf("%f", minSilenceDurationSeconds)
 
 	filterGraph := fmt.Sprintf("atrim=start=%.6f:end=%.6f,silencedetect=n=%s:d=%s",
@@ -860,6 +862,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 	minContentDuration float64,
 	clipStartSeconds float64,
 	clipEndSeconds float64,
+	framerate float64,
 ) ([]SilencePeriod, error) {
 	key := CacheKey{
 		FilePath:                  filePath,
@@ -894,6 +897,7 @@ func (a *App) GetOrDetectSilencesWithCache(
 		minContentDuration,
 		clipStartSeconds,
 		clipEndSeconds,
+		framerate,
 	)
 	if err != nil {
 		// Do not cache errors, so subsequent calls can retry.
@@ -1071,32 +1075,33 @@ func parseDuration(s string) (time.Duration, error) {
 // provided data for perfect accuracy, and falls back to a predictive model
 // for all other sample rates.
 func calculateMP3DelaySec(sampleRate int) float64 {
+	return 0.0
 	// Use a switch for high performance and clarity.
-	switch sampleRate {
-	// --- Hardcoded values from your delay-data.csv for perfect precision ---
-	case 8000:
-		return 0.210
-	case 16000:
-		return 0.104994792
-	case 44100:
-		return 0.051177083
-	case 48000:
-		return 0.047015625
-	default:
-		// --- Fallback to the predictive model for any other sample rate ---
-		// This ensures we can handle any MP3 file gracefully.
-		const a = 1.30299795e+07
-		const k = 1.24413193
-		const b = 28.43853540
+	// switch sampleRate {
+	// // --- Hardcoded values from your delay-data.csv for perfect precision ---
+	// case 8000:
+	// 	return 0.210
+	// case 16000:
+	// 	return 0.104994792
+	// case 44100:
+	// 	return 0.051177083
+	// case 48000:
+	// 	return 0.047015625
+	// default:
+	// 	// --- Fallback to the predictive model for any other sample rate ---
+	// 	// This ensures we can handle any MP3 file gracefully.
+	// 	const a = 1.30299795e+07
+	// 	const k = 1.24413193
+	// 	const b = 28.43853540
 
-		fs := float64(sampleRate)
+	// 	fs := float64(sampleRate)
 
-		// Calculate the delay in milliseconds using the model.
-		delayMilliseconds := (a / math.Pow(fs, k)) + b
+	// 	// Calculate the delay in milliseconds using the model.
+	// 	delayMilliseconds := (a / math.Pow(fs, k)) + b
 
-		// Convert the delay from milliseconds to seconds.
-		return delayMilliseconds / 1000.0
-	}
+	// 	// Convert the delay from milliseconds to seconds.
+	// 	return delayMilliseconds / 1000.0
+	// }
 }
 
 func (a *App) getStartTimeWithFFmpeg(inputPath string) (float64, error) {
