@@ -79,7 +79,8 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                     {/* <p>A simple, efficient application built with Wails and React.</p> */}
                     {md && (
                         <ScrollArea className="max-h-[60vh] overflow-y-auto pr-2">
-                            <p>Found a bug, share feedback, or just chat?</p>
+                            <h2 className="font-bold text-foreground mt-4 mb-2 text-[18px]">Found a bug, want to share feedback, or just chat?</h2>
+                            <p>Join our discord server</p>
                             <a href="#" onClick={() => discordLink && BrowserOpenURL(discordLink)} className="text-orange-400 flex gap-1 underline">{discordLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
 
 
