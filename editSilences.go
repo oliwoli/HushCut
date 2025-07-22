@@ -79,6 +79,13 @@ func CreateEditsWithOptionalSilence(
 
 	// 2) Merge overlaps
 	merged := MergeIntervals(relevant)
+	// 2b) Make sure no interval is shorter than 1 source‐frame:
+	for i, sil := range merged {
+		if sil.End-sil.Start < 1.0-eps {
+			merged[i].End = sil.Start + 1.0
+		}
+	}
+
 	if len(merged) == 0 {
 		// no silences → one straight pass
 		return []EditInstruction{{
@@ -107,7 +114,18 @@ func CreateEditsWithOptionalSilence(
 			return
 		}
 		srcStart := srcCursor
-		srcEnd := srcCursor + float64(frames) - apiRoundingMargin
+		rawSrcEnd := srcCursor + float64(frames) - apiRoundingMargin
+
+		// 2) clamp so that every emitted slice is >= 1.0 source‐frame
+		if rawSrcEnd-srcStart < 1.0 {
+			rawSrcEnd = srcStart + 1.0
+		}
+		srcEnd := 0.0
+		if keepSilenceSegments {
+			srcEnd = rawSrcEnd
+		} else {
+			srcEnd = srcCursor + float64(frames) - apiRoundingMargin
+		}
 
 		edits = append(edits, EditInstruction{
 			SourceStartFrame: srcStart,
@@ -133,6 +151,9 @@ func CreateEditsWithOptionalSilence(
 		untilSilEnd := mapSrcToTL(sil.End)
 		framesSil := round(untilSilEnd) - tlCursor
 		if keepSilenceSegments {
+			if framesSil < 1 {
+				framesSil = 1
+			}
 			emit(int(framesSil), false)
 		} else {
 			tlCursor += int64(framesSil)
