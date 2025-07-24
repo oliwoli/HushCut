@@ -13,6 +13,7 @@ function Switch({
       className={cn(
         // Track styles
         "peer inline-flex h-[1rem] w-[1.9rem] shrink-0 items-center rounded-full bg-[#111] transition-colors duration-100",
+        "outline-1 outline-zinc-700",
         "data-[state=checked]:bg-[#111] data-[state=unchecked]:bg-[#111]",
         "focus-visible:outline-none focus-visible:ring-0",
         "disabled:cursor-not-allowed disabled:opacity-50",

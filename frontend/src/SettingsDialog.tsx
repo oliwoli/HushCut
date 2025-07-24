@@ -11,6 +11,9 @@ import { Label } from "@/components/ui/label";
 import { useEffect, useState } from "react";
 import { GetSettings, SaveSettings, SelectDirectory } from "@wails/go/main/App";
 import { Description } from "@radix-ui/react-dialog";
+import { Switch } from "./components/ui/switch";
+import { Separator } from "@radix-ui/react-context-menu";
+import SliderZag from "./components/ui/sliderZag";
 
 // This component is now "controlled" by its parent via these props.
 interface SettingsDialogProps {
@@ -22,6 +25,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     const [internalOpen, setInternalOpen] = useState(false);
     const [dialogOpacity, setDialogOpacity] = useState(1);
     const [davinciFolderPath, setDavinciFolderPath] = useState("");
+    const [cleanupTime, setCleanupTime] = useState(14);
 
     useEffect(() => {
         if (open) {
@@ -34,7 +38,6 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
             setInternalOpen(false);
             setDialogOpacity(0);
             const fadeOutTimer = setTimeout(() => {
-                // No need to set internalOpen here again
             }, 150);
 
             return () => clearTimeout(fadeOutTimer);
@@ -72,7 +75,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 </DialogHeader>
 
 
-                <div className="grid gap-4 h-max">
+                <div className="grid gap-4 h-max max-w-6xl mx-auto">
                     <Description>General</Description>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
@@ -93,6 +96,18 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                             Select<span className="hidden sm:inline">Folder</span>
 
                         </Button>
+                    </div>
+                    <Separator className="relative block w-full min-h-full h-px bg-gray-700" />
+                    <Label> <Switch checked={true} />Cleanup Cache Files</Label>
+                    <p className="text-muted-foreground text-balance">HushCut creates temp wav files to efficiently extract silence data and display the waveform preview. You can choose to delete files that haven't been accessed in a while automatically before the app exits.</p>
+                    <div className="flex gap-4">
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
+                                <span className="block text-left">Delete after</span>
+                            </Label>
+                            <div className="flex gap-4 w-full min-w-128"><SliderZag className="w-[128px]" value={[cleanupTime]} min={0} max={30} step={1} onChange={(values) => setCleanupTime(values[0])} />
+                                {cleanupTime} days</div>
+                        </div>
                     </div>
                 </div>
 

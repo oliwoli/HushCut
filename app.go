@@ -42,6 +42,9 @@ type App struct {
 	ffmpegSemaphore          chan struct{}
 	waveformSemaphore        chan struct{}
 	conversionTracker        sync.Map
+	fileUsage                map[string]time.Time // New field for file usage tracking
+	mu                       sync.Mutex           // Mutex to protect fileUsage
+
 	httpClient               *http.Client
 
 	// --- NEW FIELDS FOR FFmpeg STATE ---
@@ -59,7 +62,7 @@ func NewApp() *App {
 		waveformCache:            make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
 		pythonReadyChan:          make(chan bool, 1),                                  // Buffered channel
 		pythonReady:              false,
-		effectiveAudioFolderPath: "", // FIXME: This needs to be initialized properly!
+		effectiveAudioFolderPath: "", // Will be initialized in startup
 		pendingTasks:             make(map[string]chan PythonCommandResponse),
 		ffmpegSemaphore:          make(chan struct{}, 8),
 		waveformSemaphore:        make(chan struct{}, 3),
@@ -69,6 +72,7 @@ func NewApp() *App {
 		},
 		ffmpegReadyChan: make(chan struct{}),
 		AppVersion:      AppVersion,
+		fileUsage:       make(map[string]time.Time),
 	}
 }
 
@@ -188,6 +192,31 @@ func binaryExists(path string) bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// Initialize effectiveAudioFolderPath based on platform
+	goExecutablePath, err_exec := os.Executable()
+	if err_exec != nil {
+		log.Fatalf("Could not get executable path: %v", err_exec)
+	}
+	goExecutableDir := filepath.Dir(goExecutablePath)
+
+	platform := runtime.Environment(a.ctx).Platform
+	switch platform {
+	case "darwin":
+		a.effectiveAudioFolderPath = filepath.Join(goExecutableDir, "..", "Resources", "wav_files")
+	case "windows", "linux":
+		a.effectiveAudioFolderPath = filepath.Join(goExecutableDir, "wav_files")
+	default:
+		log.Fatalf("Unsupported platform for effectiveAudioFolderPath: %s", platform)
+	}
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(a.effectiveAudioFolderPath, 0755); err != nil {
+		log.Fatalf("Failed to create effective audio folder: %v", err)
+	}
+
+	// Initialize file usage tracking
+	a.loadUsageData()
 
 	var pythonPortArg int
 
@@ -458,6 +487,11 @@ func (a *App) DownloadFFmpeg() error {
 func (a *App) shutdown(ctx context.Context) {
 	a.ctx = ctx
 	log.Println("Wails App: OnShutdown called.")
+
+	// Save file usage data and clean up old files
+	a.saveUsageData()
+	a.cleanupOldFiles()
+
 
 	// Case 1: The Go app launched the Python process. We own it and can terminate it.
 	if a.pythonCmd != nil && a.pythonCmd.Process != nil {
@@ -756,6 +790,8 @@ func (a *App) DetectSilences(
 	}
 
 	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
+	// Mark the input file as used after its absolute path is determined
+	a.updateFileUsage(absPath)
 	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)
 	if minSilenceDurationSeconds < 0.009 {
 		minSilenceDurationSeconds = 0.009
@@ -946,6 +982,9 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve web input path '%s' for pre-check: %w", webInputPath, err)
 	}
+	// Mark the input file as used after its absolute path is determined
+	a.updateFileUsage(localFSPath)
+
 	if err := a.WaitForFile(localFSPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
 	}
@@ -1011,8 +1050,128 @@ func (a *App) GetFFmpegStatus() bool {
 	return a.hasFfmpeg
 }
 
+const fileUsageFileName = "file_usage.json"
+const cleanupThreshold = 30 * 24 * time.Hour // 30 days
+
+func (a *App) updateFileUsage(filePath string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Ensure the path is absolute and clean
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		log.Printf("Error getting absolute path for file usage: %v", err)
+		return
+	}
+
+	// CRITICAL SAFETY CHECK: Only track files within effectiveAudioFolderPath
+	if !strings.HasPrefix(absPath, a.effectiveAudioFolderPath) {
+		log.Printf("WARNING: Attempted to track file outside effectiveAudioFolderPath. Skipping: %s", absPath)
+		return
+	}
+
+	a.fileUsage[absPath] = time.Now()
+	log.Printf("Updated usage for file: %s", absPath)
+}
+
 func (a *App) GetAppVersion() string {
 	return a.AppVersion
+}
+
+func (a *App) getFileUsagePath() string {
+	return filepath.Join(a.effectiveAudioFolderPath, fileUsageFileName)
+}
+
+func (a *App) loadUsageData() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	filePath := a.getFileUsagePath()
+	log.Printf("Attempting to load file usage data from: %s", filePath)
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Println("file_usage.json does not exist. Initializing empty usage data.")
+			a.fileUsage = make(map[string]time.Time)
+			return
+		}
+		log.Printf("Error reading file_usage.json: %v", err)
+		return
+	}
+
+	var rawUsage map[string]string
+	if err := json.Unmarshal(data, &rawUsage); err != nil {
+		log.Printf("Error unmarshaling file_usage.json: %v", err)
+		return
+	}
+
+	a.fileUsage = make(map[string]time.Time)
+	for k, v := range rawUsage {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			log.Printf("Error parsing time for %s: %v", k, err)
+			continue
+		}
+		a.fileUsage[k] = t
+	}
+	log.Printf("Successfully loaded %d entries from file_usage.json", len(a.fileUsage))
+}
+
+func (a *App) saveUsageData() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	filePath := a.getFileUsagePath()
+	log.Printf("Attempting to save file usage data to: %s", filePath)
+
+	rawUsage := make(map[string]string)
+	for k, v := range a.fileUsage {
+		rawUsage[k] = v.Format(time.RFC3339)
+	}
+
+	data, err := json.MarshalIndent(rawUsage, "", "  ")
+	if err != nil {
+		log.Printf("Error marshaling file usage data: %v", err)
+		return
+	}
+
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("Error creating directory for file_usage.json: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		log.Printf("Error writing file_usage.json: %v", err)
+		return
+	}
+	log.Println("Successfully saved file usage data.")
+}
+
+func (a *App) cleanupOldFiles() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	log.Println("Starting cleanup of old temporary files...")
+	now := time.Now()
+
+	filesToDelete := []string{}
+	for filePath, lastUsed := range a.fileUsage {
+		if now.Sub(lastUsed) > cleanupThreshold {
+			filesToDelete = append(filesToDelete, filePath)
+		}
+	}
+
+	for _, filePath := range filesToDelete {
+		log.Printf("Deleting old file: %s (last used %s ago)", filePath, now.Sub(a.fileUsage[filePath]))
+		if err := os.Remove(filePath); err != nil {
+			log.Printf("Error deleting file %s: %v", filePath, err)
+		} else {
+			delete(a.fileUsage, filePath)
+		}
+	}
+	log.Printf("Cleanup complete. Deleted %d old files.", len(filesToDelete))
 }
 
 func isValidWav(path string) bool {
@@ -1386,6 +1545,9 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	runtime.EventsEmit(a.ctx, "conversion:done", ConversionProgress{FilePath: outputPath, Percentage: 100})
 	tracker.Done <- nil
 
+	// Update file usage timestamp
+	a.updateFileUsage(outputPath)
+
 	return nil
 }
 
@@ -1441,6 +1603,8 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 				SourcePath: item.SourceFilePath,
 				Channel:    item.SourceChannel,
 			}
+			// Mark the processed file as used
+			a.updateFileUsage(targetWavPath)
 			continue // Move to the next top-level item.
 		}
 
@@ -1456,6 +1620,8 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 					SourcePath: nestedItem.SourceFilePath,
 					Channel:    nestedItem.SourceChannel,
 				}
+				// Mark the processed file as used
+				a.updateFileUsage(targetWavPath)
 			}
 		}
 	}
