@@ -1066,8 +1066,22 @@ local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
 
   seed_string = seed_string .. "nested_clips[" .. table.concat(nested_strings, "||") .. "]"
 
-  -- 3. Generate a deterministic UUID from the canonical seed string.
-  return uuid(seed_string)
+  -- 3. Generate a deterministic UUID from the canonical seed string by calling Go helper.
+  local command = string.format("%s --uuid-from-str '%s'", quote(go_script_path), seed_string)
+  local handle = io.popen(command)
+  if not handle then
+    print("Lua Error: Failed to execute command to get UUID from string.")
+    return uuid() -- fallback to random
+  else
+    local uuid_str = handle:read("*a")
+    handle:close()
+    if uuid_str and #uuid_str > 0 then
+      return uuid_str:gsub("%s+", "") -- Remove any whitespace
+    else
+      print("Lua Error: No UUID returned for seed string.")
+      return uuid() -- fallback to random
+    end
+  end
 end
 
 ---
@@ -1117,6 +1131,18 @@ local function mixdown_compound_clips(audio_timeline_items, curr_processed_file_
   end
 end
 
+local function safe_get(tbl, ...)
+  local current = tbl
+  for i = 1, select('#', ...) do
+    local key = select(i, ...)
+    if type(current) ~= 'table' or current[key] == nil then
+      return nil
+    end
+    current = current[key]
+  end
+  return current
+end
+
 -- =============================================================================
 -- DATA GATHERING & PROCESSING
 -- =============================================================================
@@ -1143,10 +1169,7 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
         local source_start_float = left_offset
         local source_end_float = left_offset + duration
 
-        local source_file_path = ""
-        if media_pool_item then
-          source_file_path = media_pool_item:GetClipProperty("File Path") or ""
-        end
+        local source_file_path = (media_pool_item and (media_pool_item:GetClipProperty("File Path") or "")) or ""
 
         local timeline_item = {
           bmd_item = item_bmd,
@@ -1165,13 +1188,13 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           source_end_frame = source_end_float,
           source_channel = 0, -- Default value
           link_group_id = nil,
-          type = nil,
+          type = json.null,
           nested_clips = {},
         }
 
         if media_pool_item and source_file_path == "" then
           local clip_type = media_pool_item:GetClipProperty("Type")
-          print("Detected clip type: " .. tostring(clip_type) .. " for item: " .. item_name)
+          print("Detected complex clip type: " .. tostring(clip_type) .. " for item: " .. item_name)
           timeline_item.type = clip_type
           timeline_item.nested_clips = {}
         end
@@ -1200,14 +1223,207 @@ local function export_timeline_to_otio(davinci_tl, file_path)
 end
 
 
--- Placeholder function, needs implementation.
+local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_container, max_duration)
+  local media_refs = otio_clip.media_references
+  if not media_refs then return nil end
+
+  local active_media_key = otio_clip.active_media_reference_key or "DEFAULT_MEDIA"
+  local media_ref = media_refs[active_media_key]
+
+  if not media_ref or not media_ref.OTIO_SCHEMA or string.lower(media_ref.OTIO_SCHEMA):find("externalreference", 1, true) == nil then
+    return nil
+  end
+
+  local source_path_uri = media_ref.target_url
+  if not source_path_uri then return nil end
+
+  local source_file_path
+  if source_path_uri:sub(1, 7) == "file://" then
+    source_file_path = source_path_uri:sub(8)
+  else
+    source_file_path = source_path_uri
+  end
+
+  local source_uuid = uuid_from_path(source_file_path)
+
+  local source_range = otio_clip.source_range
+  local available_range = media_ref.available_range
+  if not source_range or not available_range then return nil end
+
+  local clip_source_start_val = safe_get(source_range, "start_time", "value") or 0.0
+  local media_available_start_val = safe_get(available_range, "start_time", "value") or 0.0
+
+  local normalized_source_start_frame = clip_source_start_val - media_available_start_val
+  local duration = safe_get(source_range, "duration", "value") or 0.0
+
+  if max_duration and duration > max_duration then
+    duration = max_duration
+  end
+
+  local source_channel = 0
+  local processed_file_name = source_uuid .. ".wav"
+
+  local resolve_meta = safe_get(otio_clip, "metadata", "Resolve_OTIO") or {}
+  local channels_info = resolve_meta.Channels or {}
+
+  if #channels_info == 1 then
+    local channel_num = channels_info[1]["Source Track ID"]
+    if type(channel_num) == 'number' and channel_num > 0 then
+      source_channel = channel_num
+      processed_file_name = source_uuid .. "_ch" .. tostring(source_channel) .. ".wav"
+      print("OTIO parser: Found mapping for clip '" ..
+        tostring(otio_clip.name) .. "' to source channel " .. tostring(source_channel))
+    end
+  end
+
+  local nested_item = {
+    source_file_path = source_file_path,
+    processed_file_name = processed_file_name,
+    source_channel = source_channel + 1,
+    start_frame = clip_start_in_container,
+    end_frame = clip_start_in_container + duration,
+    source_start_frame = normalized_source_start_frame,
+    source_end_frame = normalized_source_start_frame + duration,
+    duration = duration,
+    edit_instructions = {},
+    nested_items = nil,
+  }
+  return nested_item
+end
+
+local _recursive_otio_parser -- Forward declaration
+_recursive_otio_parser = function(otio_composable, active_angle_name, container_duration)
+  local found_clips = {}
+
+  for _, track in ipairs(otio_composable.children or {}) do
+    if string.lower(track.kind or "") == "audio" then
+      if not active_angle_name or track.name == active_angle_name then
+        local playhead = 0.0
+        for _, item_in_track in ipairs(track.children or {}) do
+          if container_duration and playhead >= container_duration then break end
+
+          local schema = string.lower(item_in_track.OTIO_SCHEMA or "")
+          local item_duration = safe_get(item_in_track, "source_range", "duration", "value") or 0.0
+          local effective_duration = item_duration
+
+          if container_duration then
+            local remaining_time = container_duration - playhead
+            if item_duration > remaining_time then
+              effective_duration = math.max(0, remaining_time)
+            end
+          end
+
+          if schema:find("gap", 1, true) then
+            playhead = playhead + item_duration
+          elseif effective_duration > 0 then
+            if schema:find("clip", 1, true) then
+              local item = _create_nested_audio_item_from_otio(item_in_track, playhead, effective_duration)
+              if item then table.insert(found_clips, item) end
+            elseif schema:find("stack", 1, true) then
+              local nested_clips = _recursive_otio_parser(item_in_track, active_angle_name, container_duration)
+              for _, nested_clip in ipairs(nested_clips) do
+                nested_clip.start_frame = nested_clip.start_frame + playhead
+                nested_clip.end_frame = nested_clip.end_frame + playhead
+                table.insert(found_clips, nested_clip)
+              end
+            end
+            playhead = playhead + item_duration
+          end
+        end
+      end
+    end
+  end
+  return found_clips
+end
+
 local function populate_nested_clips(input_otio_path)
-  print("Placeholder: Would populate 'nested_clips' from OTIO file: " .. input_otio_path)
-  -- This function would parse the OTIO file and populate the 'nested_clips'
-  -- field of the relevant items in the project_data structure.
-  -- Due to the complexity of OTIO parsing in Lua, this is a simplified placeholder.
-  -- A full implementation would require a Lua JSON parser and a deep understanding
-  -- of the OTIO specification to traverse the data structure.
+  if not project_data or not project_data.timeline then
+    print("Cannot populate nested clips: project_data is not configured.")
+    return
+  end
+
+  local f = io.open(input_otio_path, "r")
+  if not f then
+    print("Failed to read OTIO file: " .. input_otio_path)
+    return
+  end
+  local otio_json_str = f:read("*a")
+  f:close()
+
+  local ok, otio_data = pcall(json.decode, otio_json_str)
+  if not ok then
+    print("Failed to parse OTIO JSON: " .. tostring(otio_data))
+    return
+  end
+
+  local pd_timeline = project_data.timeline
+  local all_pd_items = {}
+  for _, item in ipairs(pd_timeline.video_track_items or {}) do table.insert(all_pd_items, item) end
+  for _, item in ipairs(pd_timeline.audio_track_items or {}) do table.insert(all_pd_items, item) end
+
+  local timeline_start_frame = safe_get(otio_data, "global_start_time", "value") or 0.0
+  local FRAME_MATCH_TOLERANCE = 0.5
+  local audio_track_counter = 0
+
+  for _, track in ipairs(safe_get(otio_data, "tracks", "children") or {}) do
+    if string.lower(track.kind or "") == "audio" then
+      audio_track_counter = audio_track_counter + 1
+      local current_track_index = audio_track_counter
+      local playhead_frames = 0
+
+      for _, item in ipairs(track.children or {}) do
+        local duration_val = safe_get(item, "source_range", "duration", "value") or 0.0
+        local item_schema = string.lower(item.OTIO_SCHEMA or "")
+
+        if item_schema:find("gap", 1, true) then
+          playhead_frames = playhead_frames + duration_val
+        elseif item_schema:find("stack", 1, true) then
+          local container_duration = duration_val
+          local resolve_meta = safe_get(item, "metadata", "Resolve_OTIO") or {}
+          local sequence_type = resolve_meta["Sequence Type"]
+          local active_angle_name = nil
+
+          if sequence_type == "Multicam Clip" then
+            local item_name = item.name or ""
+            active_angle_name = string.match(item_name, "Angle %d+")
+            if active_angle_name then
+              print("Detected Multicam clip. Active audio angle: '" .. active_angle_name .. "'")
+            else
+              print("Could not parse active angle from Multicam name: '" .. item_name .. "'.")
+            end
+          end
+
+          local nested_clips_for_this_instance = _recursive_otio_parser(item, active_angle_name, container_duration)
+
+          if #nested_clips_for_this_instance > 0 then
+            local record_frame_float = playhead_frames + timeline_start_frame
+            local otio_item_name = item.name
+
+            local corresponding_pd_items = {}
+            for _, pd_item in ipairs(all_pd_items) do
+              if pd_item.type and pd_item.track_index == current_track_index and
+                  math.abs((pd_item.start_frame or -1) - record_frame_float) < FRAME_MATCH_TOLERANCE and
+                  pd_item.name == otio_item_name then
+                table.insert(corresponding_pd_items, pd_item)
+              end
+            end
+
+            if #corresponding_pd_items == 0 then
+              print("Could not find corresponding project item for OTIO stack '" ..
+                tostring(otio_item_name) .. "' on track " .. tostring(current_track_index))
+            end
+
+            for _, pd_item in ipairs(corresponding_pd_items) do
+              pd_item.nested_clips = nested_clips_for_this_instance
+            end
+          end
+          playhead_frames = playhead_frames + duration_val
+        else
+          playhead_frames = playhead_frames + duration_val
+        end
+      end
+    end
+  end
 end
 
 
@@ -1256,7 +1472,10 @@ local function get_project_data(bmd_project, bmd_timeline)
   -- --- 2. Analyze Mappings & Define Streams ---
   print("Analyzing timeline items and audio channel mappings...")
   for _, item in ipairs(audio_track_items) do
-    if item.source_file_path and item.source_file_path ~= "" then
+    if item.source_file_path and item.source_file_path ~= "" and item.type == json.null then
+      -- This is the crucial step to correctly classify normal clips
+      -- item.type = nil
+
       local source_uuid = uuid_from_path(item.source_file_path)
       item.source_channel = 0 -- Default
       item.processed_file_name = source_uuid .. ".wav"
@@ -1316,23 +1535,7 @@ end
 -- EDIT UNIFICATION LOGIC (from Python)
 -- =============================================================================
 
----
--- Safely gets a nested value from a table.
--- @param tbl (table) The table to search in.
--- @param ... (string) A sequence of keys to traverse.
--- @return The value if found, otherwise nil.
---
-local function safe_get(tbl, ...)
-  local current = tbl
-  for i = 1, select('#', ...) do
-    local key = select(i, ...)
-    if type(current) ~= 'table' or current[key] == nil then
-      return nil
-    end
-    current = current[key]
-  end
-  return current
-end
+
 
 ---
 -- Unifies edit instructions for a group of linked items.

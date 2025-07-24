@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/md5"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -37,14 +35,13 @@ func main() {
 	}
 
 	if *uuidFromStr != "" {
-		strs := strings.Split(*uuidFromStr, ",")
-		for _, s := range strs {
-			h := md5.Sum([]byte(s))
-			u := uuid.Must(uuid.FromBytes(h[:]))
-			u = uuid.NewMD5(uuid.Nil, []byte(s))
-			uuidStr := u.String()
-			fmt.Println(uuidStr)
-		}
+		// Treat the entire string as a single input for UUID generation.
+		s := *uuidFromStr
+		// Generate a UUID using MD5 hash of the input string.
+		// This creates a deterministic UUID based on the content of the string.
+		u := uuid.NewMD5(uuid.Nil, []byte(s))
+		uuidStr := u.String()
+		fmt.Println(uuidStr)
 		return
 	}
 	// ------------------
