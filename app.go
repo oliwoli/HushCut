@@ -645,6 +645,7 @@ func (a *App) GetSettings() (map[string]any, error) {
 			defaultSettings := make(map[string]any)
 			// Add default key-value pairs here if needed
 			defaultSettings["davinciFolderPath"] = ""
+			defaultSettings["cleanupThresholdDays"] = 30
 
 			jsonData, marshalErr := json.MarshalIndent(defaultSettings, "", "  ")
 			if marshalErr != nil {
@@ -1155,6 +1156,23 @@ func (a *App) cleanupOldFiles() {
 
 	log.Println("Starting cleanup of old temporary files...")
 	now := time.Now()
+
+	settings, err := a.GetSettings()
+	if err != nil {
+		log.Printf("Error getting settings for cleanup threshold: %v", err)
+		// Fallback to default if settings can't be read
+		settings = make(map[string]any)
+		settings["cleanupThresholdDays"] = 30
+	}
+
+	cleanupThresholdDays := 30 // Default value
+	if val, ok := settings["cleanupThresholdDays"].(float64); ok { // JSON numbers are float64 in Go
+		cleanupThresholdDays = int(val)
+	} else if val, ok := settings["cleanupThresholdDays"].(int); ok {
+		cleanupThresholdDays = val
+	}
+
+	cleanupThreshold := time.Duration(cleanupThresholdDays) * 24 * time.Hour
 
 	filesToDelete := []string{}
 	for filePath, lastUsed := range a.fileUsage {

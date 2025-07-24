@@ -25,12 +25,13 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     const [internalOpen, setInternalOpen] = useState(false);
     const [dialogOpacity, setDialogOpacity] = useState(1);
     const [davinciFolderPath, setDavinciFolderPath] = useState("");
-    const [cleanupTime, setCleanupTime] = useState(14);
+    const [cleanupThreshold, setCleanupThreshold] = useState(30);
 
     useEffect(() => {
         if (open) {
             GetSettings().then((settings: any) => {
                 setDavinciFolderPath(settings.davinciFolderPath);
+                setCleanupThreshold(settings.cleanupThresholdDays || 30);
             });
             setInternalOpen(true);
             setDialogOpacity(1);
@@ -52,7 +53,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     };
 
     const handleSave = () => {
-        SaveSettings({ davinciFolderPath }).then(() => {
+        SaveSettings({ davinciFolderPath, cleanupThresholdDays: cleanupThreshold }).then(() => {
             onOpenChange(false);
         });
     };
@@ -105,8 +106,8 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                             <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
                                 <span className="block text-left">Delete after</span>
                             </Label>
-                            <div className="flex gap-4 w-full min-w-128"><SliderZag className="w-[128px]" value={[cleanupTime]} min={0} max={30} step={1} onChange={(values) => setCleanupTime(values[0])} />
-                                {cleanupTime} days</div>
+                            <div className="flex gap-4 w-full min-w-128"><SliderZag className="w-[128px]" value={[cleanupThreshold]} min={0} max={30} step={1} onChange={(values) => setCleanupThreshold(values[0])} />
+                                {cleanupThreshold} days</div>
                         </div>
                     </div>
                 </div>
