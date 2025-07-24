@@ -831,6 +831,108 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
 end
 
 
+-- =============================================================================
+-- Progress Tracker
+-- =============================================================================
+local ProgressTracker = {}
+ProgressTracker.__index = ProgressTracker
+
+function ProgressTracker:new()
+  local instance = setmetatable({}, ProgressTracker)
+  instance.task_id = ""
+  instance._tasks = {}
+  instance._total_weight = 0.0
+  instance._task_progress = {}
+  instance._last_report = 0
+  return instance
+end
+
+function ProgressTracker:start_new_run(weighted_tasks, task_id)
+  print("Initializing tracker for Task ID: " .. tostring(task_id))
+  self.task_id = task_id
+  local original_total = 0
+  for _, weight in pairs(weighted_tasks) do
+    original_total = original_total + weight
+  end
+
+  if original_total == 0 then
+    self._tasks = {}
+    self._total_weight = 0.0
+  else
+    local scaling_factor = 100 / original_total
+    self._tasks = {}
+    for name, weight in pairs(weighted_tasks) do
+      self._tasks[name] = weight * scaling_factor
+    end
+    self._total_weight = 100.0
+  end
+
+  self._task_progress = {}
+  for name, _ in pairs(self._tasks) do
+    self._task_progress[name] = 0.0
+  end
+end
+
+function ProgressTracker:get_percentage()
+  if self._total_weight == 0 then
+    return 0.0
+  end
+  local current_progress = 0
+  for _, progress in pairs(self._task_progress) do
+    current_progress = current_progress + progress
+  end
+  return (current_progress / self._total_weight) * 100
+end
+
+function ProgressTracker:_report_progress(message, important)
+  important = important or false
+  local percentage = self:get_percentage()
+  if percentage >= 100.0 then
+    important = true
+  end
+
+  local current_time = os.clock()
+  if (current_time - self._last_report > 0.125) or important then
+    local payload = {
+      progress = percentage,
+      message = message
+    }
+    send_message_to_go("taskUpdate", payload, self.task_id)
+    self._last_report = current_time
+  end
+end
+
+function ProgressTracker:update_task_progress(task_name, percentage, message)
+  if not self.task_id or self.task_id == "" then
+    print("Warning: Tracker not initialized. Call start_new_run() first.")
+    return
+  end
+  if not self._tasks[task_name] then
+    print("Warning: Task '" .. task_name .. "' not found.")
+    return
+  end
+
+  percentage = math.max(0, math.min(100, percentage))
+  local important = (percentage == 100.0)
+  if message and not important then
+    important = true
+  end
+
+  self._task_progress[task_name] = self._tasks[task_name] * (percentage / 100.0)
+  local update_message = message or task_name
+  print(string.format("Updating '%s' to %.1f%%. Overall: %.2f%%", task_name, percentage, self:get_percentage()))
+  self:_report_progress(update_message, important)
+end
+
+function ProgressTracker:complete_task(task_name)
+  self:update_task_progress(task_name, 100.0, task_name .. " complete")
+end
+
+-- Global tracker instance
+local TRACKER = ProgressTracker:new()
+local TASKS = { prepare = 10, append = 40, verify = 10, link = 40 }
+
+
 
 local os_type = jit.os
 local potential_paths
