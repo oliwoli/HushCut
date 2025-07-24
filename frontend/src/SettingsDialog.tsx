@@ -59,7 +59,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     return (
         <Dialog open={internalOpen} onOpenChange={onOpenChange}>
             <DialogContent
-                className="w-screen h-full min-w-full min-h-full pt-20"
+                className="w-screen h-full min-w-full min-h-full pt-20 border-1 border-zinc-950 rounded-none"
                 style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
                 disableRadixAnimations={dialogOpacity === 0}
                 hideCloseButton={true}

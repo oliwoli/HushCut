@@ -27,9 +27,18 @@ const _MinDurationControl = React.memo(() => {
 
     return (
         <div className='space-y-1'>
-            <Label className="font-medium w-32 text-stone-400">
-                Minimum Duration
-            </Label>
+            <Tooltip delayDuration={350}>
+                <Label className="font-medium w-52 text-stone-400 flex text-center gap-2">
+                    Minimum Duration
+                    <TooltipTrigger asChild>
+                        <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
+                    </TooltipTrigger>
+                </Label>
+                <TooltipContent className='max-w-[200px]'>
+                    <h1 className='font-extrabold'>Minimum Silence Duration</h1>
+                    <p>Minimum Duration for a segment to be considered silent.</p>
+                </TooltipContent>
+            </Tooltip>
             <div className="flex items-center space-x-5">
                 <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
                     <SliderZag
@@ -105,9 +114,9 @@ const _PaddingControl = React.memo(() => {
                         </div>
                         <div className='flex gap-2 text-center'>
                             <span className="text-sm text-zinc-400">Left: <span className="text-zinc-100 font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
-                            <Tooltip>
+                            <Tooltip delayDuration={350}>
                                 <TooltipTrigger asChild>
-                                    <InfoIcon size={16} className='text-teal-600/60 hover:text-teal-600' />
+                                    <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[200px]'>
                                     <h1 className='font-extrabold'>Padding Left</h1>
@@ -135,9 +144,9 @@ const _PaddingControl = React.memo(() => {
                         </div>
                         <div className='flex gap-2 text-center'>
                             <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
-                            <Tooltip>
+                            <Tooltip delayDuration={350}>
                                 <TooltipTrigger asChild>
-                                    <InfoIcon size={16} className='text-teal-600/60 hover:text-teal-600' />
+                                    <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[200px]'>
                                     <h1 className='font-extrabold'>Padding Right</h1>
@@ -168,22 +177,22 @@ const _MinContentControl = React.memo(() => {
 
     return (
         <div className='space-y-1'>
-            <Tooltip>
+            <Tooltip delayDuration={350}>
                 <Label className="font-medium w-52 text-stone-400 flex text-center gap-2">
-                    Threshold Content Duration
+                    Short Spikes Removal
                     <TooltipTrigger asChild>
-                        <InfoIcon size={16} className='text-teal-600/60 hover:text-teal-600' />
+                        <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                     </TooltipTrigger>
                 </Label>
                 <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-extrabold'>Threshold Content Duration</h1>
-                    <p>Segments shorter than this will be considered as silence.</p>
-                    <p>Use this to remove short blips, mic bumps, etc.</p>
+                    <h1 className='font-extrabold'>Short Spikes Removal (Minimum Content Duration)</h1>
+                    <p>Content segments shorter than this will be considered as silence.</p>
+                    <p>Use this to remove mic bumps, lip smacks, etc.</p>
 
                 </TooltipContent>
             </Tooltip>
             <div className="flex items-center space-x-5">
-                <div className="flex w-56 items-center space-x-2" aria-disabled={isDisabled}>
+                <div className="flex w-56 items-center gap-2" aria-disabled={isDisabled}>
                     <SliderZag
                         id={`min-content-${currentClipId}`}
                         min={0} max={5} step={0.01}
