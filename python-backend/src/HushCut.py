@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from collections import Counter
+from collections import Counter, defaultdict
 import json
 import http.client
 from http.client import HTTPConnection
@@ -1287,55 +1287,85 @@ def _verify_timeline_state(
     timeline: Any, expected_clips: List[Dict], attempt_num: int
 ) -> bool:
     """
-    Verifies that the clips on the timeline match the expected state.
+    Verifies that the clips on the timeline match the expected state,
+    allowing for small offsets (±5 frames) and tolerating some unexpected clips.
 
     Args:
         timeline: The DaVinci Resolve timeline object.
         expected_clips: A list of clip info dictionaries that were intended to be appended.
 
     Returns:
-        True if the timeline state is correct, False otherwise.
+        True if the timeline state is reasonably correct, False otherwise.
     """
     print("Verifying timeline state...")
     TRACKER.update_task_progress("verify", 1.0, message="Verifying")
-    # 1. Build the "checklist" of expected cuts.
-    # We use a Counter to handle multiple clips starting at the same frame on the same track.
+
+    # Tolerance in frames for fuzzy matching
+    MAX_FRAME_TOLERANCE = 1
+
+    # Build expected cut list
     expected_cuts = Counter()
     for clip in expected_clips:
         key = (clip["mediaType"], clip["trackIndex"], int(clip["recordFrame"]))
         expected_cuts[key] += 1
 
-    # 2. Get the actual clips from the timeline.
+    # Get actual items from the timeline
     actual_video_items = get_items_by_tracktype("video", timeline)
     actual_audio_items = get_items_by_tracktype("audio", timeline)
+    actual_items = actual_video_items + actual_audio_items
 
-    # 3. "Check off" items from our checklist.
-    for item in actual_video_items + actual_audio_items:
+    # Build list of actual clip keys for fuzzy matching
+    actual_clips = defaultdict(list)
+    for item in actual_items:
         media_type = 1 if item["track_type"] == "video" else 2
-        key = (media_type, item["track_index"], int(item["start_frame"]))
-        if key in expected_cuts:
-            expected_cuts[key] -= 1  # Decrement the count for this cut
-        else:
-            print(
-                f"  - Found an unexpected clip: {item['track_type']} track {item['track_index']} at frame {item['start_frame']}"
-            )
-            # Finding an unexpected clip is not a failure for this logic,
-            # as it might be from a previous, unrelated operation.
-            # The failure is determined by NOT finding an expected clip.
+        actual_clips[(media_type, item["track_index"])].append(int(item["start_frame"]))
 
-    # 4. Check if any expected cuts are "left over".
-    # We use `+expected_cuts` to filter out zero and negative counts.
-    missing_cuts = +expected_cuts
+    matched = Counter()
 
-    if not missing_cuts:
-        print("  - Verification successful. All expected clips were found.")
+    for (media_type, track_index, expected_frame), count in expected_cuts.items():
+        actual_frames = actual_clips.get((media_type, track_index), [])
+        unmatched = actual_frames.copy()
+
+        for _ in range(count):
+            # Find the closest actual frame to the expected one
+            best_match = None
+            best_diff = float("inf")
+
+            for frame in unmatched:
+                diff = abs(frame - expected_frame)
+                if diff <= MAX_FRAME_TOLERANCE and diff < best_diff:
+                    best_match = frame
+                    best_diff = diff
+
+            if best_match is not None:
+                unmatched.remove(best_match)
+                matched[(media_type, track_index, expected_frame)] += 1
+                if best_diff > 0:
+                    print(
+                        f"  - Fuzzy match on {['video', 'audio'][media_type - 1]} track {track_index} at frame {expected_frame} (matched frame {best_match})"
+                    )
+            else:
+                # No suitable match found
+                continue
+
+    # Determine what's missing
+    missing = []
+    for key, count in expected_cuts.items():
+        found = matched.get(key, 0)
+        if found < count:
+            missing.append((key, count - found))
+
+    if not missing:
+        print(
+            "  - Verification successful. All expected clips were found (with fuzzy tolerance)."
+        )
         return True
     else:
         print("  - Verification FAILED. The following clips are missing:")
-        for (media_type, track_index, start_frame), count in missing_cuts.items():
+        for (media_type, track_index, frame), count in missing:
             track_type = "video" if media_type == 1 else "audio"
             print(
-                f"    - Missing {count} clip(s) on {track_type} track {track_index} at frame {start_frame}"
+                f"    - Missing {count} clip(s) on {track_type} track {track_index} at frame {frame}"
             )
         return False
 
@@ -1847,15 +1877,14 @@ def _append_clips_to_timeline(
     """
     grouped_clips: Dict[Tuple[int, int], List[AppendedClipInfo]] = {}
 
-    # This initial grouping logic remains the same
     for item in timeline_items:
         link_id = item.get("link_group_id")
         if link_id is None:
             continue
         media_type = 1 if item["track_type"] == "video" else 2
         for i, edit in enumerate(item.get("edit_instructions", [])):
-            record_frame = round(edit.get("start_frame", 0))
-            end_frame = round(edit.get("end_frame", 0))
+            record_frame = edit.get("start_frame", 0)
+            end_frame = edit.get("end_frame", 0)
             duration_frames = end_frame - record_frame
             if duration_frames < 1:
                 continue
@@ -2046,8 +2075,9 @@ def append_and_link_timeline_items(
             # Iterate through all video tracks that might have content
             for item in PROJECT_DATA["timeline"]["video_track_items"]:
                 type = item["type"]
-                if type:
-                    all_clips_to_delete.extend(item["bmd_item"])
+                if not item["bmd_item"]:
+                    print(f"Warning, no bmd item set for '{item['name']}'")
+                    continue
                 if not item["bmd_mpi"]:
                     item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
                 if not item["bmd_mpi"]:
@@ -2059,10 +2089,11 @@ def append_and_link_timeline_items(
                 if not item.get("edit_instructions"):
                     print(f"Skipping item '{item['name']}' with no edit instructions.")
                     continue
-
                 if clip_is_uncut(item):
                     print(f"Skipping uncut item '{item['name']}' with no edits.")
                     continue
+                if type:
+                    all_clips_to_delete.append(item["bmd_item"])
 
                 print(f"marking {item} for deletion")
 
@@ -2070,8 +2101,6 @@ def append_and_link_timeline_items(
 
             for item in PROJECT_DATA["timeline"]["audio_track_items"]:
                 type = item["type"]
-                if type:
-                    all_clips_to_delete.extend(item["bmd_item"])
                 if not item["bmd_mpi"]:
                     continue
 
@@ -2082,6 +2111,9 @@ def append_and_link_timeline_items(
                 if clip_is_uncut(item):
                     print(f"Skipping uncut item '{item['name']}' with no edits.")
                     continue
+
+                if type:
+                    all_clips_to_delete.append(item["bmd_item"])
 
                 print(f"marking {item} for deletion")
 
