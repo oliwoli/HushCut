@@ -14,6 +14,7 @@ import { Description } from "@radix-ui/react-dialog";
 import { Switch } from "./components/ui/switch";
 import { Separator } from "@radix-ui/react-context-menu";
 import SliderZag from "./components/ui/sliderZag";
+import { cn } from "./lib/utils";
 
 // This component is now "controlled" by its parent via these props.
 interface SettingsDialogProps {
@@ -26,12 +27,14 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     const [dialogOpacity, setDialogOpacity] = useState(1);
     const [davinciFolderPath, setDavinciFolderPath] = useState("");
     const [cleanupThreshold, setCleanupThreshold] = useState(30);
+    const [enableCleanup, setEnableCleanup] = useState(true);
 
     useEffect(() => {
         if (open) {
             GetSettings().then((settings: any) => {
                 setDavinciFolderPath(settings.davinciFolderPath);
-                setCleanupThreshold(settings.cleanupThresholdDays || 30);
+                setCleanupThreshold(settings.cleanupThresholdDays !== undefined ? settings.cleanupThresholdDays : 30);
+                setEnableCleanup(settings.enableCleanup !== undefined ? settings.enableCleanup : true);
             });
             setInternalOpen(true);
             setDialogOpacity(1);
@@ -53,7 +56,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     };
 
     const handleSave = () => {
-        SaveSettings({ davinciFolderPath, cleanupThresholdDays: cleanupThreshold }).then(() => {
+        SaveSettings({ davinciFolderPath, cleanupThresholdDays: cleanupThreshold, enableCleanup }).then(() => {
             onOpenChange(false);
         });
     };
@@ -76,7 +79,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 </DialogHeader>
 
 
-                <div className="grid gap-4 h-max max-w-6xl mx-auto">
+                <div className="grid gap-4 h-max max-w-6xl mx-auto select-none">
                     <Description>General</Description>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
@@ -99,15 +102,21 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                         </Button>
                     </div>
                     <Separator className="relative block w-full min-h-full h-px bg-gray-700" />
-                    <Label> <Switch checked={true} />Cleanup Cache Files</Label>
-                    <p className="text-muted-foreground text-balance">HushCut creates temp wav files to efficiently extract silence data and display the waveform preview. You can choose to delete files that haven't been accessed in a while automatically before the app exits.</p>
-                    <div className="flex gap-4">
-                        <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
-                                <span className="block text-left">Delete after</span>
-                            </Label>
-                            <div className="flex gap-4 w-full min-w-128"><SliderZag className="w-[128px]" value={[cleanupThreshold]} min={0} max={30} step={1} onChange={(values) => setCleanupThreshold(values[0])} />
-                                {cleanupThreshold} days</div>
+                    <Label> <Switch checked={enableCleanup} onCheckedChange={setEnableCleanup} />Clean up Cache Files</Label>
+                    <div className={cn(
+                        "space-y-4",
+                        enableCleanup ? "opacity-100" : "opacity-30"
+                    )}>
+                        <p className="text-zinc-300 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been <b>accessed</b> in a while will automatically get deleted before the app exits.</p>
+                        <div className="flex gap-4">
+                            <div className="grid grid-cols-4 items-center gap-4">
+                                <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
+                                    <span className="block text-left">Delete after</span>
+                                </Label>
+                                <div className="flex gap-4 w-full min-w-128">
+                                    <SliderZag className="w-[128px]" value={[cleanupThreshold]} min={0} max={30} step={1} onChange={(values) => setCleanupThreshold(values[0])} disabled={!enableCleanup} />
+                                    {cleanupThreshold} days</div>
+                            </div>
                         </div>
                     </div>
                 </div>

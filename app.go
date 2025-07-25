@@ -45,7 +45,7 @@ type App struct {
 	fileUsage                map[string]time.Time // New field for file usage tracking
 	mu                       sync.Mutex           // Mutex to protect fileUsage
 
-	httpClient               *http.Client
+	httpClient *http.Client
 
 	// --- NEW FIELDS FOR FFmpeg STATE ---
 	ffmpegMutex     sync.RWMutex  // Protects hasFfmpeg flag
@@ -492,7 +492,6 @@ func (a *App) shutdown(ctx context.Context) {
 	a.saveUsageData()
 	a.cleanupOldFiles()
 
-
 	// Case 1: The Go app launched the Python process. We own it and can terminate it.
 	if a.pythonCmd != nil && a.pythonCmd.Process != nil {
 		log.Printf("Shutting down Python process with PID %d...", a.pythonCmd.Process.Pid)
@@ -646,6 +645,7 @@ func (a *App) GetSettings() (map[string]any, error) {
 			// Add default key-value pairs here if needed
 			defaultSettings["davinciFolderPath"] = ""
 			defaultSettings["cleanupThresholdDays"] = 30
+			defaultSettings["enableCleanup"] = true
 
 			jsonData, marshalErr := json.MarshalIndent(defaultSettings, "", "  ")
 			if marshalErr != nil {
@@ -1052,7 +1052,6 @@ func (a *App) GetFFmpegStatus() bool {
 }
 
 const fileUsageFileName = "file_usage.json"
-const cleanupThreshold = 30 * 24 * time.Hour // 30 days
 
 func (a *App) updateFileUsage(filePath string) {
 	a.mu.Lock()
@@ -1071,8 +1070,10 @@ func (a *App) updateFileUsage(filePath string) {
 		return
 	}
 
-	a.fileUsage[absPath] = time.Now()
-	log.Printf("Updated usage for file: %s", absPath)
+	// Store only the base filename as the key
+	fileName := filepath.Base(absPath)
+	a.fileUsage[fileName] = time.Now()
+	log.Printf("Updated usage for file: %s", fileName)
 }
 
 func (a *App) GetAppVersion() string {
@@ -1107,14 +1108,23 @@ func (a *App) loadUsageData() {
 		return
 	}
 
+	// Check if rawUsage is empty after unmarshaling
+	if len(rawUsage) == 0 {
+		log.Println("file_usage.json is empty or contains no valid entries. Initializing empty usage data.")
+		a.fileUsage = make(map[string]time.Time)
+		return
+	}
+
 	a.fileUsage = make(map[string]time.Time)
-	for k, v := range rawUsage {
+	for fileName, v := range rawUsage {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			log.Printf("Error parsing time for %s: %v", k, err)
+			log.Printf("Error parsing time for %s: %v", fileName, err)
 			continue
 		}
-		a.fileUsage[k] = t
+		// Reconstruct the full path for internal use
+		fullPath := filepath.Join(a.effectiveAudioFolderPath, fileName)
+		a.fileUsage[fullPath] = t
 	}
 	log.Printf("Successfully loaded %d entries from file_usage.json", len(a.fileUsage))
 }
@@ -1124,11 +1134,12 @@ func (a *App) saveUsageData() {
 	defer a.mu.Unlock()
 
 	filePath := a.getFileUsagePath()
-	log.Printf("Attempting to save file usage data to: %s", filePath)
+	//log.Printf("Attempting to save file usage data to: %s. Number of entries: %d", filePath, len(rawUsage))
 
 	rawUsage := make(map[string]string)
-	for k, v := range a.fileUsage {
-		rawUsage[k] = v.Format(time.RFC3339)
+	for fullPath, v := range a.fileUsage {
+		fileName := filepath.Base(fullPath)
+		rawUsage[fileName] = v.Format(time.RFC3339)
 	}
 
 	data, err := json.MarshalIndent(rawUsage, "", "  ")
@@ -1163,9 +1174,20 @@ func (a *App) cleanupOldFiles() {
 		// Fallback to default if settings can't be read
 		settings = make(map[string]any)
 		settings["cleanupThresholdDays"] = 30
+		settings["enableCleanup"] = true // Default to true if settings can't be read
 	}
 
-	cleanupThresholdDays := 30 // Default value
+	enableCleanup := true
+	if val, ok := settings["enableCleanup"].(bool); ok {
+		enableCleanup = val
+	}
+
+	if !enableCleanup {
+		log.Println("Cleanup of old temporary files is disabled by settings.")
+		return
+	}
+
+	cleanupThresholdDays := 30                                     // Default value
 	if val, ok := settings["cleanupThresholdDays"].(float64); ok { // JSON numbers are float64 in Go
 		cleanupThresholdDays = int(val)
 	} else if val, ok := settings["cleanupThresholdDays"].(int); ok {
@@ -1173,6 +1195,7 @@ func (a *App) cleanupOldFiles() {
 	}
 
 	cleanupThreshold := time.Duration(cleanupThresholdDays) * 24 * time.Hour
+	log.Printf("Cleanup threshold set to %d days (%v)", cleanupThresholdDays, cleanupThreshold)
 
 	filesToDelete := []string{}
 	for filePath, lastUsed := range a.fileUsage {
@@ -1253,7 +1276,7 @@ func parseDuration(s string) (time.Duration, error) {
 // for all other sample rates.
 func calculateMP3DelaySec(sampleRate int) float64 {
 	return 0.0
-	// Use a switch for high performance and clarity.
+	//Use a switch for high performance and clarity.
 	// switch sampleRate {
 	// // --- Hardcoded values from your delay-data.csv for perfect precision ---
 	// case 8000:
