@@ -257,7 +257,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const lastCallTimeRef = useRef<number>(0);
   const timerRef = useRef<number | null>(null);
   const isUpdatingRef = useRef(false);
-  const cooldown = 125; // ms
+  const cooldown = 200; // ms
 
   // 1) Update the “current frame” ref in real time (always, even during playback)
   useEffect(() => {
