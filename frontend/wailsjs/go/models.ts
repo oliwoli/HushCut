@@ -232,6 +232,7 @@ export namespace main {
 	export class Timeline {
 	    name: string;
 	    fps: number;
+	    project_fps: number;
 	    start_timecode: string;
 	    curr_timecode: string;
 	    video_track_items: TimelineItem[];
@@ -245,6 +246,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.fps = source["fps"];
+	        this.project_fps = source["project_fps"];
 	        this.start_timecode = source["start_timecode"];
 	        this.curr_timecode = source["curr_timecode"];
 	        this.video_track_items = this.convertValues(source["video_track_items"], TimelineItem);

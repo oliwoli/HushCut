@@ -199,8 +199,8 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		var frameBasedSilences []SilenceInterval
 		if len(itemSpecificSilencesInSeconds) > 0 {
 			for _, silenceInSec := range itemSpecificSilencesInSeconds {
-				startFrame := silenceInSec.Start * timelineFPS
-				endFrame := silenceInSec.End * timelineFPS
+				startFrame := silenceInSec.Start * projectData.Timeline.ProjectFPS
+				endFrame := silenceInSec.End * projectData.Timeline.ProjectFPS
 				if endFrame > startFrame+floatEpsilon {
 					frameBasedSilences = append(frameBasedSilences, SilenceInterval{
 						Start: startFrame,

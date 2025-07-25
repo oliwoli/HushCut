@@ -274,6 +274,7 @@ class FileData(TypedDict):
 class Timeline(TypedDict):
     name: str
     fps: float
+    project_fps: float # New field for project's default framerate
     start_timecode: str
     curr_timecode: str
     video_track_items: List[TimelineItem]
@@ -1485,12 +1486,14 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     # --- 1. Initial Data Gathering ---
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
+    project_default_fps = project.GetSetting("timelineFrameRate") # Get project's default FPS
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
 
     tl_dict: Timeline = {
         "name": timeline_name,
         "fps": timeline_fps,
+        "project_fps": project_default_fps, # Add project_fps here
         "start_timecode": timeline.GetStartTimecode(),
         "curr_timecode": timeline.GetCurrentTimecode(),
         "video_track_items": video_track_items,

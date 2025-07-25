@@ -84,6 +84,7 @@ type FileData struct {
 type Timeline struct {
 	Name            string         `json:"name"`
 	FPS             float64        `json:"fps"`
+	ProjectFPS      float64        `json:"project_fps"`
 	StartTimecode   string         `json:"start_timecode"`
 	CurrTimecode    string         `json:"curr_timecode"`
 	VideoTrackItems []TimelineItem `json:"video_track_items"`
