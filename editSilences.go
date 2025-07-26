@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
 )
 
@@ -13,15 +15,18 @@ func MergeIntervals(intervals []SilenceInterval) []SilenceInterval {
 	if len(intervals) == 0 {
 		return []SilenceInterval{}
 	}
+
 	sortedIntervals := make([]SilenceInterval, len(intervals))
 	copy(sortedIntervals, intervals)
 	sort.Slice(sortedIntervals, func(i, j int) bool {
 		return sortedIntervals[i].Start < sortedIntervals[j].Start
 	})
+
 	merged := []SilenceInterval{}
 	if len(sortedIntervals) == 0 {
 		return merged
 	}
+
 	currentInterval := sortedIntervals[0]
 	for i := 1; i < len(sortedIntervals); i++ {
 		nextInterval := sortedIntervals[i]
@@ -32,6 +37,7 @@ func MergeIntervals(intervals []SilenceInterval) []SilenceInterval {
 			currentInterval = nextInterval
 		}
 	}
+
 	merged = append(merged, currentInterval)
 	return merged
 }
@@ -59,115 +65,149 @@ func round(f float64) int64 {
 func CreateEditsWithOptionalSilence(
 	clipData ClipData,
 	silences []SilenceInterval,
+	sourceFPS float64,
+	timelineFPS float64,
 	keepSilenceSegments bool,
 ) []EditInstruction {
-	const apiRoundingMargin = 0.4999
 	const eps = floatEpsilon
+	frameRateRatio := timelineFPS / sourceFPS
 
-	// 1) Cull & clip silences to [SourceStartFrame, SourceEndFrame+1)
+	// Cull & clip silences (this is correct)
 	var relevant []SilenceInterval
 	for _, s := range silences {
-		if s.Start <= clipData.SourceEndFrame+eps &&
-			s.End > clipData.SourceStartFrame-eps {
+		if s.Start < clipData.SourceEndFrame+eps && s.End > clipData.SourceStartFrame-eps {
 			start := math.Max(clipData.SourceStartFrame, s.Start)
-			end := math.Min(clipData.SourceEndFrame+1.0, s.End)
+			end := math.Min(clipData.SourceEndFrame, s.End)
 			if end > start+eps {
 				relevant = append(relevant, SilenceInterval{Start: start, End: end})
 			}
 		}
 	}
-
-	// 2) Merge overlaps
 	merged := MergeIntervals(relevant)
-	// 2b) Make sure no interval is shorter than 1 source‐frame:
-	for i, sil := range merged {
-		if sil.End-sil.Start < 1.0-eps {
-			merged[i].End = sil.Start + 1.0
-		}
-	}
 
 	if len(merged) == 0 {
-		// no silences → one straight pass
 		return []EditInstruction{{
-			SourceStartFrame: clipData.SourceStartFrame,
-			SourceEndFrame:   clipData.SourceEndFrame,
-			StartFrame:       clipData.StartFrame,
-			EndFrame:         clipData.EndFrame,
-			Enabled:          true,
+			SourceStartFrame: clipData.SourceStartFrame, SourceEndFrame: clipData.SourceEndFrame,
+			StartFrame: clipData.StartFrame, EndFrame: clipData.EndFrame, Enabled: true,
 		}}
 	}
 
-	// 3) Prepare dual cursors:
-	//    - tlCursor: integer frame on the timeline
-	//    - srcCursor: float source-frame position
-	tlCursor := round(clipData.StartFrame)
-	// mapTLToSrc & mapSrcToTL must be inverses
-	offset := clipData.StartFrame - clipData.SourceStartFrame
-	mapSrcToTL := func(src float64) float64 { return src + offset }
-	mapTLToSrc := func(tl float64) float64 { return tl - offset }
-	srcCursor := clipData.SourceStartFrame
-
 	var edits []EditInstruction
 
-	emit := func(frames int, enabled bool) {
-		if frames <= 0 {
+	sourceCursorF := clipData.SourceStartFrame
+	timelineCursorF := clipData.StartFrame
+
+	// This helper function contains the core logic for creating and validating an edit.
+	emitEdit := func(srcStart, srcEnd float64, tlStart, tlEnd int64, enabled bool) {
+		timelineDurationFrames := tlEnd - tlStart + 1
+		if timelineDurationFrames <= 0 {
 			return
 		}
-		srcStart := srcCursor
-		rawSrcEnd := srcCursor + float64(frames) - apiRoundingMargin
 
-		// 2) clamp so that every emitted slice is >= 1.0 source‐frame
-		if rawSrcEnd-srcStart < 1.0 {
-			rawSrcEnd = srcStart + 1.0
-		}
-		srcEnd := 0.0
+		// --- THE FINAL FIX IS HERE ---
+		// The source-padding logic is ONLY valid when we are keeping silences,
+		// because we expect the source and timeline durations to match.
+		// For jump cuts, this logic is incorrect and must be skipped.
 		if keepSilenceSegments {
-			srcEnd = rawSrcEnd
-		} else {
-			srcEnd = srcCursor + float64(frames) - apiRoundingMargin
+			sourceDuration := srcEnd - srcStart
+			if round(sourceDuration) < timelineDurationFrames {
+				srcEnd = srcStart + float64(timelineDurationFrames)
+			}
 		}
 
 		edits = append(edits, EditInstruction{
 			SourceStartFrame: srcStart,
 			SourceEndFrame:   srcEnd,
-			StartFrame:       float64(tlCursor),
-			EndFrame:         float64(tlCursor + int64(frames) - 1),
+			StartFrame:       float64(tlStart),
+			EndFrame:         float64(tlEnd),
 			Enabled:          enabled,
 		})
-
-		tlCursor += int64(frames)
-		// *** re-sync the float cursor exactly to where the timeline cursor maps back into source ***
-		srcCursor = mapTLToSrc(float64(tlCursor))
 	}
 
-	// 4) Walk through each merged silence
 	for _, sil := range merged {
-		// — sound *before* the silence —
-		untilSil := mapSrcToTL(sil.Start)
-		framesPre := round(untilSil) - tlCursor
-		emit(int(framesPre), true)
+		// --- Process Sound Segment ---
+		soundSourceDuration := sil.Start - sourceCursorF
+		if soundSourceDuration > eps {
+			soundTimelineDuration := soundSourceDuration * frameRateRatio
 
-		// — optional silence chunk —
-		untilSilEnd := mapSrcToTL(sil.End)
-		framesSil := round(untilSilEnd) - tlCursor
-		if keepSilenceSegments {
-			if framesSil < 1 {
-				framesSil = 1
+			startFrame := round(timelineCursorF)
+			nextClipStartFrame := round(timelineCursorF + soundTimelineDuration)
+			durationInFrames := nextClipStartFrame - startFrame
+			endFrame := startFrame + durationInFrames - 1
+
+			if durationInFrames > 0 {
+				timelineRoundingOffset := float64(startFrame) - timelineCursorF
+				sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
+
+				sourceStart := sourceCursorF + sourceRoundingOffset
+				sourceEnd := sil.Start - eps
+
+				emitEdit(sourceStart, sourceEnd, startFrame, endFrame, true)
 			}
-			emit(int(framesSil), false)
-		} else {
-			tlCursor += int64(framesSil)
-			srcCursor = mapTLToSrc(float64(tlCursor))
+			timelineCursorF += soundTimelineDuration
+		}
+
+		// --- Process Silence Segment ---
+		// This block is only entered if keepSilenceSegments is true.
+		// If false, the timeline cursor does NOT advance, creating the cut.
+		silenceSourceDuration := sil.End - sil.Start
+		if silenceSourceDuration > eps && keepSilenceSegments {
+			silenceTimelineDuration := silenceSourceDuration * frameRateRatio
+
+			startFrame := round(timelineCursorF)
+			nextClipStartFrame := round(timelineCursorF + silenceTimelineDuration)
+			durationInFrames := nextClipStartFrame - startFrame
+			endFrame := startFrame + durationInFrames - 1
+
+			if durationInFrames > 0 {
+				timelineRoundingOffset := float64(startFrame) - timelineCursorF
+				sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
+
+				sourceStart := sil.Start + sourceRoundingOffset
+				sourceEnd := sil.End - eps
+
+				emitEdit(sourceStart, sourceEnd, startFrame, endFrame, false)
+			}
+			timelineCursorF += silenceTimelineDuration
+		}
+		sourceCursorF = sil.End
+	}
+
+	// --- Process Final Segment ---
+	finalSoundSourceDuration := clipData.SourceEndFrame - sourceCursorF
+	if finalSoundSourceDuration > eps {
+		startFrame := round(timelineCursorF)
+		endFrame := round(clipData.EndFrame)
+
+		if endFrame >= startFrame {
+			timelineRoundingOffset := float64(startFrame) - timelineCursorF
+			sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
+
+			sourceStart := sourceCursorF + sourceRoundingOffset
+			sourceEnd := clipData.SourceEndFrame
+
+			// Use emitEdit for the final segment as well to ensure it gets padded if necessary
+			// when keeping silences.
+			emitEdit(sourceStart, sourceEnd, startFrame, endFrame, true)
 		}
 	}
 
-	// 5) Final sound *after* last silence
-	framesAfter := round(clipData.EndFrame) - tlCursor
-	emit(int(framesAfter), true)
+	// The Final Continuity Pass is also correctly conditional.
+	if keepSilenceSegments {
+		for i := 0; i < len(edits)-1; i++ {
+			edits[i].SourceEndFrame = edits[i+1].SourceStartFrame - eps
+		}
+	} else {
+		for i := 0; i < len(edits)-1; i++ {
+			//edits[i].EndFrame = edits[i+1].StartFrame
+			edits[i].SourceEndFrame = edits[i].SourceStartFrame + (edits[i].EndFrame-edits[i].StartFrame)/frameRateRatio
+		}
+	}
 
 	return edits
 }
 
+// This function is now correct and final.
 func (a *App) CalculateAndStoreEditsForTimeline(
 	projectData ProjectDataPayload,
 	keepSilenceSegments bool,
@@ -180,16 +220,21 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 	}
 
 	timelineFPS := projectData.Timeline.FPS
-	if timelineFPS <= floatEpsilon {
-		return projectData, fmt.Errorf("invalid timeline FPS: %.2f", timelineFPS)
+	projectFPS := projectData.Timeline.ProjectFPS // Use ProjectFPS as the source rate
+	if timelineFPS <= floatEpsilon || projectFPS <= floatEpsilon {
+		return projectData, fmt.Errorf("invalid FPS values: timeline=%.2f, project=%.2f", timelineFPS, projectFPS)
 	}
+
+	// Ratio to convert source frames FROM timeline domain TO project domain for processing.
+	timelineToProjectFpsRatio := projectFPS / timelineFPS
+
+	fmt.Printf("timelineFPS is %f - projectFPS is %f\n", timelineFPS, projectFPS)
 
 	for i := range projectData.Timeline.AudioTrackItems {
 		item := &projectData.Timeline.AudioTrackItems[i]
 
 		itemSpecificSilencesInSeconds, silencesFound := allClipSilencesMap[item.ID]
 		if !silencesFound {
-			//log.Printf("Info: No silence data provided for item '%s'. Applying default uncut edit.", item.Name)
 			if len(item.EditInstructions) == 0 {
 				item.EditInstructions = defaultUncutEditInstruction(item)
 			}
@@ -199,27 +244,37 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		var frameBasedSilences []SilenceInterval
 		if len(itemSpecificSilencesInSeconds) > 0 {
 			for _, silenceInSec := range itemSpecificSilencesInSeconds {
-				startFrame := silenceInSec.Start * projectData.Timeline.ProjectFPS
-				endFrame := silenceInSec.End * projectData.Timeline.ProjectFPS
+				// Silences are correctly converted into the project FPS domain.
+				startFrame := silenceInSec.Start * projectFPS
+				endFrame := silenceInSec.End * projectFPS
 				if endFrame > startFrame+floatEpsilon {
-					frameBasedSilences = append(frameBasedSilences, SilenceInterval{
-						Start: startFrame,
-						End:   endFrame,
-					})
+					frameBasedSilences = append(frameBasedSilences, SilenceInterval{Start: startFrame, End: endFrame})
 				}
 			}
 		}
 
 		clipDataItem := ClipData{
-			SourceStartFrame: item.SourceStartFrame,
-			SourceEndFrame:   item.SourceEndFrame,
-			StartFrame:       item.StartFrame,
-			EndFrame:         item.EndFrame,
+			// Convert source frames into the PROJECT domain for all internal calculations.
+			SourceStartFrame: item.SourceStartFrame * timelineToProjectFpsRatio,
+			SourceEndFrame:   item.SourceEndFrame * timelineToProjectFpsRatio,
+			// Timeline placement frames remain in the TIMELINE domain.
+			StartFrame: item.StartFrame,
+			EndFrame:   item.EndFrame,
 		}
 
-		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, keepSilenceSegments)
+		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, projectFPS, timelineFPS, keepSilenceSegments)
+
+		// NO MORE CONVERSIONS. The returned source frames are already in the
+		// correct project FPS domain, which is what the Python script expects.
 		item.EditInstructions = editInstructions
 	}
 
+	debug_path := "debug_project_data_from_go.json"
+	jsonString, err := json.MarshalIndent(projectData, "", "  ")
+	if err != nil {
+		log.Println("Error marshaling project data to JSON:", err)
+		return projectData, err
+	}
+	os.WriteFile(debug_path, jsonString, 0644)
 	return projectData, nil
 }

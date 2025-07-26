@@ -274,7 +274,7 @@ class FileData(TypedDict):
 class Timeline(TypedDict):
     name: str
     fps: float
-    project_fps: float # New field for project's default framerate
+    project_fps: float  # New field for project's default framerate
     start_timecode: str
     curr_timecode: str
     video_track_items: List[TimelineItem]
@@ -779,6 +779,24 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
 
     pd_timeline = project_data["timeline"]
 
+    # Get FPS values and calculate the conversion ratio
+    timeline_fps = pd_timeline["fps"]
+    project_fps = pd_timeline["project_fps"]  # This is the source framerate domain
+
+    if not timeline_fps or not project_fps or project_fps < 1e-9:
+        logging.warning(
+            f"Timeline FPS ({timeline_fps}) or Project FPS ({project_fps}) not found or invalid. "
+            "Assuming a 1:1 frame rate ratio."
+        )
+        frame_rate_ratio = 1.0
+    else:
+        frame_rate_ratio = timeline_fps / project_fps
+
+    logging.info(
+        f"Using Timeline FPS: {timeline_fps}, Project (Source) FPS: {project_fps}, Ratio: {frame_rate_ratio}"
+    )
+
+    # This is your original OTIO reading and initial item processing logic, preserved fully.
     try:
         with open(input_otio_path, "r", encoding="utf-8") as f:
             otio_data = json.load(f)
@@ -822,12 +840,11 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             items_by_link_group.setdefault(link_group_id, []).append(item)
 
     next_new_group_id = max_link_group_id + 1
-    print(f"Scanning {len(all_pd_items)} items for missing link_group_id")
-    print(f"all pd items: {all_pd_items}")
     for item in all_pd_items:
         if item.get("link_group_id") is None and item.get("edit_instructions"):
-            print(
-                f"Item '{item.get('name', 'Unnamed')}' has no link_group_id. Assigning new ID {next_new_group_id}"
+            logging.info(
+                f"Item '{item.get('name', 'Unnamed')}' has edits but no link_group_id. "
+                f"Assigning new group ID {next_new_group_id}"
             )
             item["link_group_id"] = next_new_group_id
             items_by_link_group[next_new_group_id] = [item]
@@ -837,11 +854,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         if not group_items:
             continue
 
-        # if len(group_items) <= 1:
-        #     # don't need to unify if there is just one item
-        #     continue
-
-        # This function now returns the correctly processed, granular edit data
         unified_edits = unify_edit_instructions(group_items)
 
         group_timeline_anchor = min(
@@ -850,74 +862,63 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         )
         if group_timeline_anchor == float("inf"):
             logging.warning(
-                f"Could not determine a start frame for link group {link_id}. Skipping."
+                f"Could not find start frame for link group {link_id}. Skipping."
             )
             continue
 
         for item in group_items:
-            item_duration = item["end_frame"] - item["start_frame"]
+            item_timeline_duration = item["end_frame"] - item["start_frame"] + 1
             is_effectively_uncut = False
             if len(unified_edits) == 1:
-                edit_start, edit_end, _ = unified_edits[0]
-                # Use a small tolerance for float comparison
-                if (
-                    edit_end is not None
-                    and edit_start == 0.0
-                    and abs(edit_end - item_duration) < 0.01
-                ):
-                    is_effectively_uncut = True
+                edit_source_start, edit_source_end, _ = unified_edits[0]
+                if edit_source_end is not None and abs(edit_source_start - 0.0) < 1e-9:
+                    source_duration = edit_source_end - edit_source_start
+                    equiv_timeline_duration = source_duration * frame_rate_ratio
+                    if abs(equiv_timeline_duration - item_timeline_duration) < 0.5:
+                        is_effectively_uncut = True
 
             new_edit_instructions = []
             base_source_offset = item["source_start_frame"]
 
             if is_effectively_uncut:
-                # This is the "uncut" path. We must preserve the original values exactly.
-
-                original_edit = (
-                    item.get("edit_instructions", [{}])[0]
-                    if item.get("edit_instructions")
-                    else {}
-                )
                 new_edit_instructions.append(
                     {
                         "source_start_frame": item["source_start_frame"],
                         "source_end_frame": item["source_end_frame"],
                         "start_frame": item.get("start_frame"),
                         "end_frame": item.get("end_frame"),
-                        "enabled": original_edit.get("enabled", True),
+                        "enabled": True,
                     }
                 )
             else:
-                timeline_playhead = round(group_timeline_anchor)
+                timeline_playhead = group_timeline_anchor
 
-                # Unpack the correct boolean for each specific segment
                 for rel_start, rel_end, is_enabled in unified_edits:
-                    source_duration = (
-                        item["source_end_frame"] - item["source_start_frame"]
-                        if rel_end is None
-                        else cast(float, rel_end) - rel_start
-                    )
-                    timeline_duration = round(source_duration)
+                    source_duration = cast(float, rel_end) - rel_start
 
-                    if timeline_duration < 1:
+                    timeline_duration_float = source_duration * frame_rate_ratio
+                    if timeline_duration_float < 1.0:
                         continue
 
                     source_start = base_source_offset + rel_start
                     source_end = source_start + source_duration
 
-                    timeline_start = timeline_playhead
-                    timeline_end = timeline_playhead + timeline_duration
+                    timeline_start = round(timeline_playhead)
+                    timeline_end = (
+                        round(timeline_playhead + timeline_duration_float) - 1
+                    )
 
                     new_edit_instructions.append(
                         {
                             "source_start_frame": source_start,
                             "source_end_frame": source_end,
-                            "start_frame": timeline_start,
-                            "end_frame": timeline_end,
-                            "enabled": is_enabled,  # Use the correct, granular flag
+                            "start_frame": float(timeline_start),
+                            "end_frame": float(timeline_end),
+                            "enabled": is_enabled,
                         }
                     )
-                    timeline_playhead = timeline_end
+
+                    timeline_playhead += timeline_duration_float
 
             item["edit_instructions"] = new_edit_instructions
             logging.info(
@@ -1486,14 +1487,16 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     # --- 1. Initial Data Gathering ---
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
-    project_default_fps = project.GetSetting("timelineFrameRate") # Get project's default FPS
+    project_default_fps = project.GetSetting(
+        "timelineFrameRate"
+    )  # Get project's default FPS
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
 
     tl_dict: Timeline = {
         "name": timeline_name,
         "fps": timeline_fps,
-        "project_fps": project_default_fps, # Add project_fps here
+        "project_fps": project_default_fps,  # Add project_fps here
         "start_timecode": timeline.GetStartTimecode(),
         "curr_timecode": timeline.GetCurrentTimecode(),
         "video_track_items": video_track_items,
@@ -1878,6 +1881,16 @@ def _append_clips_to_timeline(
     Groups clips, prepares a SINGLE batch of instructions for the API with a
     mix of optimized (auto-linked) and standard clips, then makes one API call.
     """
+    global PROJECT_DATA
+
+    if not PROJECT_DATA:
+        return [], []
+
+    project_fps = PROJECT_DATA["timeline"]["project_fps"]
+    timeline_fps = PROJECT_DATA["timeline"]["fps"]
+    fps_ratio = project_fps / timeline_fps
+    print(f"FPS RATIO IS {fps_ratio}")
+
     grouped_clips: Dict[Tuple[int, int], List[AppendedClipInfo]] = {}
 
     for item in timeline_items:
@@ -1892,7 +1905,7 @@ def _append_clips_to_timeline(
             if duration_frames < 1:
                 continue
             source_start = edit.get("source_start_frame", 0)
-            source_end = source_start + duration_frames
+            source_end = source_start + (duration_frames * fps_ratio)
 
             if not item.get("bmd_mpi"):
                 item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
@@ -1900,7 +1913,7 @@ def _append_clips_to_timeline(
             clip_info_for_api: Dict = {
                 "mediaPoolItem": item["bmd_mpi"],
                 "startFrame": source_start,
-                "endFrame": source_end,
+                "endFrame": edit["source_end_frame"],
                 "recordFrame": record_frame,
                 "trackIndex": item["track_index"],
                 "mediaType": media_type,
@@ -1963,6 +1976,7 @@ def _append_clips_to_timeline(
     print(f"Appending {len(final_api_batch)} total clip instructions to timeline...")
     BATCH_SIZE = 100
     appended_bmd_items: List[Any] = []
+    print(f"FINAL API BATCH: {final_api_batch}")
 
     for i in range(0, len(final_api_batch), BATCH_SIZE):
         chunk = final_api_batch[i : i + BATCH_SIZE]
