@@ -1419,11 +1419,6 @@ def generate_uuid_from_nested_clips(
     seed_string = (
         f"bmd_id:{bmd_item.GetUniqueId()};" if bmd_item else "bmd_id:<unknown>;"
     )
-    seed_string += (
-        f"duration:{top_level_item['end_frame'] - top_level_item['start_frame']};"
-    )
-    seed_string += f"source_start:{top_level_item['source_start_frame']};"
-    seed_string += f"source_end:{top_level_item['source_end_frame']};"
 
     # 2. Add properties from all nested clips.
     # We must sort the clips to ensure the order is always the same,

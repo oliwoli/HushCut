@@ -1811,6 +1811,10 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 	// as any part of the app that needs the file will wait and get the error.
 	for processedName, representativeItem := range contentMap {
 		outputPath := filepath.Join(a.effectiveAudioFolderPath, processedName)
+
+		// Mark the processed file as used
+		a.updateFileUsage(outputPath)
+
 		// Kick off the mixdown job for this clip. This call is now non-blocking.
 		a.ExecuteAndTrackMixdown(projectData.Timeline.ProjectFPS, outputPath, representativeItem.NestedClips)
 	}
