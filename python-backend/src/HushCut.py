@@ -321,11 +321,12 @@ TASKS: dict[str, int] = {
 def _create_nested_audio_item_from_otio(
     otio_clip: Dict[str, Any],
     clip_start_in_container: float,
+    timeline_fps: float,
     max_duration: Optional[float] = None,
 ) -> Optional[NestedAudioTimelineItem]:
     """
-    (REVISED) Parses an OTIO clip and now also extracts specific
-    audio channel mapping information from its metadata.
+    (REVISED) Parses an OTIO clip, correctly converting RationalTime values
+    into the timeline's frame rate domain.
     """
     media_refs = otio_clip.get("media_references", {})
     if not media_refs:
@@ -355,14 +356,33 @@ def _create_nested_audio_item_from_otio(
     if not source_range or not available_range:
         return None
 
-    clip_source_start_val = source_range.get("start_time", {}).get("value", 0.0)
-    media_available_start_val = available_range.get("start_time", {}).get("value", 0.0)
+    # --- CORRECT RATIONAL TIME CONVERSION ---
+    clip_start_rt = source_range.get("start_time", {})
+    clip_duration_rt = source_range.get("duration", {})
+    media_start_rt = available_range.get("start_time", {})
 
-    normalized_source_start_frame = clip_source_start_val - media_available_start_val
-    duration = source_range.get("duration", {}).get("value", 0.0)
+    # Get values, using timeline_fps as a fallback for the rate
+    clip_start_val = clip_start_rt.get("value", 0.0)
+    clip_start_rate = clip_start_rt.get("rate", timeline_fps)
+    duration_val = clip_duration_rt.get("value", 0.0)
+    duration_rate = clip_duration_rt.get("rate", timeline_fps)
+    media_start_val = media_start_rt.get("value", 0.0)
+    media_start_rate = media_start_rt.get("rate", timeline_fps)
 
-    if max_duration is not None and duration > max_duration:
-        duration = max_duration
+    # Convert all rational time components to seconds
+    clip_start_sec = clip_start_val / clip_start_rate
+    media_start_sec = media_start_val / media_start_rate
+    duration_sec = duration_val / duration_rate
+
+    # Normalize the start time in seconds, then convert to timeline frames
+    normalized_start_sec = clip_start_sec - media_start_sec
+    normalized_source_start_frame = normalized_start_sec * timeline_fps
+
+    # Convert duration to timeline frames
+    duration_frames = duration_sec * timeline_fps
+
+    # if max_duration is not None and duration_frames > max_duration:
+    #     duration_frames = max_duration
 
     # --- NEW LOGIC to extract channel data and determine processed filename ---
     source_channel = 0  # Default to 0 for mono mixdown
@@ -371,10 +391,7 @@ def _create_nested_audio_item_from_otio(
     resolve_meta = otio_clip.get("metadata", {}).get("Resolve_OTIO", {})
     channels_info = resolve_meta.get("Channels", [])
 
-    # Heuristic: If the clip is mapped to exactly one source track/channel,
-    # assume it's a specific channel extraction, not a mixdown.
     if len(channels_info) == 1:
-        # "Source Track ID" corresponds to the 1-indexed channel number.
         channel_num = channels_info[0].get("Source Track ID")
         if isinstance(channel_num, int) and channel_num > 0:
             source_channel = channel_num
@@ -386,21 +403,22 @@ def _create_nested_audio_item_from_otio(
 
     nested_item: NestedAudioTimelineItem = {
         "source_file_path": source_file_path,
-        "processed_file_name": processed_file_name,  # Use the calculated name
-        "source_channel": source_channel + 1,  # Add the channel number
+        "processed_file_name": processed_file_name,
+        "source_channel": source_channel + 1,
         "start_frame": clip_start_in_container,
-        "end_frame": clip_start_in_container + duration,
+        "end_frame": clip_start_in_container + duration_frames,
         "source_start_frame": normalized_source_start_frame,
-        "source_end_frame": normalized_source_start_frame + duration,
-        "duration": duration,
+        "source_end_frame": normalized_source_start_frame + duration_frames,
+        "duration": duration_frames,
         "edit_instructions": [],
-        "nested_items": None,  # Added to satisfy TypedDict
+        "nested_items": None,
     }
     return nested_item
 
 
 def _recursive_otio_parser(
     otio_composable: Dict[str, Any],
+    timeline_fps: float,
     active_angle_name: Optional[str] = None,
     container_duration: Optional[float] = None,
 ) -> List[NestedAudioTimelineItem]:
@@ -420,8 +438,8 @@ def _recursive_otio_parser(
 
         playhead = 0.0
         for item_in_track in track.get("children", []):
-            if container_duration is not None and playhead >= container_duration:
-                break
+            # if container_duration is not None and playhead >= container_duration:
+            #     break
 
             schema = str(item_in_track.get("OTIO_SCHEMA", "")).lower()
             item_duration = (
@@ -440,13 +458,16 @@ def _recursive_otio_parser(
                 playhead += item_duration
                 continue
 
-            if effective_duration <= 0:
-                playhead += item_duration
-                continue
+            # if effective_duration <= 0:
+            #     playhead += item_duration
+            #     continue
 
             if "clip" in schema:
                 item = _create_nested_audio_item_from_otio(
-                    item_in_track, playhead, max_duration=effective_duration
+                    item_in_track,
+                    playhead,
+                    timeline_fps,
+                    max_duration=effective_duration,
                 )
                 if item:
                     found_clips.append(item)
@@ -455,6 +476,7 @@ def _recursive_otio_parser(
                 # Pass both constraints down in the recursion.
                 nested_clips = _recursive_otio_parser(
                     item_in_track,
+                    timeline_fps,
                     active_angle_name=active_angle_name,
                     container_duration=container_duration,
                 )
@@ -537,6 +559,7 @@ def populate_nested_clips(input_otio_path: str) -> None:
 
                 nested_clips_for_this_instance = _recursive_otio_parser(
                     item,
+                    pd_timeline["fps"],
                     active_angle_name=active_angle_name,
                     container_duration=container_duration,
                 )

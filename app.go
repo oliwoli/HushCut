@@ -1812,7 +1812,7 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 	for processedName, representativeItem := range contentMap {
 		outputPath := filepath.Join(a.effectiveAudioFolderPath, processedName)
 		// Kick off the mixdown job for this clip. This call is now non-blocking.
-		a.ExecuteAndTrackMixdown(projectData.Timeline.FPS, outputPath, representativeItem.NestedClips)
+		a.ExecuteAndTrackMixdown(projectData.Timeline.ProjectFPS, outputPath, representativeItem.NestedClips)
 	}
 
 	log.Println("All mixdown jobs have been dispatched.")
@@ -1840,8 +1840,6 @@ func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips
 
 		var err error
 		if !isValidWav(outputPath) {
-			// This call is now safely happening in the background. It will block here
-			// waiting for its inputs, without deadlocking the main app.
 			err = a.executeMixdownCommand(fps, outputPath, nestedClips)
 		}
 
