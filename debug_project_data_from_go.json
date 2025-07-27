@@ -1,0 +1,113 @@
+{
+  "project_name": "localtest",
+  "timeline": {
+    "name": "29.97 fps",
+    "fps": 29.97,
+    "project_fps": 29.97,
+    "start_timecode": "00:00:00:00",
+    "curr_timecode": "",
+    "video_track_items": [
+      {
+        "bmd_item": null,
+        "bmd_mpi": null,
+        "name": "Compound Clip 1",
+        "id": "Compound Clip 1-video-1--131.0",
+        "track_type": "video",
+        "track_index": 1,
+        "source_file_path": "",
+        "start_frame": 131,
+        "end_frame": 586,
+        "source_start_frame": 131,
+        "source_end_frame": 586,
+        "duration": 455,
+        "edit_instructions": [],
+        "source_channel": 0,
+        "type": "Zusammengesetzt",
+        "nested_clips": [
+          {
+            "source_file_path": "/home/oliwoli/Videos/P1466663.MOV",
+            "processed_file_name": "f4d8a3a878cb54a482beef75815913da.wav",
+            "start_frame": 714,
+            "end_frame": 29798.886,
+            "source_start_frame": 0,
+            "source_end_frame": 29084.886,
+            "duration": 29084.886,
+            "source_channel": 1,
+            "edit_instructions": []
+          },
+          {
+            "source_file_path": "/home/oliwoli/Videos/rendertest.mov",
+            "processed_file_name": "b399f425df6a582c97fc63472d97ac72.wav",
+            "start_frame": 0,
+            "end_frame": 680.319,
+            "source_start_frame": 0,
+            "source_end_frame": 680.319,
+            "duration": 680.319,
+            "source_channel": 1,
+            "edit_instructions": []
+          }
+        ]
+      }
+    ],
+    "audio_track_items": [
+      {
+        "bmd_item": null,
+        "bmd_mpi": null,
+        "name": "Compound Clip 1",
+        "id": "Compound Clip 1-audio-1--131.0",
+        "track_type": "audio",
+        "track_index": 1,
+        "source_file_path": "/home/oliwoli/my-repos/HushCut/build/bin/wav_files/399c38b5-09f7-5f71-a63a-028a7a8c4c3b.wav",
+        "processed_file_name": "399c38b5-09f7-5f71-a63a-028a7a8c4c3b.wav",
+        "start_frame": 131,
+        "end_frame": 586,
+        "source_start_frame": 131,
+        "source_end_frame": 586,
+        "duration": 455,
+        "edit_instructions": [
+          {
+            "source_start_frame": 131,
+            "source_end_frame": 295,
+            "start_frame": 131,
+            "end_frame": 295,
+            "enabled": true
+          },
+          {
+            "source_start_frame": 369.1118149999999,
+            "source_end_frame": 428.93627435900004,
+            "start_frame": 296,
+            "end_frame": 355,
+            "enabled": true
+          }
+        ],
+        "source_channel": 0,
+        "type": "Zusammengesetzt",
+        "nested_clips": [
+          {
+            "source_file_path": "/home/oliwoli/Videos/P1466663.MOV",
+            "processed_file_name": "f4d8a3a878cb54a482beef75815913da.wav",
+            "start_frame": 714,
+            "end_frame": 29798.886,
+            "source_start_frame": 0,
+            "source_end_frame": 29084.886,
+            "duration": 29084.886,
+            "source_channel": 1,
+            "edit_instructions": []
+          },
+          {
+            "source_file_path": "/home/oliwoli/Videos/rendertest.mov",
+            "processed_file_name": "b399f425df6a582c97fc63472d97ac72.wav",
+            "start_frame": 0,
+            "end_frame": 680.319,
+            "source_start_frame": 0,
+            "source_end_frame": 680.319,
+            "duration": 680.319,
+            "source_channel": 1,
+            "edit_instructions": []
+          }
+        ]
+      }
+    ]
+  },
+  "files": {}
+}

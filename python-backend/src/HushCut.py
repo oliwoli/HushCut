@@ -1500,8 +1500,6 @@ def mixdown_compound_clips(
         for tl_item in items_in_group:
             tl_item["processed_file_name"] = output_filename
             tl_item["source_file_path"] = output_wav_path
-            tl_item["source_start_frame"] = 0.0
-            tl_item["source_end_frame"] = tl_item["end_frame"] - tl_item["start_frame"]
 
 
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
