@@ -1765,7 +1765,7 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 		return fmt.Errorf("no streams could be prepared for mixdown into %s", filepath.Base(outputPath))
 	}
 
-	mixFilter := fmt.Sprintf("%samix=inputs=%d:dropout_transition=0[out]", strings.Join(delayedStreams, ""), len(delayedStreams))
+	mixFilter := fmt.Sprintf("%samix=inputs=%d:dropout_transition=0:normalize=false[out]", strings.Join(delayedStreams, ""), len(delayedStreams))
 	filterComplex.WriteString(mixFilter)
 
 	args := []string{"-y"}
