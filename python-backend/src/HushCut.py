@@ -356,7 +356,7 @@ def _create_nested_audio_item_from_otio(
     if not source_range or not available_range:
         return None
 
-    # --- CORRECT RATIONAL TIME CONVERSION ---
+    # --- RATIONAL TIME CONVERSION ---
     clip_start_rt = source_range.get("start_time", {})
     clip_duration_rt = source_range.get("duration", {})
     media_start_rt = available_range.get("start_time", {})
@@ -384,7 +384,6 @@ def _create_nested_audio_item_from_otio(
     # if max_duration is not None and duration_frames > max_duration:
     #     duration_frames = max_duration
 
-    # --- NEW LOGIC to extract channel data and determine processed filename ---
     source_channel = 0  # Default to 0 for mono mixdown
     processed_file_name = f"{source_uuid}.wav"  # Default filename
 
@@ -399,7 +398,6 @@ def _create_nested_audio_item_from_otio(
             logging.info(
                 f"OTIO parser: Found mapping for clip '{otio_clip.get('name')}' to source channel {source_channel}"
             )
-    # --- END NEW LOGIC ---
 
     nested_item: NestedAudioTimelineItem = {
         "source_file_path": source_file_path,
@@ -2042,20 +2040,43 @@ def append_and_link_timeline_items(
     """
     global MEDIA_POOL, TIMELINE, PROJECT, PROJECT_DATA
 
+    if not TIMELINE:
+        send_result_with_alert(
+            task_id=task_id,
+            alert_message="Error initializing current timeline.",
+            alert_title="DaVinci Error",
+        )
+        return
+
     if not PROJECT_DATA or not PROJECT_DATA.get("timeline"):
         print("Error: Project data is missing or malformed.")
+        send_result_with_alert(
+            task_id=task_id,
+            alert_message="Project data is missing or malformed.",
+            alert_title="DaVinci Error",
+        )
         return
 
     project_data = PROJECT_DATA
 
     if not PROJECT:
         print("Error: Could not get current project.")
+        send_result_with_alert(
+            task_id=task_id,
+            alert_message="Could not get current project.",
+            alert_title="DaVinci Error",
+        )
         return
 
     MEDIA_POOL = PROJECT.GetMediaPool()
     media_pool = MEDIA_POOL
     if not media_pool:
         print("Error: MediaPool object not available.")
+        send_result_with_alert(
+            task_id=task_id,
+            alert_message="MediaPool object not available.",
+            alert_title="DaVinci Error",
+        )
         return
 
     timeline_items = project_data["timeline"].get(
@@ -2070,7 +2091,8 @@ def append_and_link_timeline_items(
             max_indices[track_type] = max(max_indices[track_type], track_index)
     og_tl_name = project_data["timeline"]["name"]
 
-    timeline = None
+    timeline = TIMELINE
+    tl_needs_clearing = True
     if create_new_timeline:
         print("Creating a new timeline...")
 
@@ -2078,12 +2100,48 @@ def append_and_link_timeline_items(
             created_timelines[og_tl_name] = 1
 
         retries = 0
+        valid_empty_timeline = None
         while retries < MAX_RETRIES:
             index = created_timelines[og_tl_name]
             timeline_name = f"{og_tl_name}-hc-{index:02d}"
-            timeline = media_pool.CreateEmptyTimeline(timeline_name)
+            valid_empty_timeline = media_pool.CreateEmptyTimeline(timeline_name)
 
-            if timeline:
+            if (
+                valid_empty_timeline
+                and project_data["timeline"]["fps"]
+                != project_data["timeline"]["project_fps"]
+            ):
+                deleted_empty = media_pool.DeleteTimelines([valid_empty_timeline])
+                if not deleted_empty:
+                    send_result_with_alert(
+                        alert_title="DaVinci Error",
+                        alert_message="Could not create new Timeline",
+                        task_id=task_id,
+                    )
+                    return
+                # we do the dumb switcheroo
+                backup_timeline = TIMELINE.DuplicateTimeline()
+                if not backup_timeline:
+                    send_result_with_alert(
+                        alert_title="Davinci Error",
+                        alert_message="Could not duplicate current timeline",
+                        task_id=task_id,
+                    )
+                    return
+                final_timeline = timeline.SetName(timeline_name)
+                renamed_backup = backup_timeline.SetName(og_tl_name)
+
+                if not renamed_backup or not final_timeline:
+                    send_result_with_alert(
+                        alert_title="DaVinci Error",
+                        alert_message="Could not rename Timeline",
+                        task_id=task_id,
+                    )
+                    return
+                PROJECT.SetCurrentTimeline(timeline)
+            elif valid_empty_timeline:
+                timeline = valid_empty_timeline
+                tl_needs_clearing = False
                 timeline.SetStartTimecode(project_data["timeline"]["start_timecode"])
                 created_timelines[og_tl_name] += 1
                 break
@@ -2098,68 +2156,72 @@ def append_and_link_timeline_items(
                 alert_title="DaVinci Error",
             )
             return
-    else:
-        timeline = TIMELINE
-        if timeline:
-            # --- FIX: Robustly clear all tracks on the existing timeline ---
-            print("Clearing all clips from existing timeline...")
-            all_clips_to_delete = []
 
-            # Iterate through all video tracks that might have content
-            for item in PROJECT_DATA["timeline"]["video_track_items"]:
-                type = item["type"]
-                if not item["bmd_item"]:
-                    print(f"Warning, no bmd item set for '{item['name']}'")
-                    continue
-                if not item["bmd_mpi"]:
-                    item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
-                if not item["bmd_mpi"]:
-                    print(
-                        f"Warning: No MediaPoolItem found for item '{item['name']}'. Skipping."
-                    )
-                    continue
-                # don't delete items with no edit instructions, or empty edit instructions
-                if not item.get("edit_instructions"):
-                    print(f"Skipping item '{item['name']}' with no edit instructions.")
-                    continue
-                if clip_is_uncut(item):
-                    print(f"Skipping uncut item '{item['name']}' with no edits.")
-                    continue
-                if type:
-                    all_clips_to_delete.append(item["bmd_item"])
+    if timeline and tl_needs_clearing:
+        # --- Robustly clear all tracks on the timeline ---
+        print("Clearing all clips from existing timeline...")
+        all_clips_to_delete = []
 
-                print(f"marking {item} for deletion")
-
+        # Iterate through all video tracks that might have content
+        for item in PROJECT_DATA["timeline"]["video_track_items"]:
+            type = item["type"]
+            if not item["bmd_item"]:
+                print(f"Warning, no bmd item set for '{item['name']}'")
+                continue
+            if not item["bmd_mpi"]:
+                item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
+            if not item["bmd_mpi"]:
+                print(
+                    f"Warning: No MediaPoolItem found for item '{item['name']}'. Skipping."
+                )
+                continue
+            # don't delete items with no edit instructions, or empty edit instructions
+            if not item.get("edit_instructions"):
+                print(f"Skipping item '{item['name']}' with no edit instructions.")
+                continue
+            if clip_is_uncut(item):
+                print(f"Skipping uncut item '{item['name']}' with no edits.")
+                continue
+            if type:
                 all_clips_to_delete.append(item["bmd_item"])
 
-            for item in PROJECT_DATA["timeline"]["audio_track_items"]:
-                type = item["type"]
-                if not item["bmd_mpi"]:
-                    continue
+            print(f"marking {item} for deletion")
 
-                if not item.get("edit_instructions"):
-                    print(f"Skipping item '{item['name']}' with no edit instructions.")
-                    continue
+            all_clips_to_delete.append(item["bmd_item"])
 
-                if clip_is_uncut(item):
-                    print(f"Skipping uncut item '{item['name']}' with no edits.")
-                    continue
+        for item in PROJECT_DATA["timeline"]["audio_track_items"]:
+            type = item["type"]
+            if not item["bmd_mpi"]:
+                continue
 
-                if type:
-                    all_clips_to_delete.append(item["bmd_item"])
+            if not item.get("edit_instructions"):
+                print(f"Skipping item '{item['name']}' with no edit instructions.")
+                continue
 
-                print(f"marking {item} for deletion")
+            if clip_is_uncut(item):
+                print(f"Skipping uncut item '{item['name']}' with no edits.")
+                continue
 
+            if type:
                 all_clips_to_delete.append(item["bmd_item"])
 
-            if all_clips_to_delete:
-                print(f"Deleting {len(all_clips_to_delete)} existing clips...")
-                timeline.DeleteClips(all_clips_to_delete)
-            else:
-                print("Timeline is already empty.")
+            print(f"marking {item} for deletion")
+
+            all_clips_to_delete.append(item["bmd_item"])
+
+        if all_clips_to_delete:
+            print(f"Deleting {len(all_clips_to_delete)} existing clips...")
+            timeline.DeleteClips(all_clips_to_delete)
+        else:
+            print("Timeline is already empty.")
 
     if not timeline:
         print("Error: Could not get a valid timeline. Aborting operation.")
+        send_result_with_alert(
+            alert_title="DaVinci Error",
+            alert_message="Could not get a valid timeline.",
+            task_id=task_id,
+        )
         return
 
     for track_type, required_count in max_indices.items():
