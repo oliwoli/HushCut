@@ -828,7 +828,7 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
     alertSeverity = alertSeverity or "error",
   }
 
-
+  print(alertTitle .. ": " .. alertMessage)
   -- Send the message to the Go server
   return send_message_to_go("taskResult", payload, task_id)
 end
@@ -1148,9 +1148,6 @@ local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
   -- 1. Start with the top-level clip's unique properties.
   local bmd_item = top_level_item.bmd_mpi
   local seed_string = bmd_item and ("bmd_id:" .. bmd_item:GetUniqueId() .. ";") or "bmd_id:<unknown>;"
-  seed_string = seed_string .. "duration:" .. (top_level_item.end_frame - top_level_item.start_frame) .. ";"
-  seed_string = seed_string .. "source_start:" .. top_level_item.source_start_frame .. ";"
-  seed_string = seed_string .. "source_end:" .. top_level_item.source_end_frame .. ";"
 
   -- 2. Add properties from all nested clips.
   -- Sort by the clip's start time within the container.
@@ -1226,8 +1223,6 @@ local function mixdown_compound_clips(audio_timeline_items, curr_processed_file_
     for _, tl_item in ipairs(items_in_group) do
       tl_item.processed_file_name = output_filename
       tl_item.source_file_path = output_wav_path
-      tl_item.source_start_frame = 0.0
-      tl_item.source_end_frame = tl_item.end_frame - tl_item.start_frame
     end
   end
 end
@@ -1271,6 +1266,11 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
         local source_end_float = left_offset + duration
 
         local source_file_path = (media_pool_item and (media_pool_item:GetClipProperty("File Path") or "")) or ""
+        local processed_file_name = nil
+        if source_file_path and source_file_path ~= "" then
+          local source_uuid = uuid_from_path(source_file_path)
+          processed_file_name = source_uuid .. ".wav"
+        end
 
         local timeline_item = {
           bmd_item = item_bmd,
@@ -1284,12 +1284,12 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           track_type = track_type,
           track_index = i,
           source_file_path = source_file_path,
-          processed_file_name = nil,
+          processed_file_name = processed_file_name,
           source_start_frame = source_start_float,
           source_end_frame = source_end_float,
           source_channel = 0, -- Default value
           link_group_id = nil,
-          type = json.null,
+          type = nil,
           nested_clips = {},
         }
 
@@ -1324,7 +1324,7 @@ local function export_timeline_to_otio(davinci_tl, file_path)
 end
 
 
-local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_container, max_duration)
+local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_container, timeline_fps, max_duration)
   local media_refs = otio_clip.media_references
   if not media_refs then return nil end
 
@@ -1351,15 +1351,28 @@ local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_cont
   local available_range = media_ref.available_range
   if not source_range or not available_range then return nil end
 
-  local clip_source_start_val = safe_get(source_range, "start_time", "value") or 0.0
-  local media_available_start_val = safe_get(available_range, "start_time", "value") or 0.0
+  local clip_start_rt = source_range.start_time or {}
+  local clip_duration_rt = source_range.duration or {}
+  local media_start_rt = available_range.start_time or {}
 
-  local normalized_source_start_frame = clip_source_start_val - media_available_start_val
-  local duration = safe_get(source_range, "duration", "value") or 0.0
+  local clip_start_val = clip_start_rt.value or 0.0
+  local clip_start_rate = clip_start_rt.rate or timeline_fps
+  local duration_val = clip_duration_rt.value or 0.0
+  local duration_rate = clip_duration_rt.rate or timeline_fps
+  local media_start_val = media_start_rt.value or 0.0
+  local media_start_rate = media_start_rt.rate or timeline_fps
 
-  if max_duration and duration > max_duration then
-    duration = max_duration
-  end
+  local clip_start_sec = clip_start_val / clip_start_rate
+  local media_start_sec = media_start_val / media_start_rate
+  local duration_sec = duration_val / duration_rate
+
+  local normalized_start_sec = clip_start_sec - media_start_sec
+  local normalized_source_start_frame = normalized_start_sec * timeline_fps
+  local duration_frames = duration_sec * timeline_fps
+
+  -- if max_duration and duration_frames > max_duration then
+  --   duration_frames = max_duration
+  -- end
 
   local source_channel = 0
   local processed_file_name = source_uuid .. ".wav"
@@ -1382,10 +1395,10 @@ local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_cont
     processed_file_name = processed_file_name,
     source_channel = source_channel + 1,
     start_frame = clip_start_in_container,
-    end_frame = clip_start_in_container + duration,
+    end_frame = clip_start_in_container + duration_frames,
     source_start_frame = normalized_source_start_frame,
-    source_end_frame = normalized_source_start_frame + duration,
-    duration = duration,
+    source_end_frame = normalized_source_start_frame + duration_frames,
+    duration = duration_frames,
     edit_instructions = {},
     nested_items = nil,
   }
@@ -1393,7 +1406,7 @@ local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_cont
 end
 
 local _recursive_otio_parser -- Forward declaration
-_recursive_otio_parser = function(otio_composable, active_angle_name, container_duration)
+_recursive_otio_parser = function(otio_composable, timeline_fps, active_angle_name, container_duration)
   local found_clips = {}
 
   for _, track in ipairs(otio_composable.children or {}) do
@@ -1416,16 +1429,19 @@ _recursive_otio_parser = function(otio_composable, active_angle_name, container_
 
           if schema:find("gap", 1, true) then
             playhead = playhead + item_duration
-          elseif effective_duration > 0 then
-            if schema:find("clip", 1, true) then
-              local item = _create_nested_audio_item_from_otio(item_in_track, playhead, effective_duration)
-              if item then table.insert(found_clips, item) end
-            elseif schema:find("stack", 1, true) then
-              local nested_clips = _recursive_otio_parser(item_in_track, active_angle_name, container_duration)
-              for _, nested_clip in ipairs(nested_clips) do
-                nested_clip.start_frame = nested_clip.start_frame + playhead
-                nested_clip.end_frame = nested_clip.end_frame + playhead
-                table.insert(found_clips, nested_clip)
+          else
+            if effective_duration > 0 then
+              if schema:find("clip", 1, true) then
+                local item = _create_nested_audio_item_from_otio(item_in_track, playhead, timeline_fps, effective_duration)
+                if item then table.insert(found_clips, item) end
+              elseif schema:find("stack", 1, true) then
+                local nested_clips = _recursive_otio_parser(item_in_track, timeline_fps, active_angle_name,
+                  container_duration)
+                for _, nested_clip in ipairs(nested_clips) do
+                  nested_clip.start_frame = nested_clip.start_frame + playhead
+                  nested_clip.end_frame = nested_clip.end_frame + playhead
+                  table.insert(found_clips, nested_clip)
+                end
               end
             end
             playhead = playhead + item_duration
@@ -1494,28 +1510,37 @@ local function populate_nested_clips(input_otio_path)
             end
           end
 
-          local nested_clips_for_this_instance = _recursive_otio_parser(item, active_angle_name, container_duration)
+          local nested_clips_for_this_instance = _recursive_otio_parser(item, pd_timeline.fps, active_angle_name,
+            container_duration)
 
           if #nested_clips_for_this_instance > 0 then
             local record_frame_float = playhead_frames + timeline_start_frame
             local otio_item_name = item.name
 
-            local corresponding_pd_items = {}
-            for _, pd_item in ipairs(all_pd_items) do
+            local corresponding_pd_item = nil
+            local match_index = -1
+
+            -- Iterate backwards to safely remove items
+            for i = #all_pd_items, 1, -1 do
+              local pd_item = all_pd_items[i]
               if pd_item.type and pd_item.track_index == current_track_index and
                   math.abs((pd_item.start_frame or -1) - record_frame_float) < FRAME_MATCH_TOLERANCE and
                   pd_item.name == otio_item_name then
-                table.insert(corresponding_pd_items, pd_item)
+                
+                corresponding_pd_item = pd_item
+                match_index = i
+                break -- Found a match, stop searching
               end
             end
 
-            if #corresponding_pd_items == 0 then
+            if corresponding_pd_item then
+              print(string.format("Assigning %d nested clips to project item '%s'", #nested_clips_for_this_instance, corresponding_pd_item.id))
+              corresponding_pd_item.nested_clips = nested_clips_for_this_instance
+              -- Consume the matched item
+              table.remove(all_pd_items, match_index)
+            else
               print("Could not find corresponding project item for OTIO stack '" ..
                 tostring(otio_item_name) .. "' on track " .. tostring(current_track_index))
-            end
-
-            for _, pd_item in ipairs(corresponding_pd_items) do
-              pd_item.nested_clips = nested_clips_for_this_instance
             end
           end
           playhead_frames = playhead_frames + duration_val
@@ -1540,17 +1565,21 @@ local function get_project_data(bmd_project, bmd_timeline)
   local video_track_items = get_items_by_tracktype("video", bmd_timeline)
 
 
+  local files_table = {}
+  setmetatable(files_table, { __jsontype = 'object' })
+
   project_data = {
     project_name = bmd_project:GetName(),
     timeline = {
       name = bmd_timeline:GetName(),
       fps = bmd_timeline:GetSetting("timelineFrameRate"),
+      project_fps = bmd_project:GetSetting("timelineFrameRate"),
       start_timecode = bmd_timeline:GetStartTimecode(),
       curr_timecode = bmd_timeline:GetCurrentTimecode(),
       video_track_items = video_track_items,
       audio_track_items = audio_track_items,
     },
-    files = {},
+    files = files_table,
   }
 
   local has_complex_clips = false
