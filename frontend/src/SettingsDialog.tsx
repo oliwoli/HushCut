@@ -102,12 +102,12 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                         </Button>
                     </div>
                     <Separator className="relative block w-full min-h-full h-px bg-gray-700" />
-                    <Label> <Switch checked={enableCleanup} onCheckedChange={setEnableCleanup} />Clean up Cache Files</Label>
+                    <Label> <Switch checked={enableCleanup} onCheckedChange={setEnableCleanup} />Clean up Temp Files</Label>
                     <div className={cn(
                         "space-y-4",
                         enableCleanup ? "opacity-100" : "opacity-30"
                     )}>
-                        <p className="text-zinc-300 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been <b>accessed</b> in a while will automatically get deleted before the app exits.</p>
+                        <p className="text-zinc-300 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been accessed in a while will automatically get deleted before the app exits.</p>
                         <div className="flex gap-4">
                             <div className="grid grid-cols-4 items-center gap-4">
                                 <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
