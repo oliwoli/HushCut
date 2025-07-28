@@ -1765,7 +1765,7 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 		return fmt.Errorf("no streams could be prepared for mixdown into %s", filepath.Base(outputPath))
 	}
 
-	mixFilter := fmt.Sprintf("%samix=inputs=%d:dropout_transition=0[out]", strings.Join(delayedStreams, ""), len(delayedStreams))
+	mixFilter := fmt.Sprintf("%samix=inputs=%d:dropout_transition=0:normalize=false[out]", strings.Join(delayedStreams, ""), len(delayedStreams))
 	filterComplex.WriteString(mixFilter)
 
 	args := []string{"-y"}
@@ -1811,8 +1811,12 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 	// as any part of the app that needs the file will wait and get the error.
 	for processedName, representativeItem := range contentMap {
 		outputPath := filepath.Join(a.effectiveAudioFolderPath, processedName)
+
+		// Mark the processed file as used
+		a.updateFileUsage(outputPath)
+
 		// Kick off the mixdown job for this clip. This call is now non-blocking.
-		a.ExecuteAndTrackMixdown(projectData.Timeline.FPS, outputPath, representativeItem.NestedClips)
+		a.ExecuteAndTrackMixdown(projectData.Timeline.ProjectFPS, outputPath, representativeItem.NestedClips)
 	}
 
 	log.Println("All mixdown jobs have been dispatched.")
@@ -1840,8 +1844,6 @@ func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips
 
 		var err error
 		if !isValidWav(outputPath) {
-			// This call is now safely happening in the background. It will block here
-			// waiting for its inputs, without deadlocking the main app.
 			err = a.executeMixdownCommand(fps, outputPath, nestedClips)
 		}
 

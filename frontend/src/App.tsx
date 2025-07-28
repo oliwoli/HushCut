@@ -130,7 +130,6 @@ function supportsRealBackdrop() {
 // });
 
 function AppContent() {
-  const [sliderValue, setSliderValue] = useState(50);
   const [ffmpegReady, setFFmpegReady] = useState<boolean | null>(null)
   const prevFfmpegReady = usePrevious(ffmpegReady);
 
@@ -343,6 +342,7 @@ function AppContent() {
         // });
         setBusy(false);
       } else {
+        alert("SyncWithDavinci: Unexpected response structure from Go");
         console.error(
           "SyncWithDavinci: Unexpected response structure from Go",
           response
@@ -357,6 +357,7 @@ function AppContent() {
       }
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
+      alert(`Error calling SyncWithDavinci or Go-level error: ${err}`);
       setProjectData(null);
       setHasProjectData(false);
 
