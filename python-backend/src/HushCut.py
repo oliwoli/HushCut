@@ -2421,7 +2421,7 @@ def signal_go_ready(go_server_port: int):
             )
             if attempt < max_retries - 1:
                 print(f"Python Backend: Retrying in {retry_delay_seconds} seconds...")
-                time.sleep(retry_delay_seconds)  # type: ignore
+                sleep(retry_delay_seconds)  # type: ignore
             else:
                 print(
                     f"Python Backend: Failed to signal Go server after {max_retries} attempts."
