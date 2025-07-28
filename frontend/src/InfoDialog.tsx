@@ -55,7 +55,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
         });
     }, []);
 
-    const discordLink = "https://discord.gg/xNY5MFCE"
+    const discordLink = "https://discord.gg/uFa8ExK7b8"
 
     // Only render the Dialog if internalOpen is true
     if (!internalOpen) return null;
