@@ -2138,7 +2138,9 @@ def append_and_link_timeline_items(
                         task_id=task_id,
                     )
                     return
+                created_timelines[og_tl_name] += 1
                 PROJECT.SetCurrentTimeline(timeline)
+                break
             elif valid_empty_timeline:
                 timeline = valid_empty_timeline
                 tl_needs_clearing = False
