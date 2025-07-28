@@ -6,6 +6,8 @@ import { Switch } from "@/components/ui/switch"
 
 // Import your reusable UI components
 import { Label } from '@/components/ui/label';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { InfoIcon } from 'lucide-react';
 
 const _MakeNewTimelineSetting = React.memo(() => {
     const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
@@ -13,9 +15,19 @@ const _MakeNewTimelineSetting = React.memo(() => {
 
     return (
         <div className='space-y-2'>
-            <Label className="font-medium w-full text-stone-400 leading-5">
-                New Timeline
-            </Label>
+            <Tooltip delayDuration={350}>
+                <Label className="font-medium w-full text-stone-400 flex text-center gap-2 leading-5">
+                    New Timeline
+                    <TooltipTrigger asChild>
+                        <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
+                    </TooltipTrigger>
+                </Label>
+                <TooltipContent className='max-w-[200px]'>
+                    <h1 className='font-extrabold'>New Timeline</h1>
+                    <p>Apply the edits in a new timeline.</p>
+
+                </TooltipContent>
+            </Tooltip>
             <Switch checked={makeNewTimeline} onCheckedChange={setMakeNewTimeline} />
 
         </div>
