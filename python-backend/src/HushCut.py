@@ -2351,8 +2351,8 @@ def append_and_link_timeline_items(
             break
         else:
             print(f"Attempt {attempt} failed. Rolling back changes...")
-            if bmd_items_from_api:
-                TIMELINE.DeleteClips(bmd_items_from_api, delete_gaps=False)
+            # if bmd_items_from_api:
+            #     TIMELINE.DeleteClips(bmd_items_from_api, delete_gaps=False)
             if attempt < num_retries:
                 sleep(sleep_time_between)
                 sleep_time_between += 1.5
