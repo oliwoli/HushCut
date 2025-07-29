@@ -6,6 +6,8 @@ type SyncBusyState = {
   setBusy: (value: boolean) => void;
   hasProjectData: boolean;
   setHasProjectData: (value: boolean) => void;
+  timelineName: string | null;
+  setTimelineName: (value: string | null) => void;
 };
 
 export const useSyncBusyState = create<SyncBusyState>((set) => ({
@@ -13,4 +15,6 @@ export const useSyncBusyState = create<SyncBusyState>((set) => ({
   setBusy: (value) => set({ isBusy: value }),
   hasProjectData: false, // default value
   setHasProjectData: (value) => set({ hasProjectData: value }),
+  timelineName: "",
+  setTimelineName: (value) => set({ timelineName: value})
 }));

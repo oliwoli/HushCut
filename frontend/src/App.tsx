@@ -157,6 +157,7 @@ function AppContent() {
   const setBusy = useSyncBusyState(s => s.setBusy);
 
   const setHasProjectData = useSyncBusyState(s => s.setHasProjectData);
+  const setTimelineName = useSyncBusyState(s => s.setTimelineName);
 
   const currentClipId = useClipStore(s => s.currentClipId);
   const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
@@ -349,6 +350,7 @@ function AppContent() {
         );
         setProjectData(null);
         setHasProjectData(false);
+        setTimelineName(null)
         // toast.error("Sync failed: Unexpected response format", {
         //   id: loadingToastId,
         //   duration: 5000,
@@ -360,6 +362,7 @@ function AppContent() {
       alert(`Error calling SyncWithDavinci or Go-level error: ${err}`);
       setProjectData(null);
       setHasProjectData(false);
+      setTimelineName(null)
 
       if (err && err.alertIssued) {
         //toast.dismiss(loadingToastId);
@@ -381,6 +384,7 @@ function AppContent() {
 
   useEffect(() => {
     handleSyncRef.current = handleSync;
+    if (projectData?.timeline?.name) setTimelineName(projectData?.timeline?.name)
   }, [handleSync]);
 
   useEffect(() => {
@@ -827,10 +831,6 @@ const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
 };
 
 export default function App() {
-
-
-
-  const MemoizedTitleBar = useMemo(() => <TitleBar />, []);
   const isInfoDialogOpen = useUiStore((state) => state.isInfoDialogOpen);
   const setInfoDialogOpen = useUiStore((state) => state.setInfoDialogOpen);
   const isSettingsDialogOpen = useUiStore((state) => state.isSettingsDialogOpen);
@@ -909,7 +909,7 @@ export default function App() {
         <Toaster />
       </ClientPortal>
 
-      <ClientPortal targetId="title-bar-root">{MemoizedTitleBar}</ClientPortal>
+      <ClientPortal targetId="title-bar-root"><TitleBar /></ClientPortal>
       <AppContent />
     </>
   );
