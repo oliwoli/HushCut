@@ -1144,6 +1144,21 @@ local function get_item_id(bmd_item, item_name, start_frame, track_type, track_i
 end
 
 
+function PrintTable(t, indent)
+  indent = indent or 0
+  local formatting = string.rep("  ", indent)
+  for k, v in pairs(t) do
+    local key = tostring(k)
+    if type(v) == "table" then
+      print(formatting .. key .. " = {")
+      PrintTable(v, indent + 1)
+      print(formatting .. "}")
+    else
+      print(formatting .. key .. " = " .. tostring(v))
+    end
+  end
+end
+
 local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
   -- 1. Start with the top-level clip's unique properties.
   local bmd_item = top_level_item.bmd_mpi
@@ -1432,7 +1447,8 @@ _recursive_otio_parser = function(otio_composable, timeline_fps, active_angle_na
           else
             if effective_duration > 0 then
               if schema:find("clip", 1, true) then
-                local item = _create_nested_audio_item_from_otio(item_in_track, playhead, timeline_fps, effective_duration)
+                local item = _create_nested_audio_item_from_otio(item_in_track, playhead, timeline_fps,
+                  effective_duration)
                 if item then table.insert(found_clips, item) end
               elseif schema:find("stack", 1, true) then
                 local nested_clips = _recursive_otio_parser(item_in_track, timeline_fps, active_angle_name,
@@ -1526,7 +1542,6 @@ local function populate_nested_clips(input_otio_path)
               if pd_item.type and pd_item.track_index == current_track_index and
                   math.abs((pd_item.start_frame or -1) - record_frame_float) < FRAME_MATCH_TOLERANCE and
                   pd_item.name == otio_item_name then
-                
                 corresponding_pd_item = pd_item
                 match_index = i
                 break -- Found a match, stop searching
@@ -1534,7 +1549,8 @@ local function populate_nested_clips(input_otio_path)
             end
 
             if corresponding_pd_item then
-              print(string.format("Assigning %d nested clips to project item '%s'", #nested_clips_for_this_instance, corresponding_pd_item.id))
+              print(string.format("Assigning %d nested clips to project item '%s'", #nested_clips_for_this_instance,
+                corresponding_pd_item.id))
               corresponding_pd_item.nested_clips = nested_clips_for_this_instance
               -- Consume the matched item
               table.remove(all_pd_items, match_index)
