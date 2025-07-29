@@ -30,37 +30,38 @@ type FileProperties struct {
 
 // NestedAudioTimelineItem corresponds to the Python NestedAudioTimelineItem TypedDict.
 type NestedAudioTimelineItem struct {
-	SourceFilePath    string                   `json:"source_file_path"`
-	ProcessedFileName string                   `json:"processed_file_name,omitempty"`
-	StartFrame        float64                  `json:"start_frame"`
-	EndFrame          float64                  `json:"end_frame"`
-	SourceStartFrame  float64                  `json:"source_start_frame"`
-	SourceEndFrame    float64                  `json:"source_end_frame"`
-	Duration          float64                  `json:"duration"`
-    SourceChannel     *int                     `json:"source_channel,omitempty"`
-	EditInstructions  []EditInstruction        `json:"edit_instructions"`
+	SourceFilePath    string                     `json:"source_file_path"`
+	ProcessedFileName string                     `json:"processed_file_name,omitempty"`
+	StartFrame        float64                    `json:"start_frame"`
+	EndFrame          float64                    `json:"end_frame"`
+	SourceStartFrame  float64                    `json:"source_start_frame"`
+	SourceEndFrame    float64                    `json:"source_end_frame"`
+	Duration          float64                    `json:"duration"`
+	SourceChannel     *int                       `json:"source_channel,omitempty"`
+	EditInstructions  []EditInstruction          `json:"edit_instructions"`
 	NestedItems       []*NestedAudioTimelineItem `json:"nested_items,omitempty"`
 }
 
 // TimelineItem corresponds to the Python TimelineItem TypedDict.
 type TimelineItem struct {
-	BmdItem           interface{}              `json:"bmd_item"`
-	BmdMpi            interface{}              `json:"bmd_mpi"`
-	Name              string                   `json:"name"`
-	ID                string                   `json:"id"`
-	TrackType         string                   `json:"track_type"` // Expected: "video", "audio", "subtitle"
-	TrackIndex        int                      `json:"track_index"`
-	SourceFilePath    string                   `json:"source_file_path"`
-	ProcessedFileName *string                   `json:"processed_file_name,omitempty"`
-	StartFrame        float64                  `json:"start_frame"`
-	EndFrame          float64                  `json:"end_frame"`
-	SourceStartFrame  float64                  `json:"source_start_frame"`
-	SourceEndFrame    float64                  `json:"source_end_frame"`
-	Duration          float64                  `json:"duration"`
-	EditInstructions  []EditInstruction        `json:"edit_instructions"`
-	SourceChannel     *int                      `json:"source_channel,omitempty"`
-	LinkGroupID       int                      `json:"link_group_id,omitempty"`
-	Type              string                   `json:"type,omitempty"` // "Compound", "Timeline"
+	BmdItem           interface{}                `json:"bmd_item"`
+	BmdMpi            interface{}                `json:"bmd_mpi"`
+	Name              string                     `json:"name"`
+	ID                string                     `json:"id"`
+	TrackType         string                     `json:"track_type"` // Expected: "video", "audio", "subtitle"
+	TrackIndex        int                        `json:"track_index"`
+	SourceFilePath    string                     `json:"source_file_path"`
+	ProcessedFileName *string                    `json:"processed_file_name,omitempty"`
+	StartFrame        float64                    `json:"start_frame"`
+	EndFrame          float64                    `json:"end_frame"`
+	SourceFPS         float64                    `json:"source_fps"`
+	SourceStartFrame  float64                    `json:"source_start_frame"`
+	SourceEndFrame    float64                    `json:"source_end_frame"`
+	Duration          float64                    `json:"duration"`
+	EditInstructions  []EditInstruction          `json:"edit_instructions"`
+	SourceChannel     *int                       `json:"source_channel,omitempty"`
+	LinkGroupID       int                        `json:"link_group_id,omitempty"`
+	Type              string                     `json:"type,omitempty"` // "Compound", "Timeline"
 	NestedClips       []*NestedAudioTimelineItem `json:"nested_clips,omitempty"`
 }
 

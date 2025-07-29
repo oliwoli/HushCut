@@ -210,6 +210,7 @@ class TimelineItem(TypedDict):
     processed_file_name: Optional[str]
     start_frame: float
     end_frame: float
+    source_fps: float
     source_start_frame: float
     source_end_frame: float
     duration: float
@@ -232,6 +233,7 @@ def make_empty_timeline_item() -> TimelineItem:
         "processed_file_name": None,
         "start_frame": 0.0,
         "end_frame": 0.0,
+        "source_fps": 30.0,
         "source_start_frame": 0.0,
         "source_end_frame": 0.0,
         "duration": 0.0,
@@ -1273,6 +1275,14 @@ def get_items_by_tracktype(
             source_file_path: str = (
                 media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
             )
+
+            source_fps: float = (
+                (media_pool_item.GetClipProperty("FPS") if media_pool_item else 30.0)
+                or PROJECT_DATA.get("timeline", {}).get("project_fps", 30.0)
+                if PROJECT_DATA
+                else 30.0
+            )
+
             timeline_item: TimelineItem = {
                 "bmd_item": item_bmd,
                 "bmd_mpi": media_pool_item,
@@ -1284,6 +1294,7 @@ def get_items_by_tracktype(
                 "id": get_item_id(item_bmd, item_name, start_frame, track_type, i),
                 "track_type": track_type,
                 "track_index": i,
+                "source_fps": source_fps,
                 "source_file_path": source_file_path,
                 "processed_file_name": None,  # Initialized as None
                 "source_start_frame": source_start_float,

@@ -95,6 +95,7 @@ export namespace main {
 	    processed_file_name?: string;
 	    start_frame: number;
 	    end_frame: number;
+	    source_fps: number;
 	    source_start_frame: number;
 	    source_end_frame: number;
 	    duration: number;
@@ -120,6 +121,7 @@ export namespace main {
 	        this.processed_file_name = source["processed_file_name"];
 	        this.start_frame = source["start_frame"];
 	        this.end_frame = source["end_frame"];
+	        this.source_fps = source["source_fps"];
 	        this.source_start_frame = source["source_start_frame"];
 	        this.source_end_frame = source["source_end_frame"];
 	        this.duration = source["duration"];
