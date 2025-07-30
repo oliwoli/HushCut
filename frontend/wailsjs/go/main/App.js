@@ -58,6 +58,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetToken() {
+  return window['go']['main']['App']['GetToken']();
+}
+
 export function GetWaveform(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['GetWaveform'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
