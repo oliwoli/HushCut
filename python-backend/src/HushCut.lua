@@ -712,6 +712,7 @@ local script_dir = get_script_dir()
 
 local go_server_port = nil
 local TEMP_DIR = script_dir .. "wav_files"
+local AUTH_TOKEN = ""
 
 
 ---
@@ -769,10 +770,13 @@ local function send_message_to_go(message_type, payload, task_id)
   f:write(json_payload)
   f:close()
 
+  print("Token just before sending smth to go: " .. AUTH_TOKEN)
+
   local command = string.format(
-    'curl -s -X POST -H "Content-Type: application/json" --data-binary "@%s" "%s" -w "\\n%%{http_code}"',
+    'curl -s -X POST -H "Content-Type: application/json" --data-binary "@%s" "%s" -w "\\n%%{http_code}" --header "Authorization: Bearer %s"',
     tmp_filename,
-    url
+    url,
+    AUTH_TOKEN
   )
 
   local handle = io.popen(command)
@@ -1085,26 +1089,24 @@ local function fnv1a_hash(str)
 end
 
 -- UUID generator with optional deterministic seed
-local function uuid(seed)
-  local random
-  if seed then
-    local seed_num = fnv1a_hash(seed)
-    local state = seed_num
-    random = function(min, max)
-      state = (1103515245 * state + 12345) % 2 ^ 31
-      return min + (state % (max - min + 1))
-    end
+local function uuid()
+  -- call the script with --uuid-from-str <path>
+  local command = string.format("%s --uuid 1", quote(go_script_path))
+  local handle = io.popen(command)
+  if not handle then
+    print("Lua Error: Failed to execute command to get UUID")
+    return nil
   else
-    random = math.random
+    local uuid_str = handle:read("*a")
+    handle:close()
+    if uuid_str and #uuid_str > 0 then
+      return uuid_str:gsub("%s+", "") -- Remove any whitespace
+    else
+      print("Lua Error: No UUID returned")
+      return nil
+    end
   end
-
-  local template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
-  return string.gsub(template, '[xy]', function(c)
-    local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
-    return string.format('%x', v)
-  end)
 end
-
 
 
 -- Placeholder for a function that creates a UUID from a file path.
@@ -2603,15 +2605,40 @@ local function set_timecode(time_value)
 end
 
 
+AUTH_TOKEN = uuid() or ""
+if AUTH_TOKEN ~= "" then
+  AUTH_TOKEN = "HushCut-" .. AUTH_TOKEN
+end
+
+print("AUTH TOKEN: " .. AUTH_TOKEN)
 if go_app_path and free_port then
   print("Found HushCut executable at: " .. go_app_path)
   print("Found free port: " .. free_port)
 
   local hushcut_command
   if os_type == "Linux" then
-    hushcut_command = "GDK_BACKEND=x11 " .. quote(go_app_path) .. " --python-port=" .. free_port .. " &"
-  else
-    hushcut_command = quote(go_app_path) .. " --python-port=" .. free_port .. " &"
+    hushcut_command = string.format(
+      "env GDK_BACKEND=x11 sh -c 'echo %s | %s --python-port=%s &'",
+      quote(AUTH_TOKEN),
+      quote(go_app_path),
+      free_port
+    )
+  elseif os_type == "OSX" then
+    -- macOS: Similar to Linux but doesn't need GDK_BACKEND.
+    hushcut_command = string.format(
+      "sh -c 'echo -n %s | %s --python-port=%s &'",
+      quote(AUTH_TOKEN),
+      quote(go_app_path),
+      free_port
+    )
+  elseif os_type == "Windows" then
+    -- Windows: Uses `start /B` for backgrounding and `cmd /c` to execute a pipeline.
+    hushcut_command = string.format(
+      'start /B cmd /c "echo %s | %s --python-port=%s"',
+      quote(AUTH_TOKEN),
+      quote(go_app_path),
+      free_port
+    )
   end
 
 
@@ -2626,8 +2653,19 @@ if go_app_path and free_port then
     return
   end
 
+  local req_auth = ""
   for line in handle:lines() do
     print("server output: " .. line)
+
+    if line:find("---- Incoming Request ----") then
+      -- reset auth for new request
+      req_auth = ""
+    end
+
+    if line:find("Header: Authorization: Bearer") then
+      req_auth = line:match("Authorization: Bearer (.*)")
+      print("request auth is:<" .. req_auth .. ">")
+    end
 
     -- try to parse the line as JSON
     local json_data, pos, err = nil, nil, nil
@@ -2650,22 +2688,25 @@ if go_app_path and free_port then
 
     if json_data then
       params = json_data.params
-      if not params then
-        -- print("No params found in JSON data.")
-      else
-        -- print("Params found in JSON data: " .. json.encode(params))
-      end
+      -- if not params then
+      --   break
+      -- end
     end
 
     if params and params.taskId then
       task_id = params.taskId
     end
 
+    local auth_passed = false
+    if req_auth == AUTH_TOKEN then
+      auth_passed = true
+    end
+
     if json_data and json_data.go_server_port then
       print("Register endpoint called.")
       go_server_port = json_data.go_server_port
       print("Go server port detected: " .. go_server_port)
-    elseif json_data and json_data.command then
+    elseif auth_passed and json_data and json_data.command then
       local command = json_data.command
       print("Command detected: " .. command)
       if command == "sync" then
@@ -2686,15 +2727,18 @@ if go_app_path and free_port then
         else
           send_result_with_alert("Data Error", "makeFinalTimeline command received without projectData.", task_id)
         end
-      elseif command == "saveProject" then
-        if project then
+      elseif auth_passed and command == "saveProject" then
+        if not pm then
+          main(true)
+        end
+        if pm and project then
           pm:SaveProject()
           print("Project saved.")
           send_message_to_go("taskResult", { status = "success", message = "Project saved!" }, task_id)
         else
           send_result_with_alert("Error", "No project is open to save.", task_id)
         end
-      elseif command == "setPlayhead" then
+      elseif auth_passed and command == "setPlayhead" then
         if params then
           local time_value = params.time
           if time_value and set_timecode(time_value) then

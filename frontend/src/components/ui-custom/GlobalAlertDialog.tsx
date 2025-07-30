@@ -11,7 +11,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-import { useSyncBusyState } from "@/stores/appSync";
+import { useAppState } from "@/stores/appSync";
 
 interface AlertAction {
   label: string;
@@ -48,8 +48,8 @@ const GlobalAlertDialog = () => {
     }
   }, [alertOpen]);
 
-  const isBusy = useSyncBusyState(s => s.isBusy);
-  const setBusy = useSyncBusyState(s => s.setBusy);
+  const isBusy = useAppState(s => s.isBusy);
+  const setBusy = useAppState(s => s.setBusy);
   const isBusyRef = useRef(isBusy);
 
 

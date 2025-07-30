@@ -30,6 +30,8 @@ export function GetPythonReadyStatus():Promise<boolean>;
 
 export function GetSettings():Promise<Record<string, any>>;
 
+export function GetToken():Promise<string>;
+
 export function GetWaveform(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
 
 export function LaunchHttpServer():Promise<void>;

@@ -111,9 +111,9 @@ func (a *App) sendRequestToPython(ctx context.Context, method, path string, payl
 
 	// *** FUTURE AUTHORIZATION TOKEN GOES HERE ***
 	// When you're ready, you'll add the logic here, in one place.
-	// if a.authToken != "" {
-	//  req.Header.Set("Authorization", "Bearer " + a.authToken)
-	// }
+	if a.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+a.authToken)
+	}
 	// ---
 
 	// Use the single, shared httpClient from the App struct
@@ -171,7 +171,7 @@ func (a *App) SendCommandToPython(commandName string, params map[string]interfac
 	return &pyResp, nil
 }
 
-func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.HandlerFunc {
+func (a *App) commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		// 1. Set CORS Headers
 		// 'actualPort' is assumed to be the globally available port of this server
@@ -191,7 +191,7 @@ func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.Han
 
 		// 3. Token Authorization (Placeholder - globally disabled for now)
 		// When 'globalAuthEnabled' is true, and 'endpointRequiresAuth' is true, token check will be performed.
-		const globalAuthEnabled = false // MASTER SWITCH: Keep false to disable actual token checking logic.
+		const globalAuthEnabled = true // MASTER SWITCH: Keep false to disable actual token checking logic.
 		// Set to true when you're ready to implement and test token auth.
 
 		if endpointRequiresAuth {
@@ -199,42 +199,50 @@ func commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool) http.Han
 			if globalAuthEnabled {
 				// --- BEGIN FUTURE AUTH LOGIC (NEEDS a.authToken to be populated in App struct) ---
 				log.Printf("Middleware: Global auth is ENABLED. Performing token check for %s.", request.URL.Path)
-				/*
-					if a.authToken == "" { // Assuming App struct has 'authToken string'
-						log.Printf("Auth Error: Auth token not configured on server for %s", request.URL.Path)
-						http.Error(writer, "Internal Server Error - Auth not configured", http.StatusInternalServerError)
-						return
-					}
 
-					clientToken := ""
-					authHeader := request.Header.Get("Authorization")
-					if authHeader != "" {
-						parts := strings.Split(authHeader, " ")
-						if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-							clientToken = parts[1]
-						}
-					}
-					// Optionally, check for a custom token header if Authorization is empty
-					if clientToken == "" {
-					    clientToken = request.Header.Get("X-Auth-Token")
-					}
+				if a.authToken == "" { // Assuming App struct has 'authToken string'
+					log.Printf("Auth Error: Auth token not configured on server for %s", request.URL.Path)
+					http.Error(writer, "Internal Server Error - Auth not configured", http.StatusInternalServerError)
+					return
+				}
 
-					if clientToken == "" {
-						log.Printf("Auth Warning: No token provided by client for protected endpoint %s", request.URL.Path)
-						http.Error(writer, "Unauthorized - Token required", http.StatusUnauthorized)
-						return
+				clientToken := ""
+				authHeader := request.Header.Get("Authorization")
+				if authHeader != "" {
+					parts := strings.Split(authHeader, " ")
+					if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+						clientToken = parts[1]
 					}
+				}
+				// Optionally, check for a custom token header if Authorization is empty
+				if clientToken == "" {
+					clientToken = request.Header.Get("X-Auth-Token")
+				}
 
-					if clientToken != a.authToken {
-						log.Printf("Auth Warning: Invalid token provided for %s. Client: [%s...], Expected: [%s...]",
-							request.URL.Path,
-							truncateTokenForLog(clientToken),
-							truncateTokenForLog(a.authToken))
-						http.Error(writer, "Unauthorized - Invalid token", http.StatusUnauthorized)
-						return
-					}
-					log.Printf("Auth: Token validated successfully for %s", request.URL.Path)
-				*/
+				if clientToken == "" {
+					query := request.URL.Query()
+					clientToken = query.Get("token")
+				}
+
+				if clientToken == "" {
+					log.Printf("Auth Warning: No token provided by client for protected endpoint %s", request.URL.Path)
+					http.Error(writer, "Unauthorized - Token required", http.StatusUnauthorized)
+					return
+				}
+
+				if clientToken != a.authToken {
+					log.Printf("Auth Warning: Invalid token provided for %s. Client: [%s...], Expected: [%s...]",
+						request.URL.Path,
+						clientToken,
+						a.authToken,
+					)
+					//truncateTokenForLog(clientToken),
+					//truncateTokenForLog(a.authToken))
+					http.Error(writer, "Unauthorized - Invalid token", http.StatusUnauthorized)
+					return
+				}
+				log.Printf("Auth: Token validated successfully for %s", request.URL.Path)
+
 				// --- END FUTURE AUTH LOGIC ---
 			} else {
 				log.Printf("Middleware: Global auth is DISABLED. Token check skipped for %s (even though endpoint requires it).", request.URL.Path)
@@ -260,6 +268,10 @@ func findFreePort() (int, error) {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+func (a *App) GetToken() string {
+	return a.authToken
 }
 
 // initializes and starts the HTTP server in a goroutine.
@@ -292,6 +304,11 @@ func (a *App) LaunchHttpServer() error {
 	// exeDir := filepath.Dir(exePath)
 	a.effectiveAudioFolderPath = audioFolderPath
 
+	if a.authToken == "" {
+		a.authToken = "HushCut-" + uuid.NewString()
+	}
+	log.Println("Auth: Generated server auth token.")
+
 	log.Printf("Audio Server: Attempting to serve .wav files from: %s", a.effectiveAudioFolderPath)
 
 	if _, err := os.Stat(a.effectiveAudioFolderPath); os.IsNotExist(err) {
@@ -310,7 +327,7 @@ func (a *App) LaunchHttpServer() error {
 
 	// Audio files
 	coreAudioHandler := http.HandlerFunc(a.audioFileEndpoint)
-	mux.Handle("/", commonMiddleware(coreAudioHandler, false))
+	mux.Handle("/", a.commonMiddleware(coreAudioHandler, true))
 
 	// Ready signal
 	readyHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -324,14 +341,14 @@ func (a *App) LaunchHttpServer() error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Go server acknowledges Python backend readiness.")
 	}
-	mux.Handle("/ready", commonMiddleware(http.HandlerFunc(readyHandler), false)) // false: no auth
+	mux.Handle("/ready", a.commonMiddleware(http.HandlerFunc(readyHandler), false)) // false: no auth
 
 	// Main communication endpoint
 	pythonMsgHandlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { a.msgEndpoint(w, r) })
-	mux.Handle("/msg", commonMiddleware(pythonMsgHandlerFunc, false))
+	mux.Handle("/msg", a.commonMiddleware(pythonMsgHandlerFunc, true))
 
 	// Clip rendering endpoint
-	mux.HandleFunc("/render_clip", commonMiddleware(http.HandlerFunc(a.handleRenderClip), false))
+	mux.HandleFunc("/render_clip", a.commonMiddleware(http.HandlerFunc(a.handleRenderClip), true))
 
 	// Server
 	port, err := findFreePort()

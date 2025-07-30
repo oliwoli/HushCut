@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -72,8 +73,16 @@ func (h *FileLoader) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 var icon []byte
 
 func main() {
+
 	// Create an instance of the app structure
 	app := NewApp()
+	tokenFromStdIn, stdinErr := io.ReadAll(os.Stdin)
+	if stdinErr != nil {
+		fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", stdinErr)
+	}
+
+	fmt.Printf("Received token from stdin: %s\n", string(tokenFromStdIn))
+	app.authToken = strings.TrimSpace(string(tokenFromStdIn))
 
 	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)
 	if pythonPortStr := os.Getenv("WAILS_PYTHON_PORT"); pythonPortStr != "" {

@@ -15,7 +15,7 @@ import { memo, useState, useEffect } from "react";
 import { BrowserOpenURL } from "@wails/runtime/runtime";
 
 import { useUiStore } from "@/stores/uiStore";
-import { useSyncBusyState } from "./stores/appSync";
+import { useAppState } from "./stores/appSync";
 import clsx from "clsx";
 
 const _TitleBar = () => {
@@ -34,9 +34,9 @@ const _TitleBar = () => {
     }
   }, [dropdownOpen]);
 
-  const isBusy = useSyncBusyState(s => s.isBusy);
-  const hasProjectData = useSyncBusyState(s => s.hasProjectData);
-  const timelineName = useSyncBusyState(s => s.timelineName);
+  const isBusy = useAppState(s => s.isBusy);
+  const hasProjectData = useAppState(s => s.hasProjectData);
+  const timelineName = useAppState(s => s.timelineName);
 
 
   // This function will handle the logic
