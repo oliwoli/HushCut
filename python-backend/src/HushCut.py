@@ -2540,6 +2540,20 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
         global AUTH_TOKEN
         # --- Route 1: /register ---
         # Handles the initial registration from the Go application.
+
+        auth_header = self.headers.get("Authorization") or ""
+        req_token: str = ""
+        if "Bearer" in auth_header:
+            req_token = auth_header.split("Bearer")[1].strip()
+
+        auth_passed = req_token == AUTH_TOKEN
+        if not auth_passed:
+            print("unauthorized request received.")
+            self._send_json_response(
+                401, {"status": "error", "message": "Unauthorized"}
+            )
+            return
+
         if self.path == "/register":
             try:
                 content_length = int(self.headers["Content-Length"])
@@ -2579,33 +2593,6 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
 
         # --- Route 3: /command ---
         elif self.path == "/command":
-            # --- Authentication (Placeholder) ---
-            # Your existing auth logic is preserved here.
-            # if ENABLE_COMMAND_AUTH: ...
-            if ENABLE_COMMAND_AUTH:
-                auth_header = self.headers.get("Authorization")
-                token_valid = False
-                if auth_header and auth_header.startswith("Bearer ") and AUTH_TOKEN:
-                    received_token = auth_header.split(" ")[1]
-                    if received_token == AUTH_TOKEN:
-                        token_valid = True
-
-                if not token_valid:
-                    print(
-                        "Python Command Server: Unauthorized command attempt from Go."
-                    )
-                    self._send_json_response(
-                        401, {"status": "error", "message": "Unauthorized"}
-                    )
-                    return
-                print(
-                    "Python Command Server: Go authenticated successfully for command."
-                )
-            else:
-                print(
-                    "Python Command Server: Command authentication is currently disabled."
-                )
-
             command = None  # Initialize command here
             # --- Command Processing ---
             try:
@@ -2732,8 +2719,6 @@ def init():
     global AUTH_TOKEN
 
     AUTH_TOKEN = sys.stdin.read().strip()
-
-    print(f"Auth token is: {AUTH_TOKEN}")  # TODO: remove this print for production!!
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
