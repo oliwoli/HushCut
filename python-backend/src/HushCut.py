@@ -210,6 +210,7 @@ class TimelineItem(TypedDict):
     processed_file_name: Optional[str]
     start_frame: float
     end_frame: float
+    source_fps: float
     source_start_frame: float
     source_end_frame: float
     duration: float
@@ -232,6 +233,7 @@ def make_empty_timeline_item() -> TimelineItem:
         "processed_file_name": None,
         "start_frame": 0.0,
         "end_frame": 0.0,
+        "source_fps": 30.0,
         "source_start_frame": 0.0,
         "source_end_frame": 0.0,
         "duration": 0.0,
@@ -694,38 +696,77 @@ def process_track_items(
 
 
 def unify_edit_instructions(
-    items: Sequence[TimelineItem],
-) -> List[Tuple[float, Optional[float], bool]]:
+    items: Sequence[TimelineItem], project_fps: float
+) -> List[Tuple[float, float, bool]]:
     """
     Takes a list of linked items and unifies their edit instructions. It flattens
-    all intervals, preserving their enabled/disabled state, and merges them
-    such that any region covered by at least one 'enabled' clip is marked as enabled.
+    all intervals into a common `project_fps` domain, preserving their
+    enabled/disabled state, and merges them so any region covered by at least one
+    'enabled' clip is marked as enabled.
+
+    Args:
+        items: A sequence of timeline items to unify.
+        project_fps: The canonical frame rate of the project to use for unification.
+
+    Returns:
+        A list of unified edit segments as tuples of
+        (project_start_frame, project_end_frame, is_enabled). The frame numbers
+        are in the absolute project_fps domain.
     """
     has_any_edits = any(item.get("edit_instructions") for item in items)
     if not has_any_edits:
-        return [(0.0, None, True)]
+        # If no items have edits, the entire group is one enabled segment.
+        # We find the earliest start and latest end across all clips in the project domain.
+        min_start_proj = float("inf")
+        max_end_proj = float("-inf")
+        for item in items:
+            source_fps = item.get("source_fps", project_fps)
+            if source_fps < 1e-9:
+                source_fps = project_fps
+            conversion_ratio = project_fps / source_fps
+            min_start_proj = min(
+                min_start_proj, item.get("source_start_frame", 0.0) * conversion_ratio
+            )
+            max_end_proj = max(
+                max_end_proj, item.get("source_end_frame", 0.0) * conversion_ratio
+            )
+        return (
+            [(min_start_proj, max_end_proj, True)]
+            if min_start_proj < max_end_proj
+            else []
+        )
 
     events = []
     for item in items:
-        if item.get("edit_instructions"):
-            base = item.get("source_start_frame", 0.0)
-            for edit in item["edit_instructions"]:
-                if (
-                    edit.get("source_start_frame") is not None
-                    and edit.get("source_end_frame") is not None
-                ):
-                    rel_start = edit["source_start_frame"] - base
-                    rel_end = edit["source_end_frame"] - base
-                    is_enabled = edit.get("enabled", True)
-                    # --- CHANGE: Create start/end "event points" with enabled status ---
-                    # Type: 1 for start, -1 for end
-                    events.append((rel_start, 1, is_enabled))
-                    events.append((rel_end, -1, is_enabled))
+        if not item.get("edit_instructions"):
+            continue
+
+        source_fps = item.get("source_fps")
+        if not source_fps or source_fps < 1e-9:
+            logging.warning(
+                f"Item '{item.get('id')}' has invalid source_fps. Assuming project_fps ({project_fps})."
+            )
+            source_fps = project_fps
+
+        # Convert this item's source frames into the common project frame domain.
+        conversion_ratio = project_fps / source_fps
+
+        for edit in item["edit_instructions"]:
+            if (
+                edit.get("source_start_frame") is not None
+                and edit.get("source_end_frame") is not None
+            ):
+                # Convert absolute source frames to the absolute project frame domain
+                proj_start = edit["source_start_frame"] * conversion_ratio
+                proj_end = edit["source_end_frame"] * conversion_ratio
+                is_enabled = edit.get("enabled", True)
+                # Create start/end "event points" with enabled status
+                events.append((proj_start, 1, is_enabled))  # Type 1 for start
+                events.append((proj_end, -1, is_enabled))  # Type -1 for end
 
     if not events:
         return []
 
-    # Sort events by frame time, then by type (starts before ends)
     events.sort(key=lambda x: (x[0], -x[1]))
 
     merged_segments = []
@@ -735,89 +776,68 @@ def unify_edit_instructions(
 
     for frame, type_val, is_enabled in events:
         segment_duration = frame - last_frame
-        if segment_duration > 0:
-            # Determine the status of the time segment we just passed
+        if segment_duration > 1e-9:
             is_segment_enabled = active_enabled_count > 0
             is_segment_active = active_enabled_count > 0 or active_disabled_count > 0
             if is_segment_active:
                 merged_segments.append((last_frame, frame, is_segment_enabled))
 
-        if type_val == 1:  # Start of a clip
+        if type_val == 1:
             if is_enabled:
                 active_enabled_count += 1
             else:
                 active_disabled_count += 1
-        else:  # End of a clip
+        else:
             if is_enabled:
                 active_enabled_count -= 1
             else:
                 active_disabled_count -= 1
-
         last_frame = frame
 
     if not merged_segments:
         return []
 
+    # Coalesce adjacent segments with the same 'enabled' status
     final_edits = []
     current_start, current_end, current_enabled = merged_segments[0]
-
     for next_start, next_end, next_enabled in merged_segments[1:]:
-        # If the next segment is contiguous and has the same status, merge it
-        if next_start == current_end and next_enabled == current_enabled:
-            current_end = next_end  # Extend the end time
+        if abs(next_start - current_end) < 1e-9 and next_enabled == current_enabled:
+            current_end = next_end
         else:
-            # Otherwise, finalize the current segment and start a new one
             final_edits.append((current_start, current_end, current_enabled))
             current_start, current_end, current_enabled = (
                 next_start,
                 next_end,
                 next_enabled,
             )
-
-    # Append the very last processed segment
     final_edits.append((current_start, current_end, current_enabled))
 
-    min_duration_in_frames = 1.0
-    return [
-        (start, end, enabled)
-        for start, end, enabled in final_edits
-        if (end - start) >= min_duration_in_frames
-    ]
+    min_duration_in_frames = 1.0  # Minimum duration in project_fps domain
+    return [(s, e, en) for s, e, en in final_edits if (e - s) >= min_duration_in_frames]
 
 
 def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     """
     Reads an OTIO file to find linked clips, unifies their edit instructions
-    based on a discrete frame grid, and overwrites the project data.
-    This ensures perfect sync and no gaps between edited clips.
+    by converting to a common frame rate domain, and overwrites the project data,
+    retaining the original logic structure but with correct FPS conversions.
     """
     global PROJECT_DATA
-
     project_data = PROJECT_DATA
     if not project_data or "timeline" not in project_data:
         logging.error("Could not initialize or find project data.")
         raise ValueError("PROJECT_DATA is not properly configured.")
 
     pd_timeline = project_data["timeline"]
-
-    # Get FPS values and calculate the conversion ratio
-    timeline_fps = pd_timeline["fps"]
-    project_fps = pd_timeline["project_fps"]  # This is the source framerate domain
+    timeline_fps = pd_timeline.get("fps")
+    project_fps = pd_timeline.get("project_fps")
 
     if not timeline_fps or not project_fps or project_fps < 1e-9:
-        logging.warning(
-            f"Timeline FPS ({timeline_fps}) or Project FPS ({project_fps}) not found or invalid. "
-            "Assuming a 1:1 frame rate ratio."
-        )
-        frame_rate_ratio = 1.0
-    else:
-        frame_rate_ratio = timeline_fps / project_fps
+        logging.warning("Timeline or Project FPS not found or invalid. Cannot unify.")
+        return
 
-    logging.info(
-        f"Using Timeline FPS: {timeline_fps}, Project (Source) FPS: {project_fps}, Ratio: {frame_rate_ratio}"
-    )
+    logging.info(f"Using Timeline FPS: {timeline_fps}, Project FPS: {project_fps}")
 
-    # This is your original OTIO reading and initial item processing logic, preserved fully.
     try:
         with open(input_otio_path, "r", encoding="utf-8") as f:
             otio_data = json.load(f)
@@ -825,6 +845,9 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         logging.error(f"Failed to read or parse OTIO file at {input_otio_path}: {e}")
         return
 
+    # The following block populates the project data from the OTIO file and
+    # is preserved from the original code. It is assumed that `process_track_items`
+    # is defined elsewhere and correctly populates the timeline.
     max_link_group_id = 0
     track_type_counters = {"video": 0, "audio": 0, "subtitle": 0}
     timeline_rate = otio_data.get("global_start_time", {}).get("rate", 24)
@@ -871,80 +894,135 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             items_by_link_group[next_new_group_id] = [item]
             next_new_group_id += 1
 
+    # Main processing loop with new unification logic
     for link_id, group_items in items_by_link_group.items():
         if not group_items:
             continue
 
-        unified_edits = unify_edit_instructions(group_items)
+        edited_items = [item for item in group_items if item.get("edit_instructions")]
 
-        group_timeline_anchor = min(
-            (item.get("start_frame", float("inf")) for item in group_items),
-            default=float("inf"),
-        )
-        if group_timeline_anchor == float("inf"):
-            logging.warning(
-                f"Could not find start frame for link group {link_id}. Skipping."
+        # --- LOGIC SWITCH ---
+        # Case 1: Simple Inheritance (0 or 1 item has edits).
+        # This is the most common case. We preserve the existing edits perfectly.
+        if len(edited_items) <= 1:
+            template_item = edited_items[0] if edited_items else None
+
+            # If no item has edits, there's nothing to do.
+            if not template_item:
+                logging.info(f"Group {link_id} has no edits to unify. Skipping.")
+                continue
+
+            template_instructions = template_item["edit_instructions"]
+            template_fps = template_item.get("source_fps", project_fps)
+            if template_fps < 1e-9:
+                template_fps = project_fps
+
+            logging.info(
+                f"Group {link_id}: Applying template edits from item '{template_item['id']}'."
             )
-            continue
 
-        for item in group_items:
-            item_timeline_duration = item["end_frame"] - item["start_frame"] + 1
-            is_effectively_uncut = False
-            if len(unified_edits) == 1:
-                edit_source_start, edit_source_end, _ = unified_edits[0]
-                if edit_source_end is not None and abs(edit_source_start - 0.0) < 1e-9:
-                    source_duration = edit_source_end - edit_source_start
-                    equiv_timeline_duration = source_duration * frame_rate_ratio
-                    if abs(equiv_timeline_duration - item_timeline_duration) < 0.5:
-                        is_effectively_uncut = True
+            for target_item in group_items:
+                # The template item itself is already correct.
+                if target_item["id"] == template_item["id"]:
+                    continue
 
-            new_edit_instructions = []
-            base_source_offset = item["source_start_frame"]
+                new_instructions = []
+                target_fps = target_item.get("source_fps", project_fps)
+                if target_fps < 1e-9:
+                    target_fps = project_fps
 
-            if is_effectively_uncut:
-                new_edit_instructions.append(
+                for inst in template_instructions:
+                    # Convert template source range -> seconds -> target source range
+                    start_sec = inst["source_start_frame"] / template_fps
+                    end_sec = inst["source_end_frame"] / template_fps
+
+                    new_src_start = start_sec * target_fps
+                    new_src_end = end_sec * target_fps
+
+                    new_instructions.append(
+                        {
+                            # Recalculate source frames for the target's FPS
+                            "source_start_frame": new_src_start,
+                            "source_end_frame": new_src_end,
+                            # Preserve the exact timeline placement from the template
+                            "start_frame": inst["start_frame"],
+                            "end_frame": inst["end_frame"],
+                            "enabled": inst["enabled"],
+                        }
+                    )
+
+                target_item["edit_instructions"] = new_instructions
+                logging.info(
+                    f"Copied {len(new_instructions)} edits to item '{target_item['id']}'."
+                )
+
+        # Case 2: Complex Merge (multiple items have conflicting edits).
+        # We fall back to the full unification logic that rebuilds the timeline.
+        else:
+            logging.warning(
+                f"Group {link_id}: Found {len(edited_items)} items with edits. "
+                "Performing complex merge. Minor frame shifts may occur due to recalculation."
+            )
+            unified_edits_proj_domain = unify_edit_instructions(
+                group_items, project_fps
+            )
+
+            group_timeline_anchor = min(
+                (item.get("start_frame", float("inf")) for item in group_items),
+                default=0.0,
+            )
+
+            final_timeline_segments = []
+            timeline_playhead = group_timeline_anchor
+            proj_to_timeline_ratio = timeline_fps / project_fps
+
+            for proj_start, proj_end, is_enabled in unified_edits_proj_domain:
+                if not is_enabled:
+                    continue
+
+                proj_duration = proj_end - proj_start
+                timeline_duration_float = proj_duration * proj_to_timeline_ratio
+                if timeline_duration_float < 1.0:
+                    continue
+
+                timeline_start = round(timeline_playhead)
+                timeline_end = round(timeline_playhead + timeline_duration_float) - 1
+
+                final_timeline_segments.append(
                     {
-                        "source_start_frame": item["source_start_frame"],
-                        "source_end_frame": item["source_end_frame"],
-                        "start_frame": item.get("start_frame"),
-                        "end_frame": item.get("end_frame"),
-                        "enabled": True,
+                        "proj_start": proj_start,
+                        "proj_end": proj_end,
+                        "tl_start": float(timeline_start),
+                        "tl_end": float(timeline_end),
                     }
                 )
-            else:
-                timeline_playhead = group_timeline_anchor
+                timeline_playhead += timeline_duration_float
 
-                for rel_start, rel_end, is_enabled in unified_edits:
-                    source_duration = cast(float, rel_end) - rel_start
+            for item in group_items:
+                new_edit_instructions = []
+                source_fps = item.get("source_fps", project_fps)
+                if source_fps < 1e-9:
+                    source_fps = project_fps
+                proj_to_src_ratio = source_fps / project_fps
 
-                    timeline_duration_float = source_duration * frame_rate_ratio
-                    if timeline_duration_float < 1.0:
-                        continue
-
-                    source_start = base_source_offset + rel_start
-                    source_end = source_start + source_duration
-
-                    timeline_start = round(timeline_playhead)
-                    timeline_end = (
-                        round(timeline_playhead + timeline_duration_float) - 1
-                    )
+                for segment in final_timeline_segments:
+                    source_start = segment["proj_start"] * proj_to_src_ratio
+                    source_end = segment["proj_end"] * proj_to_src_ratio
 
                     new_edit_instructions.append(
                         {
                             "source_start_frame": source_start,
                             "source_end_frame": source_end,
-                            "start_frame": float(timeline_start),
-                            "end_frame": float(timeline_end),
-                            "enabled": is_enabled,
+                            "start_frame": segment["tl_start"],
+                            "end_frame": segment["tl_end"],
+                            "enabled": True,
                         }
                     )
 
-                    timeline_playhead += timeline_duration_float
-
-            item["edit_instructions"] = new_edit_instructions
-            logging.info(
-                f"Updated item '{item['id']}' in group {link_id} with {len(new_edit_instructions)} unified edit(s)."
-            )
+                item["edit_instructions"] = new_edit_instructions
+                logging.info(
+                    f"Updated item '{item['id']}' in group {link_id} with {len(new_edit_instructions)} merged edits."
+                )
 
 
 class ProgressTracker:
@@ -1273,6 +1351,14 @@ def get_items_by_tracktype(
             source_file_path: str = (
                 media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
             )
+
+            source_fps: float = (
+                (media_pool_item.GetClipProperty("FPS") if media_pool_item else 30.0)
+                or PROJECT_DATA.get("timeline", {}).get("project_fps", 30.0)
+                if PROJECT_DATA
+                else 30.0
+            )
+
             timeline_item: TimelineItem = {
                 "bmd_item": item_bmd,
                 "bmd_mpi": media_pool_item,
@@ -1284,6 +1370,7 @@ def get_items_by_tracktype(
                 "id": get_item_id(item_bmd, item_name, start_frame, track_type, i),
                 "track_type": track_type,
                 "track_index": i,
+                "source_fps": source_fps,
                 "source_file_path": source_file_path,
                 "processed_file_name": None,  # Initialized as None
                 "source_start_frame": source_start_float,
@@ -2421,7 +2508,7 @@ def signal_go_ready(go_server_port: int):
             )
             if attempt < max_retries - 1:
                 print(f"Python Backend: Retrying in {retry_delay_seconds} seconds...")
-                time.sleep(retry_delay_seconds)  # type: ignore
+                sleep(retry_delay_seconds)  # type: ignore
             else:
                 print(
                     f"Python Backend: Failed to signal Go server after {max_retries} attempts."

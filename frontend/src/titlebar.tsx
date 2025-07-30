@@ -36,6 +36,8 @@ const _TitleBar = () => {
 
   const isBusy = useSyncBusyState(s => s.isBusy);
   const hasProjectData = useSyncBusyState(s => s.hasProjectData);
+  const timelineName = useSyncBusyState(s => s.timelineName);
+
 
   // This function will handle the logic
   const handlePinClick = () => {
@@ -85,7 +87,8 @@ const _TitleBar = () => {
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <h1 className="text-sm font-normal text-neutral-200">HushCut</h1>
+            <h1 className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline">HushCut
+            </h1>
             <CircleIcon
               size={8}
               className={clsx(
@@ -95,6 +98,9 @@ const _TitleBar = () => {
                 hasProjectData && !isBusy && 'fill-teal-600'
               )}
             />
+            {timelineName && (
+              <span className="text-neutral-500 text-xs ">{timelineName}</span>
+            )}
 
           </div>
           <div className="flex items-center">

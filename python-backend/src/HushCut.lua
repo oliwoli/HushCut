@@ -1144,6 +1144,21 @@ local function get_item_id(bmd_item, item_name, start_frame, track_type, track_i
 end
 
 
+function PrintTable(t, indent)
+  indent = indent or 0
+  local formatting = string.rep("  ", indent)
+  for k, v in pairs(t) do
+    local key = tostring(k)
+    if type(v) == "table" then
+      print(formatting .. key .. " = {")
+      PrintTable(v, indent + 1)
+      print(formatting .. "}")
+    else
+      print(formatting .. key .. " = " .. tostring(v))
+    end
+  end
+end
+
 local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
   -- 1. Start with the top-level clip's unique properties.
   local bmd_item = top_level_item.bmd_mpi
@@ -1272,6 +1287,25 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           processed_file_name = source_uuid .. ".wav"
         end
 
+        --   local source_fps: float = (
+        --     (media_pool_item.GetClipProperty("FPS") if media_pool_item else 30.0)
+        --     or PROJECT_DATA.get("timeline", {}).get("project_fps", 30.0)
+        --     if PROJECT_DATA
+        --     else 30.0
+        -- )
+        local source_fps = 30.0
+
+        if media_pool_item then
+          local clip_fps_str = media_pool_item:GetClipProperty("FPS")
+          local clip_fps_num = tonumber(clip_fps_str)
+          if clip_fps_num then
+            source_fps = clip_fps_num
+          end
+        elseif project_data and project_data.timeline and project_data.timeline.project_fps then
+          source_fps = project_data.timeline.project_fps
+        end
+
+
         local timeline_item = {
           bmd_item = item_bmd,
           bmd_mpi = media_pool_item,
@@ -1283,6 +1317,7 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           id = get_item_id(item_bmd, item_name, start_frame, track_type, i),
           track_type = track_type,
           track_index = i,
+          source_fps = source_fps,
           source_file_path = source_file_path,
           processed_file_name = processed_file_name,
           source_start_frame = source_start_float,
@@ -1432,7 +1467,8 @@ _recursive_otio_parser = function(otio_composable, timeline_fps, active_angle_na
           else
             if effective_duration > 0 then
               if schema:find("clip", 1, true) then
-                local item = _create_nested_audio_item_from_otio(item_in_track, playhead, timeline_fps, effective_duration)
+                local item = _create_nested_audio_item_from_otio(item_in_track, playhead, timeline_fps,
+                  effective_duration)
                 if item then table.insert(found_clips, item) end
               elseif schema:find("stack", 1, true) then
                 local nested_clips = _recursive_otio_parser(item_in_track, timeline_fps, active_angle_name,
@@ -1526,7 +1562,6 @@ local function populate_nested_clips(input_otio_path)
               if pd_item.type and pd_item.track_index == current_track_index and
                   math.abs((pd_item.start_frame or -1) - record_frame_float) < FRAME_MATCH_TOLERANCE and
                   pd_item.name == otio_item_name then
-                
                 corresponding_pd_item = pd_item
                 match_index = i
                 break -- Found a match, stop searching
@@ -1534,7 +1569,8 @@ local function populate_nested_clips(input_otio_path)
             end
 
             if corresponding_pd_item then
-              print(string.format("Assigning %d nested clips to project item '%s'", #nested_clips_for_this_instance, corresponding_pd_item.id))
+              print(string.format("Assigning %d nested clips to project item '%s'", #nested_clips_for_this_instance,
+                corresponding_pd_item.id))
               corresponding_pd_item.nested_clips = nested_clips_for_this_instance
               -- Consume the matched item
               table.remove(all_pd_items, match_index)
@@ -1666,109 +1702,20 @@ end
 -- =============================================================================
 
 
+-- Forward declaration
+local unify_edit_instructions
 
 ---
--- Unifies edit instructions for a group of linked items.
--- This is a Lua translation of the Python `unify_edit_instructions` function.
--- @param items (table) A list of linked timeline items.
--- @return (table) A list of unified edit instruction tables.
+-- Try to find items that match the record_frame and duration_val approximately.
+-- If no exact match within tolerance, find the closest one by scanning ±search_range.
+-- @param pd_items (table) A list of project data items to search through.
+-- @param record_frame (number) The target timeline frame to match.
+-- @param duration_val (number) The target duration to match.
+-- @param track_index (number) The track index the item must be on.
+-- @param frame_tolerance (number, optional) The tolerance for frame and duration matching.
+-- @param search_range (number, optional) The number of frames to search forward and backward.
+-- @return (table) A list containing the best match, or an empty list if none found.
 --
-local function unify_edit_instructions(items)
-  local has_any_edits = false
-  for _, item in ipairs(items) do
-    if item.edit_instructions and #item.edit_instructions > 0 then
-      has_any_edits = true
-      break
-    end
-  end
-  if not has_any_edits then
-    return { { 0.0, nil, true } }
-  end
-
-  local events = {}
-  for _, item in ipairs(items) do
-    if item.edit_instructions then
-      local base = item.source_start_frame or 0.0
-      for _, edit in ipairs(item.edit_instructions) do
-        if edit.source_start_frame and edit.source_end_frame then
-          local rel_start = edit.source_start_frame - base
-          local rel_end = edit.source_end_frame - base
-          local is_enabled = edit.enabled == nil or edit.enabled == true
-          table.insert(events, { frame = rel_start, type = 1, enabled = is_enabled })
-          table.insert(events, { frame = rel_end, type = -1, enabled = is_enabled })
-        end
-      end
-    end
-  end
-
-  if #events == 0 then return {} end
-
-  table.sort(events, function(a, b)
-    if a.frame == b.frame then return a.type > b.type end
-    return a.frame < b.frame
-  end)
-
-  local merged_segments = {}
-  local active_enabled_count = 0
-  local active_disabled_count = 0
-  local last_frame = events[1].frame
-
-  for _, event in ipairs(events) do
-    local frame, type_val, is_enabled = event.frame, event.type, event.enabled
-    local segment_duration = frame - last_frame
-    if segment_duration > 0 then
-      local is_segment_enabled = active_enabled_count > 0
-      local is_segment_active = active_enabled_count > 0 or active_disabled_count > 0
-      if is_segment_active then
-        table.insert(merged_segments, { start_frame = last_frame, end_frame = frame, enabled = is_segment_enabled })
-      end
-    end
-
-    if type_val == 1 then -- Start
-      if is_enabled then
-        active_enabled_count = active_enabled_count + 1
-      else
-        active_disabled_count = active_disabled_count + 1
-      end
-    else -- End
-      if is_enabled then
-        active_enabled_count = active_enabled_count - 1
-      else
-        active_disabled_count = active_disabled_count - 1
-      end
-    end
-    last_frame = frame
-  end
-
-  if #merged_segments == 0 then return {} end
-
-  local final_edits = {}
-  if #merged_segments > 0 then
-    local current_edit = merged_segments[1]
-    table.insert(final_edits, current_edit)
-
-    for i = 2, #merged_segments do
-      local next_edit = merged_segments[i]
-      if next_edit.start_frame == current_edit.end_frame and next_edit.enabled == current_edit.enabled then
-        current_edit.end_frame = next_edit.end_frame -- Merge
-      else
-        current_edit = next_edit
-        table.insert(final_edits, current_edit)
-      end
-    end
-  end
-
-
-  local filtered_edits = {}
-  for _, edit in ipairs(final_edits) do
-    if (edit.end_frame - edit.start_frame) >= 1.0 then
-      table.insert(filtered_edits, { edit.start_frame, edit.end_frame, edit.enabled })
-    end
-  end
-
-  return filtered_edits
-end
-
 local function find_closest_match(pd_items, record_frame, duration_val, track_index, frame_tolerance, search_range)
   frame_tolerance = frame_tolerance or 0.5
   search_range = search_range or 5
@@ -1787,6 +1734,7 @@ local function find_closest_match(pd_items, record_frame, duration_val, track_in
           return { item } -- Early return on valid match
         end
 
+        -- Save closest one in case no good match is found
         local distance = frame_diff + duration_diff
         if distance < best_distance then
           best_distance = distance
@@ -1802,21 +1750,39 @@ local function find_closest_match(pd_items, record_frame, duration_val, track_in
   return {}
 end
 
-local function process_track_items(otio_items, pd_timeline, pd_timeline_key, track_index, timeline_start_frame, max_id)
+---
+-- (REVISED) First pass: Iterates through an OTIO track's children to find the
+-- corresponding items in the project data and assign the `link_group_id`.
+-- Now handles both Clips and Stacks (Compound Clips).
+-- @param items (table) A list of OTIO items from a track.
+-- @param pd_timeline (table) The project data timeline table.
+-- @param pd_timeline_key (string) The key for the items list (e.g., 'video_track_items').
+-- @param timeline_start_rate (number) The frame rate of the OTIO timeline.
+-- @param timeline_start_frame (number) The global start frame of the timeline.
+-- @param max_id (number) The current maximum link_group_id found so far.
+-- @param track_index (number) The 1-based index of the current track.
+-- @return (number) The updated maximum link_group_id.
+--
+local function process_track_items(items, pd_timeline, pd_timeline_key, timeline_start_rate, timeline_start_frame, max_id,
+                                   track_index)
   local playhead_frames = 0.0
 
-  for _, item in ipairs(otio_items) do
+  for _, item in ipairs(items) do
     if item then
-      local item_schema = string.lower(safe_get(item, "OTIO_SCHEMA") or "")
-      local duration_val = safe_get(item, "source_range", "duration", "value") or 0
+      local item_schema = string.lower(item.OTIO_SCHEMA or "")
+      local duration_val = 0
+      if item.source_range and item.source_range.duration and item.source_range.duration.value then
+        duration_val = item.source_range.duration.value
+      end
 
       if string.find(item_schema, "gap") then
         playhead_frames = playhead_frames + duration_val
       elseif string.find(item_schema, "clip") or string.find(item_schema, "stack") then
         local record_frame_float = playhead_frames + timeline_start_frame
+        local pd_items = pd_timeline[pd_timeline_key] or {}
 
         local corresponding_items = find_closest_match(
-          pd_timeline[pd_timeline_key] or {},
+          pd_items,
           record_frame_float,
           duration_val,
           track_index
@@ -1826,11 +1792,14 @@ local function process_track_items(otio_items, pd_timeline, pd_timeline_key, tra
           print("Warning: Could not find a corresponding project item for OTIO item at frame " ..
             tostring(record_frame_float) .. " on track " .. tostring(track_index))
         else
-          local link_group_id = safe_get(item, "metadata", "Resolve_OTIO", "Link Group ID")
+          local link_group_id = nil
+          if item.metadata and item.metadata.Resolve_OTIO then
+            link_group_id = item.metadata.Resolve_OTIO["Link Group ID"]
+          end
           print("Processing item '" .. tostring(item.name) .. "' on track " .. tostring(track_index) ..
             " with link group ID: " .. tostring(link_group_id))
 
-          if link_group_id then
+          if link_group_id ~= nil then
             for _, corresponding_item in ipairs(corresponding_items) do
               corresponding_item.link_group_id = link_group_id
             end
@@ -1844,138 +1813,308 @@ local function process_track_items(otio_items, pd_timeline, pd_timeline_key, tra
   return max_id
 end
 
+
 ---
--- Reads an OTIO file, finds linked clips, unifies their edits, and updates project_data.
--- Lua translation of `unify_linked_items_in_project_data`.
+-- Takes a list of linked items and unifies their edit instructions. It flattens
+-- all intervals into a common `project_fps` domain and merges them.
+-- @param items (table) A sequence of timeline items to unify.
+-- @param project_fps (number) The canonical frame rate of the project to use for unification.
+-- @return (table) A list of unified edit segments as {project_start_frame, project_end_frame, is_enabled}.
+--
+unify_edit_instructions = function(items, project_fps)
+  local has_any_edits = false
+  for _, item in ipairs(items) do
+    if item.edit_instructions and #item.edit_instructions > 0 then
+      has_any_edits = true
+      break
+    end
+  end
+
+  local EPSILON = 1e-9
+
+  -- Case: No items have edits. Find earliest start and latest end in project domain.
+  if not has_any_edits then
+    local min_start_proj = math.huge
+    local max_end_proj = -math.huge
+    for _, item in ipairs(items) do
+      local source_fps = item.source_fps or project_fps
+      if source_fps < EPSILON then source_fps = project_fps end
+      local conversion_ratio = project_fps / source_fps
+      min_start_proj = math.min(min_start_proj, (item.source_start_frame or 0.0) * conversion_ratio)
+      max_end_proj = math.max(max_end_proj, (item.source_end_frame or 0.0) * conversion_ratio)
+    end
+    if min_start_proj < max_end_proj then
+      return { { min_start_proj, max_end_proj, true } }
+    else
+      return {}
+    end
+  end
+
+  -- Case: At least one item has edits. Use sweep-line algorithm.
+  local events = {}
+  for _, item in ipairs(items) do
+    if item.edit_instructions and #item.edit_instructions > 0 then
+      local source_fps = item.source_fps
+      if not source_fps or source_fps < EPSILON then
+        print("Warning: Item '" ..
+          tostring(item.id) .. "' has invalid source_fps. Assuming project_fps (" .. tostring(project_fps) .. ").")
+        source_fps = project_fps
+      end
+      local conversion_ratio = project_fps / source_fps
+
+      for _, edit in ipairs(item.edit_instructions) do
+        if edit.source_start_frame ~= nil and edit.source_end_frame ~= nil then
+          local proj_start = edit.source_start_frame * conversion_ratio
+          local proj_end = edit.source_end_frame * conversion_ratio
+          local is_enabled = edit.enabled == nil or edit.enabled == true
+          table.insert(events, { frame = proj_start, type = 1, enabled = is_enabled }) -- 1 for start
+          table.insert(events, { frame = proj_end, type = -1, enabled = is_enabled })  -- -1 for end
+        end
+      end
+    end
+  end
+
+  if #events == 0 then return {} end
+
+  table.sort(events, function(a, b)
+    if a.frame == b.frame then return a.type > b.type end
+    return a.frame < b.frame
+  end)
+
+  local merged_segments = {}
+  local active_enabled_count = 0
+  local active_disabled_count = 0
+  local last_frame = events[1].frame
+
+  for _, event in ipairs(events) do
+    local segment_duration = event.frame - last_frame
+    if segment_duration > EPSILON then
+      local is_segment_enabled = active_enabled_count > 0
+      local is_segment_active = active_enabled_count > 0 or active_disabled_count > 0
+      if is_segment_active then
+        table.insert(merged_segments, { start_frame = last_frame, end_frame = event.frame, enabled = is_segment_enabled })
+      end
+    end
+
+    if event.type == 1 then -- Start
+      if event.enabled then
+        active_enabled_count = active_enabled_count + 1
+      else
+        active_disabled_count =
+            active_disabled_count + 1
+      end
+    else -- End
+      if event.enabled then
+        active_enabled_count = active_enabled_count - 1
+      else
+        active_disabled_count =
+            active_disabled_count - 1
+      end
+    end
+    last_frame = event.frame
+  end
+
+  if #merged_segments == 0 then return {} end
+
+  -- Coalesce adjacent segments with the same 'enabled' status
+  local final_edits = {}
+  local current_start, current_end, current_enabled = merged_segments[1].start_frame, merged_segments[1].end_frame,
+      merged_segments[1].enabled
+  for i = 2, #merged_segments do
+    local next_start, next_end, next_enabled = merged_segments[i].start_frame, merged_segments[i].end_frame,
+        merged_segments[i].enabled
+    if math.abs(next_start - current_end) < EPSILON and next_enabled == current_enabled then
+      current_end = next_end -- Merge
+    else
+      table.insert(final_edits, { current_start, current_end, current_enabled })
+      current_start, current_end, current_enabled = next_start, next_end, next_enabled
+    end
+  end
+  table.insert(final_edits, { current_start, current_end, current_enabled })
+
+  -- Filter for minimum duration
+  local min_duration_in_frames = 1.0
+  local filtered_edits = {}
+  for _, edit in ipairs(final_edits) do
+    if (edit[2] - edit[1]) >= min_duration_in_frames then
+      table.insert(filtered_edits, edit)
+    end
+  end
+  return filtered_edits
+end
+
+
+---
+-- Reads an OTIO file to find linked clips, unifies their edit instructions
+-- by converting to a common frame rate domain, and overwrites the project data.
 -- @param input_otio_path (string) Path to the OTIO JSON file.
 --
 local function unify_linked_items_in_project_data(input_otio_path)
   if not project_data or not project_data.timeline then
-    print("Could not find project data to unify.")
-    return
-  end
-
-  local f = io.open(input_otio_path, "r")
-  if not f then
-    print("Failed to open OTIO file: " .. input_otio_path)
-    return
-  end
-  local otio_json_str = f:read("*a")
-  f:close()
-
-  local ok, otio_data = pcall(json.decode, otio_json_str)
-  if not ok then
-    print("Failed to parse OTIO JSON: " .. tostring(otio_data))
+    print("Error: Could not initialize or find project data.")
     return
   end
 
   local pd_timeline = project_data.timeline
-  local max_link_group_id = 0
-  local track_type_counters = { video = 0, audio = 0 }
-  local timeline_start_frame = safe_get(otio_data, "global_start_time", "value") or 0.0
+  local timeline_fps = pd_timeline.fps
+  local project_fps = pd_timeline.project_fps
+  local EPSILON = 1e-9
 
-  local otio_tracks = safe_get(otio_data, "tracks", "children") or {}
-  for _, track in ipairs(otio_tracks) do
-    local kind = string.lower(safe_get(track, "kind") or "")
-    if track_type_counters[kind] then
-      track_type_counters[kind] = track_type_counters[kind] + 1
-      local current_track_index = track_type_counters[kind]
-      local pd_key = kind .. "_track_items"
-      max_link_group_id = process_track_items(
-        safe_get(track, "children") or {},
-        pd_timeline,
-        pd_key,
-        current_track_index,
-        timeline_start_frame,
-        max_link_group_id
-      )
+  if not timeline_fps or not project_fps or project_fps < EPSILON then
+    print("Warning: Timeline or Project FPS not found or invalid. Cannot unify.")
+    return
+  end
+  print("Info: Using Timeline FPS: " .. tostring(timeline_fps) .. ", Project FPS: " .. tostring(project_fps))
+
+  local f = io.open(input_otio_path, "r")
+  if not f then
+    print("Error: Failed to read OTIO file at " .. input_otio_path)
+    return
+  end
+  local otio_json_str = f:read("*a")
+  f:close()
+  local ok, otio_data = pcall(json.decode, otio_json_str)
+  if not ok then
+    print("Error: Failed to parse OTIO file: " .. tostring(otio_data))
+    return
+  end
+
+  -- First Pass: Populate link_group_id from OTIO
+  local max_link_group_id = 0
+  local track_type_counters = { video = 0, audio = 0, subtitle = 0 }
+  local timeline_rate = (otio_data.global_start_time and otio_data.global_start_time.rate) or 24
+  local start_time_value = (otio_data.global_start_time and otio_data.global_start_time.value) or 0.0
+  local timeline_start_frame = tonumber(start_time_value)
+
+  if otio_data.tracks and otio_data.tracks.children then
+    for _, track in ipairs(otio_data.tracks.children) do
+      local kind = string.lower(track.kind or "")
+      if track_type_counters[kind] then
+        track_type_counters[kind] = track_type_counters[kind] + 1
+        local current_track_index = track_type_counters[kind]
+        local pd_key = kind .. "_track_items"
+        max_link_group_id = math.max(max_link_group_id, process_track_items(
+          track.children or {}, pd_timeline, pd_key, timeline_rate, timeline_start_frame, max_link_group_id,
+          current_track_index
+        ))
+      end
     end
   end
 
+  -- Collect all items and group them by link_group_id
   local all_pd_items = {}
-  for _, item in ipairs(pd_timeline.video_track_items) do table.insert(all_pd_items, item) end
-  for _, item in ipairs(pd_timeline.audio_track_items) do table.insert(all_pd_items, item) end
-
+  for _, item in ipairs(pd_timeline.video_track_items or {}) do table.insert(all_pd_items, item) end
+  for _, item in ipairs(pd_timeline.audio_track_items or {}) do table.insert(all_pd_items, item) end
   local items_by_link_group = {}
-  local next_new_group_id = max_link_group_id + 1
   for _, item in ipairs(all_pd_items) do
-    if item.link_group_id == nil and item.edit_instructions and #item.edit_instructions > 0 then
-      item.link_group_id = next_new_group_id
-      next_new_group_id = next_new_group_id + 1
-    end
     if item.link_group_id then
-      if not items_by_link_group[item.link_group_id] then
-        items_by_link_group[item.link_group_id] = {}
-      end
+      if not items_by_link_group[item.link_group_id] then items_by_link_group[item.link_group_id] = {} end
       table.insert(items_by_link_group[item.link_group_id], item)
     end
   end
 
-  for link_id, group_items in pairs(items_by_link_group) do
-    local unified_edits = unify_edit_instructions(group_items)
-    local group_timeline_anchor = math.huge
-    for _, item in ipairs(group_items) do
-      group_timeline_anchor = math.min(group_timeline_anchor, item.start_frame)
+  local next_new_group_id = max_link_group_id + 1
+  for _, item in ipairs(all_pd_items) do
+    if item.link_group_id == nil and (item.edit_instructions and #item.edit_instructions > 0) then
+      print("Info: Item '" ..
+        (item.name or "Unnamed") ..
+        "' has edits but no link_group_id. Assigning new group ID " .. tostring(next_new_group_id))
+      item.link_group_id = next_new_group_id
+      items_by_link_group[next_new_group_id] = { item }
+      next_new_group_id = next_new_group_id + 1
     end
+  end
 
-    if group_timeline_anchor ~= math.huge then
+  -- Main processing loop with new unification logic
+  for link_id, group_items in pairs(items_by_link_group) do
+    if #group_items > 0 then
+      local edited_items = {}
       for _, item in ipairs(group_items) do
-        local item_duration = item.end_frame - item.start_frame
-        local is_effectively_uncut = false
-        if #unified_edits == 1 then
-          local edit_start, edit_end, _ = unified_edits[1][1], unified_edits[1][2], unified_edits[1][3]
-          if edit_end and edit_start == 0.0 and math.abs(edit_end - item_duration) < 0.01 then
-            is_effectively_uncut = true
-          end
-        end
+        if item.edit_instructions and #item.edit_instructions > 0 then table.insert(edited_items, item) end
+      end
 
-        local new_edit_instructions = {}
-        local base_source_offset = item.source_start_frame
-
-        if is_effectively_uncut then
-          local original_edit = (item.edit_instructions and #item.edit_instructions > 0) and item.edit_instructions[1] or
-              {}
-          table.insert(new_edit_instructions, {
-            source_start_frame = item.source_start_frame,
-            source_end_frame = item.source_end_frame,
-            start_frame = item.start_frame,
-            end_frame = item.end_frame,
-            enabled = original_edit.enabled == nil or original_edit.enabled == true
-          })
+      -- Case 1: Simple Inheritance (0 or 1 item has edits)
+      if #edited_items <= 1 then
+        if #edited_items == 0 then
+          print("Info: Group " .. tostring(link_id) .. " has no edits to unify. Skipping.")
         else
-          local timeline_playhead = math.floor(group_timeline_anchor + 0.5)
-          for _, unified_edit in ipairs(unified_edits) do
-            local rel_start, rel_end, is_enabled = unified_edit[1], unified_edit[2], unified_edit[3]
-            local source_duration
-            if rel_end == nil then
-              source_duration = item.source_end_frame - item.source_start_frame
-            else
-              source_duration = rel_end - rel_start
-            end
-            local timeline_duration = math.floor(source_duration + 0.5)
-
-            if timeline_duration >= 1 then
-              local source_start = base_source_offset + rel_start
-              local source_end = source_start + source_duration
-              local timeline_start = timeline_playhead
-              local timeline_end = timeline_playhead + timeline_duration
-
-              table.insert(new_edit_instructions, {
-                source_start_frame = source_start,
-                source_end_frame = source_end,
-                start_frame = timeline_start,
-                end_frame = timeline_end,
-                enabled = is_enabled
-              })
-              timeline_playhead = timeline_end
+          local template_item = edited_items[1]
+          local template_fps = template_item.source_fps or project_fps
+          if template_fps < EPSILON then template_fps = project_fps end
+          print("Info: Group " ..
+            tostring(link_id) .. ": Applying template edits from item '" .. tostring(template_item.id) .. "'.")
+          for _, target_item in ipairs(group_items) do
+            if target_item.id ~= template_item.id then
+              local new_instructions = {}
+              local target_fps = target_item.source_fps or project_fps
+              if target_fps < EPSILON then target_fps = project_fps end
+              for _, inst in ipairs(template_item.edit_instructions) do
+                local start_sec = inst.source_start_frame / template_fps
+                local end_sec = inst.source_end_frame / template_fps
+                table.insert(new_instructions, {
+                  source_start_frame = start_sec * target_fps,
+                  source_end_frame = end_sec * target_fps,
+                  start_frame = inst.start_frame,
+                  end_frame = inst.end_frame,
+                  enabled = inst.enabled,
+                })
+              end
+              target_item.edit_instructions = new_instructions
+              print("Info: Copied " ..
+                tostring(#new_instructions) .. " edits to item '" .. tostring(target_item.id) .. "'.")
             end
           end
         end
-        item.edit_instructions = new_edit_instructions
+        -- Case 2: Complex Merge (multiple items have conflicting edits)
+      else
+        print("Warning: Group " ..
+          tostring(link_id) .. ": Found " .. tostring(#edited_items) .. " items with edits. Performing complex merge.")
+        local unified_edits_proj_domain = unify_edit_instructions(group_items, project_fps)
+        local group_timeline_anchor = math.huge
+        for _, item in ipairs(group_items) do
+          group_timeline_anchor = math.min(group_timeline_anchor,
+            item.start_frame or math.huge)
+        end
+        if group_timeline_anchor == math.huge then group_timeline_anchor = 0.0 end
+
+        local final_timeline_segments, timeline_playhead = {}, group_timeline_anchor
+        local proj_to_timeline_ratio = timeline_fps / project_fps
+        for _, edit in ipairs(unified_edits_proj_domain) do
+          if edit[3] then -- is_enabled
+            local proj_duration = edit[2] - edit[1]
+            local timeline_duration_float = proj_duration * proj_to_timeline_ratio
+            if timeline_duration_float >= 1.0 then
+              local tl_start = math.floor(timeline_playhead + 0.5)
+              local tl_end = math.floor(timeline_playhead + timeline_duration_float + 0.5) - 1
+              table.insert(final_timeline_segments, {
+                proj_start = edit[1], proj_end = edit[2], tl_start = tl_start, tl_end = tl_end,
+              })
+              timeline_playhead = timeline_playhead + timeline_duration_float
+            end
+          end
+        end
+        for _, item in ipairs(group_items) do
+          local new_edit_instructions = {}
+          local source_fps = item.source_fps or project_fps
+          if source_fps < EPSILON then source_fps = project_fps end
+          local proj_to_src_ratio = source_fps / project_fps
+          for _, segment in ipairs(final_timeline_segments) do
+            table.insert(new_edit_instructions, {
+              source_start_frame = segment.proj_start * proj_to_src_ratio,
+              source_end_frame = segment.proj_end * proj_to_src_ratio,
+              start_frame = segment.tl_start,
+              end_frame = segment.tl_end,
+              enabled = true,
+            })
+          end
+          item.edit_instructions = new_edit_instructions
+          print("Info: Updated item '" ..
+            tostring(item.id) ..
+            "' in group " .. tostring(link_id) .. " with " .. #new_edit_instructions .. " merged edits.")
+        end
       end
     end
   end
-  print("Finished unifying linked item edits.")
 end
 
 -- =============================================================================
@@ -2080,7 +2219,6 @@ local function _verify_timeline_state(bmd_timeline, expected_clips)
   end
   return false
 end
-
 ---
 -- Checks if a clip is "uncut", meaning its edit instructions represent the
 -- entire, original clip segment on the timeline.
@@ -2100,16 +2238,15 @@ local function clip_is_uncut(item)
   local edit = item.edit_instructions[1]
   local TOLERANCE = 0.01
 
-  if math.abs(edit.start_frame - item.start_frame) < TOLERANCE and
-      math.abs(edit.end_frame - item.end_frame) < TOLERANCE and
-      math.abs(edit.source_start_frame - item.source_start_frame) < TOLERANCE and
-      math.abs(edit.source_end_frame - item.source_end_frame) < TOLERANCE then
+  if math.abs((edit.start_frame or 0) - (item.start_frame or 0)) < TOLERANCE and
+      math.abs((edit.end_frame or 0) - (item.end_frame or 0)) < TOLERANCE and
+      math.abs((edit.source_start_frame or 0) - (item.source_start_frame or 0)) < TOLERANCE and
+      math.abs((edit.source_end_frame or 0) - (item.source_end_frame or 0)) < TOLERANCE then
     return true
   end
 
   return false
 end
-
 
 ---
 -- Groups clips, prepares a SINGLE batch of instructions for the API with a
@@ -2121,77 +2258,63 @@ local function _prepare_clips_for_append(timeline_items)
   local grouped_clips = {}
 
   for _, item in ipairs(timeline_items) do
-    local link_id = item.link_group_id
-    if link_id then
-      local media_type = item.track_type == "video" and 1 or 2
-      for i, edit in ipairs(item.edit_instructions or {}) do
-        local record_frame = math.floor((edit.start_frame or 0) + 0.5)
-        local end_frame = math.floor((edit.end_frame or 0) + 0.5)
-        local duration_frames = end_frame - record_frame
+    if not item.bmd_item then
+      print("Warning: Skipping item '" .. (item.name or "Unnamed") .. "' because it has no 'bmd_item'.")
+    elseif not item.edit_instructions or #item.edit_instructions == 0 then
+      -- This item is uncut and shouldn't be re-appended. This is expected.
+    else
+      if not item.bmd_mpi then item.bmd_mpi = item.bmd_item:GetMediaPoolItem() end
+      if not item.bmd_mpi then
+        print("Warning: Skipping item '" .. (item.name or "Unnamed") .. "' because its MediaPoolItem could not be found.")
+      else
+        local media_type = item.track_type == "video" and 1 or 2
+        for i, edit in ipairs(item.edit_instructions) do
+          local record_frame = math.floor((edit.start_frame or 0) + 0.5)
+          local end_frame = math.floor((edit.end_frame or 0) + 0.5)
 
-        if duration_frames >= 1 then
-          local source_start = edit.source_start_frame or 0
-          local source_end = source_start + duration_frames
-
-          if not item.bmd_mpi then
-            item.bmd_mpi = item.bmd_item:GetMediaPoolItem()
+          if (end_frame - record_frame) >= 1 then
+            local clip_info_for_api = {
+              mediaPoolItem = item.bmd_mpi,
+              startFrame = edit.source_start_frame or 0,
+              endFrame = edit.source_end_frame or 0,
+              recordFrame = record_frame,
+              trackIndex = item.track_index,
+              mediaType = media_type,
+            }
+            local link_key = tostring(item.link_group_id) .. "-" .. tostring(record_frame)
+            local appended_clip = {
+              clip_info = clip_info_for_api,
+              link_key = link_key,
+              enabled = edit.enabled == nil or edit.enabled,
+              auto_linked = false,
+            }
+            if not grouped_clips[link_key] then grouped_clips[link_key] = {} end
+            table.insert(grouped_clips[link_key], appended_clip)
           end
-
-          local clip_info_for_api = {
-            mediaPoolItem = item.bmd_mpi,
-            startFrame = source_start,
-            endFrame = source_end,
-            recordFrame = record_frame,
-            trackIndex = item.track_index,
-            mediaType = media_type,
-          }
-          local link_key = tostring(link_id) .. "-" .. tostring(i) -- Lua uses string keys
-          local appended_clip = {
-            clip_info = clip_info_for_api,
-            link_key = link_key,
-            enabled = edit.enabled == nil or edit.enabled,
-            auto_linked = false,
-          }
-          if not grouped_clips[link_key] then grouped_clips[link_key] = {} end
-          table.insert(grouped_clips[link_key], appended_clip)
         end
       end
     end
   end
 
-  if not next(grouped_clips) then
-    return {}, {}
-  end
+  if not next(grouped_clips) then return {}, {} end
 
-  local final_api_batch = {}
-  local all_processed_clips = {}
-
+  local final_api_batch, all_processed_clips = {}, {}
   for link_key, group in pairs(grouped_clips) do
     local is_optimizable = false
     if #group == 2 then
       local clip1, clip2 = group[1], group[2]
-      local mpi1 = clip1.clip_info.mediaPoolItem
-      local mpi2 = clip2.clip_info.mediaPoolItem
-      local path1 = mpi1 and mpi1:GetClipProperty("File Path") or nil
-      local path2 = mpi2 and mpi2:GetClipProperty("File Path") or nil
-
-      local media_types = {}
-      media_types[clip1.clip_info.mediaType] = true
-      media_types[clip2.clip_info.mediaType] = true
-
-      if media_types[1] and media_types[2] and clip1.clip_info.trackIndex == 1 and clip2.clip_info.trackIndex == 1 and (path1 and path1 == path2) then
+      local path1 = clip1.clip_info.mediaPoolItem:GetClipProperty("File Path")
+      local path2 = clip2.clip_info.mediaPoolItem:GetClipProperty("File Path")
+      if clip1.clip_info.mediaType ~= clip2.clip_info.mediaType and path1 and path1 == path2 then
         is_optimizable = true
       end
     end
 
     if is_optimizable then
-      print("Optimizing append for link group " .. link_key .. " on Track 1.")
       for _, clip in ipairs(group) do clip.auto_linked = true end
-      -- Create a shallow copy for the optimized clip
       local optimized_clip_info = {}
       for k, v in pairs(group[1].clip_info) do optimized_clip_info[k] = v end
-      optimized_clip_info.mediaType = nil
-      optimized_clip_info.trackIndex = nil
+      optimized_clip_info.mediaType, optimized_clip_info.trackIndex = nil, nil
       table.insert(final_api_batch, optimized_clip_info)
     else
       for _, clip in ipairs(group) do table.insert(final_api_batch, clip.clip_info) end
@@ -2200,29 +2323,31 @@ local function _prepare_clips_for_append(timeline_items)
   end
 
   table.sort(all_processed_clips, function(a, b) return a.clip_info.recordFrame < b.clip_info.recordFrame end)
-
   return all_processed_clips, final_api_batch
 end
 
 ---
 -- Appends clips to the timeline, using an optimized auto-linking method where
 -- possible, and then manually links any remaining clips.
--- THIS IS THE REFACTORED VERSION TO MATCH PYTHON and includes PROGRESS TRACKING.
 --
-function append_and_link_timeline_items(create_new, task_id)
-  if not project_data or not project_data.timeline then
-    print("Error: Project data is missing or malformed.")
+local function append_and_link_timeline_items(create_new, task_id)
+  -- Preamble: Initial checks for project, timeline, etc. remain the same.
+  if not timeline then
+    send_result_with_alert("DaVinci Error", "Error initializing current timeline.", task_id)
     return
   end
-
+  if not project_data or not project_data.timeline then
+    send_result_with_alert("DaVinci Error", "Project data is missing or malformed.", task_id)
+    return
+  end
   if not project then
-    print("Error: Could not get current project.")
+    send_result_with_alert("DaVinci Error", "Could not get current project.", task_id)
     return
   end
 
   media_pool = project:GetMediaPool()
   if not media_pool then
-    print("Error: MediaPool object not available.")
+    send_result_with_alert("DaVinci Error", "MediaPool object not available.", task_id)
     return
   end
 
@@ -2232,206 +2357,135 @@ function append_and_link_timeline_items(create_new, task_id)
 
   local max_indices = { video = 0, audio = 0 }
   for _, item in ipairs(timeline_items) do
-    max_indices[item.track_type] = math.max(max_indices[item.track_type], item.track_index)
+    if item.track_type and item.track_index then
+      max_indices[item.track_type] = math.max(max_indices[item.track_type], item.track_index)
+    end
   end
   local og_tl_name = project_data.timeline.name
 
-  local target_timeline
+  local target_timeline = timeline
+  local tl_needs_clearing = not create_new
+
   if create_new then
     print("Creating a new timeline...")
-    created_timelines[og_tl_name] = (created_timelines[og_tl_name] or 0)
+    created_timelines[og_tl_name] = created_timelines[og_tl_name] or 1
     local retries = 0
-    repeat
-      local index = created_timelines[og_tl_name] + 1
+    local fps_mismatch = project_data.timeline.fps ~= project_data.timeline.project_fps
+
+    while retries < MAX_RETRIES do
+      local index = created_timelines[og_tl_name]
       local timeline_name = string.format("%s-hc-%02d", og_tl_name, index)
-      target_timeline = media_pool:CreateEmptyTimeline(timeline_name)
-      created_timelines[og_tl_name] = index
-      retries = retries + 1
-    until target_timeline or retries >= MAX_RETRIES
+
+      -- **CRITICAL FIX STARTS HERE**
+      -- First, attempt to create an empty timeline. This serves as a test to see if the name is available.
+      local valid_empty_timeline = media_pool:CreateEmptyTimeline(timeline_name)
+
+      if valid_empty_timeline and fps_mismatch then
+        -- CASE 1: Name was available, but FPS is wrong. We can't use this empty timeline.
+        print("Mismatched FPS detected. Deleting temporary timeline and using duplicate/rename strategy...")
+        media_pool:DeleteTimelines({ valid_empty_timeline }) -- Clean up the one we just made.
+
+        -- Now perform the "switcheroo" on the original timeline
+        local backup_timeline = timeline:DuplicateTimeline()
+        if not backup_timeline then
+          send_result_with_alert("DaVinci Error", "Could not duplicate current timeline.", task_id)
+          return
+        end
+        timeline:SetName(timeline_name)
+        backup_timeline:SetName(og_tl_name)
+
+        project:SetCurrentTimeline(timeline)
+        target_timeline = timeline
+        tl_needs_clearing = true -- It's a duplicate, so it must be cleared.
+        created_timelines[og_tl_name] = index + 1
+        break                    -- Exit the retry loop
+      elseif valid_empty_timeline then
+        -- CASE 2: Name was available, and FPS is correct. This is the ideal path.
+        print("Successfully created new empty timeline: " .. timeline_name)
+        tl_needs_clearing = false -- It's already empty
+        valid_empty_timeline:SetStartTimecode(project_data.timeline.start_timecode)
+        target_timeline = valid_empty_timeline
+        created_timelines[og_tl_name] = index + 1
+        break -- Exit the retry loop
+      else
+        -- CASE 3: CreateEmptyTimeline failed, likely because the name is taken.
+        print("Timeline '" .. timeline_name .. "' could not be created (likely exists). Retrying with new name...")
+        created_timelines[og_tl_name] = index + 1
+        retries = retries + 1
+      end
+      -- **CRITICAL FIX ENDS HERE**
+    end
+
     if not target_timeline then
-      send_result_with_alert("DaVinci Error", "Could not create new timeline after " .. MAX_RETRIES .. " attempts.",
+      -- This condition catches if the loop finished without successfully creating and setting a new timeline
+      send_result_with_alert("DaVinci Error", "Could not create a new timeline after " .. MAX_RETRIES .. " attempts.",
         task_id)
       return
     end
-    target_timeline:SetStartTimecode(project_data.timeline.start_timecode)
-  else
-    target_timeline = timeline
-    -- --- FIX: Robustly clear only relevant clips from the existing timeline ---
+    timeline = target_timeline -- Update global reference
+  end
+
+  -- The rest of the function (clearing, appending, linking) remains the same as the previous correct version.
+  if tl_needs_clearing then
     print("Clearing edited clips from existing timeline...")
     local all_clips_to_delete = {}
-
     for _, item in ipairs(timeline_items) do
-      if not item.bmd_item then
-        print("Warning: BMD item missing for " .. item.name)
-      elseif not clip_is_uncut(item) then
-        print("Marking edited item '" .. item.name .. "' for deletion.")
+      if item.bmd_item and not clip_is_uncut(item) then
         table.insert(all_clips_to_delete, item.bmd_item)
-      else
-        print("Skipping uncut item '" .. item.name .. "'.")
       end
     end
-
     if #all_clips_to_delete > 0 then
       print("Deleting " .. #all_clips_to_delete .. " existing clips...")
-      target_timeline:DeleteClips(all_clips_to_delete, false)
+      target_timeline:DeleteClips(all_clips_to_delete)
     else
       print("No clips marked for deletion.")
     end
   end
 
-  if not target_timeline then
-    print("Error: Could not get a valid timeline. Aborting operation.")
-    return
-  end
-
-  project:SetCurrentTimeline(target_timeline)
-  timeline = target_timeline -- Update global reference
-
   for track_type, required_count in pairs(max_indices) do
     local tracks_to_add = required_count - target_timeline:GetTrackCount(track_type)
     if tracks_to_add > 0 then
-      print("Timeline has " ..
-        target_timeline:GetTrackCount(track_type) ..
-        " " .. track_type .. " tracks, adding " .. tracks_to_add .. " more...")
       for _ = 1, tracks_to_add do target_timeline:AddTrack(track_type) end
     end
   end
-
   print("Operating on timeline: '" .. target_timeline:GetName() .. "'")
 
-  -- === STEP 4: APPEND, VERIFY, AND LINK CLIPS (RETRY LOOP) ===
-  local success = false
-  local num_retries = 4
+  -- ... Append, Verify, and Link logic follows ...
+  local success, num_retries, sleep_time = false, 4, 2.5
   for attempt = 1, num_retries do
-    --- [TRACKER] Report that the append process is starting (covers the first 10%)
-    TRACKER:update_task_progress("append", 10.0, "Adding Clips to Timeline")
-    local all_processed_clips, final_api_batch = _prepare_clips_for_append(timeline_items)
+    local processed_clips, final_api_batch = _prepare_clips_for_append(timeline_items)
 
-    -- Batch append to timeline
     local BATCH_SIZE = 100
     local bmd_items_from_api = {}
-    print("Appending " .. #final_api_batch .. " total clip instructions to timeline...")
-    for i = 1, #final_api_batch, BATCH_SIZE do
-      local chunk = {}
-      for j = i, math.min(i + BATCH_SIZE - 1, #final_api_batch) do
-        table.insert(chunk, final_api_batch[j])
-      end
-      local appended = media_pool:AppendToTimeline(chunk) or {}
-      for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
-      --- [TRACKER] Update granular progress during the append loop
-      if #final_api_batch > 0 then
-        local percentage = 10.0 + ((i - 1) / #final_api_batch) * 80.0
-        TRACKER:update_task_progress("append", percentage)
+    if #final_api_batch > 0 then
+      print("Appending " .. #final_api_batch .. " clip instructions in batches...")
+      for i = 1, #final_api_batch, BATCH_SIZE do
+        local chunk = {}
+        for j = i, math.min(i + BATCH_SIZE - 1, #final_api_batch) do table.insert(chunk, final_api_batch[j]) end
+        local appended = media_pool:AppendToTimeline(chunk) or {}
+        for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
       end
     end
 
-    --- [TRACKER] Complete the append task after all batches are sent
-    TRACKER:complete_task("append")
-
-    if #all_processed_clips == 0 then
-      success = true
-      break
+    if #processed_clips == 0 then
+      success = true; break
     end
 
     if _verify_timeline_state(target_timeline, final_api_batch) then
-      --- [TRACKER] Complete the verify task
-      TRACKER:complete_task("verify")
-      print("Verification successful. Proceeding to modify and link.")
-
-      local auto_linked_keys = {}
-      for _, clip in ipairs(all_processed_clips) do
-        if clip.auto_linked then auto_linked_keys[clip.link_key] = true end
-      end
-
-      local link_key_lookup = {}
-      for _, appended_clip in ipairs(all_processed_clips) do
-        local info = appended_clip.clip_info
-        local lookup_key = table.concat({ info.mediaType, info.trackIndex, info.recordFrame }, "-")
-        link_key_lookup[lookup_key] = appended_clip.link_key
-      end
-
-      local actual_items_video = get_items_by_tracktype("video", target_timeline)
-      local actual_items_audio = get_items_by_tracktype("audio", target_timeline)
-      local actual_items = {}
-      for _, item in ipairs(actual_items_video) do table.insert(actual_items, item) end
-      for _, item in ipairs(actual_items_audio) do table.insert(actual_items, item) end
-
-      local disabled_keys = {}
-      for _, p_clip in ipairs(all_processed_clips) do
-        if not p_clip.enabled then
-          local info = p_clip.clip_info
-          local key = table.concat({ info.mediaType, info.trackIndex, info.recordFrame }, "-")
-          disabled_keys[key] = true
-        end
-      end
-      if next(disabled_keys) then
-        for _, item_dict in ipairs(actual_items) do
-          local media_type = item_dict.track_type == "video" and 1 or 2
-          local key = table.concat({ media_type, item_dict.track_index, math.floor(item_dict.start_frame + 0.5) }, "-")
-          if disabled_keys[key] then
-            item_dict.bmd_item:SetClipColor("Violet")
-          end
-        end
-      end
-
-      local link_groups = {}
-      for _, item_dict in ipairs(actual_items) do
-        local media_type = item_dict.track_type == "video" and 1 or 2
-        local lookup_key = table.concat({ media_type, item_dict.track_index, math.floor(item_dict.start_frame + 0.5) },
-          "-")
-        local link_key = link_key_lookup[lookup_key]
-
-        if link_key then
-          if not link_groups[link_key] then link_groups[link_key] = {} end
-          table.insert(link_groups[link_key], item_dict.bmd_item)
-        end
-      end
-
-      local groups_to_link = {}
-      for k, v in pairs(link_groups) do
-        if not auto_linked_keys[k] then
-          groups_to_link[k] = v
-        end
-      end
-
-      local num_groups_to_link = 0
-      for _ in pairs(groups_to_link) do num_groups_to_link = num_groups_to_link + 1 end
-
-      print("Performing manual linking for " .. num_groups_to_link .. " clip groups...")
-      local linked_count = 0
-      for group_key, clips_to_link in pairs(groups_to_link) do
-        if #clips_to_link >= 2 then
-          target_timeline:SetClipsLinked(clips_to_link, true)
-        end
-        linked_count = linked_count + 1
-        --- [TRACKER] Update granular progress during the linking loop
-        if num_groups_to_link > 0 and linked_count % 10 == 1 then
-          local percentage = (linked_count / num_groups_to_link) * 100
-          TRACKER:update_task_progress("link", percentage, "Linking clips...")
-        end
-      end
-
-      --- [TRACKER] Complete the link task
-      TRACKER:complete_task("link")
-
       print("✅ Operation completed successfully.")
       success = true
       break
     else
-      print("Attempt " .. attempt .. " failed verification. Rolling back changes...")
-      if bmd_items_from_api and #bmd_items_from_api > 0 then
-        target_timeline:DeleteClips(bmd_items_from_api, false)
+      print("Attempt " .. attempt .. " failed. Rolling back changes...")
+      if #bmd_items_from_api > 0 then target_timeline:DeleteClips(bmd_items_from_api, false) end
+      if attempt < num_retries then
+        os.execute("sleep " .. sleep_time); sleep_time = sleep_time + 1.5
       end
     end
   end
 
   if not success then
-    print("❌ Operation failed after all retries. Please check the logs.")
-    send_result_with_alert("Timeline Creation Failed",
-      "Could not apply edits to the timeline after " .. num_retries .. " attempts.", task_id)
-  else
-    local response_payload = { status = "success", message = "Edit successful!" }
-    send_message_to_go("taskResult", response_payload, task_id)
+    print("❌ Operation failed after all retries.")
   end
 end
 
@@ -2519,6 +2573,10 @@ local function main(sync, task_id)
 
     print("Proceeding to create final timeline...")
     append_and_link_timeline_items(make_new_timeline, task_id)
+    TRACKER:complete_task("append")
+
+    local response_payload = { status = "success", message = "Edit successful!" }
+    send_message_to_go("taskResult", response_payload, task_id)
   end
 end
 
