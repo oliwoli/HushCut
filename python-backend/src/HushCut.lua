@@ -2653,8 +2653,19 @@ if go_app_path and free_port then
     return
   end
 
+  local req_auth = ""
   for line in handle:lines() do
     print("server output: " .. line)
+
+    if line:find("---- Incoming Request ----") then
+      -- reset auth for new request
+      req_auth = ""
+    end
+
+    if line:find("Header: Authorization: Bearer") then
+      req_auth = line:match("Authorization: Bearer (.*)")
+      print("request auth is:<" .. req_auth .. ">")
+    end
 
     -- try to parse the line as JSON
     local json_data, pos, err = nil, nil, nil
@@ -2677,22 +2688,25 @@ if go_app_path and free_port then
 
     if json_data then
       params = json_data.params
-      if not params then
-        -- print("No params found in JSON data.")
-      else
-        -- print("Params found in JSON data: " .. json.encode(params))
-      end
+      -- if not params then
+      --   break
+      -- end
     end
 
     if params and params.taskId then
       task_id = params.taskId
     end
 
+    local auth_passed = false
+    if req_auth == AUTH_TOKEN then
+      auth_passed = true
+    end
+
     if json_data and json_data.go_server_port then
       print("Register endpoint called.")
       go_server_port = json_data.go_server_port
       print("Go server port detected: " .. go_server_port)
-    elseif json_data and json_data.command then
+    elseif auth_passed and json_data and json_data.command then
       local command = json_data.command
       print("Command detected: " .. command)
       if command == "sync" then
@@ -2713,7 +2727,7 @@ if go_app_path and free_port then
         else
           send_result_with_alert("Data Error", "makeFinalTimeline command received without projectData.", task_id)
         end
-      elseif command == "saveProject" then
+      elseif auth_passed and command == "saveProject" then
         if not pm then
           main(true)
         end
@@ -2724,7 +2738,7 @@ if go_app_path and free_port then
         else
           send_result_with_alert("Error", "No project is open to save.", task_id)
         end
-      elseif command == "setPlayhead" then
+      elseif auth_passed and command == "setPlayhead" then
         if params then
           local time_value = params.time
           if time_value and set_timecode(time_value) then
