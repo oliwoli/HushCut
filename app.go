@@ -45,13 +45,17 @@ type App struct {
 	fileUsage                map[string]time.Time // New field for file usage tracking
 	mu                       sync.Mutex           // Mutex to protect fileUsage
 
+	// -- HTTP -- //
 	httpClient *http.Client
+	authToken  string
 
-	// --- NEW FIELDS FOR FFmpeg STATE ---
+	// --- FFmpeg STATE ---
 	ffmpegMutex     sync.RWMutex  // Protects hasFfmpeg flag
 	ffmpegReadyChan chan struct{} // Used to signal when FFmpeg is ready
 	ffmpegOnce      sync.Once     // Ensures the ready channel is closed only once
-	AppVersion      string
+	// ----- //
+
+	AppVersion string
 }
 
 // NewApp creates a new App application struct
@@ -163,6 +167,17 @@ func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 	cmd := exec.Command(determinedPath, cmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		defer stdin.Close()
+		io.WriteString(stdin, a.authToken)
+	}()
+
 	a.pythonCmd = cmd
 
 	if err := cmd.Start(); err != nil {

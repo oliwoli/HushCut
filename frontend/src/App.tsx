@@ -19,7 +19,7 @@ import {
   MakeFinalTimeline,
 } from "@wails/go/main/App";
 
-import { GetPythonReadyStatus } from "@wails/go/main/App";
+import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
 import { EventsEmit, EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
@@ -33,7 +33,7 @@ import { createPortal } from "react-dom";
 import { ThresholdControl } from "./components/controls/ThresholdControl";
 import { TitleBar } from "./titlebar";
 
-import { useSyncBusyState } from "./stores/appSync";
+import { useAppState } from "./stores/appSync";
 
 import {
   defaultParameters,
@@ -153,11 +153,11 @@ function AppContent() {
     }
   }, [ffmpegReady, prevFfmpegReady]);
 
-  const isBusy = useSyncBusyState(s => s.isBusy);
-  const setBusy = useSyncBusyState(s => s.setBusy);
+  const isBusy = useAppState(s => s.isBusy);
+  const setBusy = useAppState(s => s.setBusy);
 
-  const setHasProjectData = useSyncBusyState(s => s.setHasProjectData);
-  const setTimelineName = useSyncBusyState(s => s.setTimelineName);
+  const setHasProjectData = useAppState(s => s.setHasProjectData);
+  const setTimelineName = useAppState(s => s.setTimelineName);
 
   const currentClipId = useClipStore(s => s.currentClipId);
   const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
@@ -165,6 +165,8 @@ function AppContent() {
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
+  const token = useAppState(s => s.token);
+  const setToken = useAppState(s => s.setToken);
 
   //const projectData = useGlobalStore((s) => s.projectData);
   const [projectData, setProjectData] =
@@ -423,6 +425,11 @@ function AppContent() {
       if (initialInitDone.current) return;
       console.log("App.tsx: Attempting to get Go HTTP server port...");
       try {
+        const goToken = await GetToken();
+        if (goToken) {
+          setToken(goToken)
+        }
+
         const port = await GetGoServerPort();
 
         if (port && port > 0) {

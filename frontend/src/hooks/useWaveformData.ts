@@ -2,15 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { GetWaveform } from '@wails/go/main/App';
-import { main } from "@wails/go/models";
+import { main } from '@wails/go/models';
 import type { ActiveClip } from '../types'; // Adjust path to types.ts
+import { useAppState } from '@/stores/appSync';
 
 
 
 export function useWaveformData(
     activeClip: ActiveClip | null,
     fps: number | 30,
-    httpPort: number | null
+    httpPort: number | null,
 ) {
     const TARGET_PEAK_COUNT = 256;
     const ASSUMED_SAMPLE_RATE = 48000; 
@@ -20,6 +21,8 @@ export function useWaveformData(
     const [peakData, setPeakData] = useState<main.PrecomputedWaveformData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const token = useAppState(s => s.token)
 
 
     useEffect(() => {
@@ -57,7 +60,7 @@ export function useWaveformData(
 
                 const newCutAudioUrl = `http://localhost:${httpPort}/render_clip?file=${encodeURIComponent(
                     activeClip.processedFileName
-                )}&start=${clipStartSeconds}&end=${clipEndSeconds}`;
+                )}&start=${clipStartSeconds}&end=${clipEndSeconds}&token=${token}`;
 
                 const peakDataForSegment = await GetWaveform(
                     activeClip.processedFileName,
@@ -92,6 +95,6 @@ export function useWaveformData(
         return () => {
             isCancelled = true;
         };
-    }, [activeClip, fps, httpPort]);
+    }, [activeClip, fps, httpPort, token]);
     return { cutAudioSegmentUrl, peakData, isLoading, error };
 }

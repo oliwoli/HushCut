@@ -13,7 +13,7 @@ import { main } from "@wails/go/models";
 import type { DetectionParams, SilencePeriod } from "../types";
 
 import { ClipStore, useClipStore, useGlobalStore } from '@/stores/clipStore';
-import { useSyncBusyState } from "@/stores/appSync";
+import { useAppState } from "@/stores/appSync";
 import { cn } from "./utils";
 
 
@@ -186,7 +186,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
 
   const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
   const keepSilence = useGlobalStore(s => s.keepSilence);
-  const setBusy = useSyncBusyState(s => s.setBusy);
+  const setBusy = useAppState(s => s.setBusy);
 
   // Single ref to manage the entire cache. No more duplicating Zustand state.
   const cacheRef = useRef<ProcessedDataCache | null>(null);
@@ -266,7 +266,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
 
   const handleClick = async () => {
     if (isProcessingClick) return;
-    const isBusy = useSyncBusyState.getState().isBusy;
+    const isBusy = useAppState.getState().isBusy;
     if (isBusy) {
       props.onPendingAction();
       console.log("App is busy, deferring Remove Silences action.");
