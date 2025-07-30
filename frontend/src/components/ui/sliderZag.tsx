@@ -88,7 +88,7 @@ export default function SliderZag({
           {/* Range Fill */}
           <div
             {...api.getRangeProps()}
-            className="h-full bg-transparent rounded-full"
+            className="h-full bg-teal-700 rounded-full"
           />
         </div>
 
