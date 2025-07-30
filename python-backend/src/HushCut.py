@@ -39,7 +39,7 @@ TIMELINE = None
 MEDIA_POOL = None
 
 # This will be the token Go sends, which Python expects for Go-to-Python commands (future)
-AUTH_TOKEN = None
+AUTH_TOKEN: str = ""
 ENABLE_COMMAND_AUTH = False  # Master switch for auth on Python's command server
 GO_SERVER_PORT = 0
 PYTHON_LISTEN_PORT = 0
@@ -1126,6 +1126,8 @@ TRACKER = ProgressTracker()
 
 def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] = None):
     global GO_SERVER_PORT
+    global AUTH_TOKEN
+
     if GO_SERVER_PORT == 0:
         print("Python Error: Go server port not configured. Cannot send message to Go.")
         return False
@@ -1134,7 +1136,8 @@ def send_message_to_go(message_type: str, payload: Any, task_id: Optional[str] =
     conn = None
     try:
         conn = HTTPConnection("localhost", GO_SERVER_PORT, timeout=5)
-        headers = {"Content-Type": "application/json"}
+        auth_bearer = f"Bearer {AUTH_TOKEN}"
+        headers = {"Content-Type": "application/json", "Authorization": auth_bearer}
 
         # Helper to serialize objects that might not be directly JSON serializable
         def fallback_serializer(obj):
@@ -2527,12 +2530,14 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
         """Sends a JSON response with the given status code and data."""
         self.send_response(status_code)
         self.send_header("Content-type", "application/json")
+        self.send_header("Authorization", value=AUTH_TOKEN)
         self.end_headers()
         self.wfile.write(json.dumps(data_dict).encode("utf-8"))
 
     def do_POST(self):
         """Routes POST requests to the appropriate handler based on the URL path."""
         global PROJECT_DATA
+        global AUTH_TOKEN
         # --- Route 1: /register ---
         # Handles the initial registration from the Go application.
         if self.path == "/register":
@@ -2724,8 +2729,11 @@ def init():
     global FFMPEG
     global PYTHON_LISTEN_PORT
     global SERVER_INSTANCE_HOLDER
+    global AUTH_TOKEN
 
-    print("2")
+    AUTH_TOKEN = sys.stdin.read().strip()
+
+    print(f"Auth token is: {AUTH_TOKEN}")  # TODO: remove this print for production!!
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
