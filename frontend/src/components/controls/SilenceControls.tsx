@@ -108,7 +108,7 @@ const _PaddingControl = React.memo(() => {
                                 className="w-32"
                                 disabled={isDisabled}
                             />
-                            <Button variant="ghost" size="icon" onClick={() => setPaddingLocked(!paddingLocked)} className="text-zinc-500 hover:text-zinc-300 text-center" disabled={isDisabled}>
+                            <Button variant="ghost" size="icon" onClick={() => setPaddingLocked(!paddingLocked)} className="text-zinc-500 pl-2 hover:text-zinc-300 text-center" disabled={isDisabled}>
                                 {paddingLocked ? <Link className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
                             </Button>
                         </div>
@@ -140,7 +140,7 @@ const _PaddingControl = React.memo(() => {
                                 disabled={isDisabled}
                                 dir='rtl'
                             />
-                            <ResetButton onClick={resetPadding} disabled={isDisabled} />
+                            <span className='relative left-4'><ResetButton onClick={resetPadding} disabled={isDisabled} /></span>
                         </div>
                         <div className='flex gap-2 text-center'>
                             <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
@@ -206,7 +206,7 @@ const _MinContentControl = React.memo(() => {
                         {minContent.toFixed(2)}
                         <span className="text-zinc-400 ml-1">s</span>
                     </span>
-                    <ResetButton onClick={resetMinDuration} disabled={isDisabled} />
+                    <span className='relative'><ResetButton onClick={resetMinDuration} disabled={isDisabled} /></span>
                 </div>
             </div>
         </div>
