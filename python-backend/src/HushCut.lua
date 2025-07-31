@@ -978,8 +978,8 @@ end
 
 
 
-local function find_free_port(go_script_path)
-  local handle = io.popen(quote(go_script_path) .. " --find-port")
+local function find_free_port()
+  local handle = io.popen(quote(go_app_path) .. " --lua-helper" .. " --find-port")
   if handle then
     local port = handle:read("*a")
     handle:close()
@@ -1012,8 +1012,7 @@ end
 
 
 
-local go_script_path = script_dir .. "lua-go-http"
-local free_port = find_free_port(go_script_path)
+local free_port = find_free_port()
 
 
 
@@ -1091,7 +1090,7 @@ end
 -- UUID generator with optional deterministic seed
 local function uuid()
   -- call the script with --uuid-from-str <path>
-  local command = string.format("%s --uuid 1", quote(go_script_path))
+  local command = string.format("%s --lua-helper --uuid 1", quote(go_app_path))
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID")
@@ -1112,7 +1111,7 @@ end
 -- Placeholder for a function that creates a UUID from a file path.
 local function uuid_from_path(path)
   -- call the script with --uuid-from-str <path>
-  local command = string.format("%s --uuid-from-str '%s'", quote(go_script_path), path)
+  local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(go_app_path), path)
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from path: " .. path)
@@ -1182,7 +1181,7 @@ local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
   seed_string = seed_string .. "nested_clips[" .. table.concat(nested_strings, "||") .. "]"
 
   -- 3. Generate a deterministic UUID from the canonical seed string by calling Go helper.
-  local command = string.format("%s --uuid-from-str '%s'", quote(go_script_path), seed_string)
+  local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(go_app_path), seed_string)
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from string.")
@@ -2645,7 +2644,7 @@ if go_app_path and free_port then
   print("Starting HushCut app with command: " .. hushcut_command)
   os.execute(hushcut_command)
 
-  local server_command = quote(go_script_path) .. " --port=" .. free_port .. " 2>&1"
+  local server_command = quote(go_app_path) .. " --lua-helper" .. " --port=" .. free_port .. " 2>&1"
   print("Starting http server with command: " .. server_command)
   local handle = io.popen(server_command)
   if not handle then

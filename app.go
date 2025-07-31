@@ -207,6 +207,7 @@ func binaryExists(path string) bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	fmt.Print("startup")
 
 	// Initialize effectiveAudioFolderPath based on platform
 	goExecutablePath, err_exec := os.Executable()

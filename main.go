@@ -308,6 +308,8 @@ func main() {
 	uuidCount := flag.Int("uuid", 0, "generate N random UUIDs")
 	uuidStr := flag.String("uuid-from-str", "", "comma-separated list of strings to generate deterministic UUIDs")
 
+	pythonPort := flag.Int("python-port", 0, "port python should listen on")
+
 	flag.Parse()
 	if *luaMode {
 		startInLuaHelperMode(
@@ -318,9 +320,13 @@ func main() {
 		)
 		return
 	}
+	fmt.Print("Starting in normal mode... ?")
 
 	// Create an instance of the app structure
 	app := NewApp()
+	if *pythonPort != 0 {
+		app.pythonCommandPort = *pythonPort
+	}
 	tokenFromStdIn, stdinErr := io.ReadAll(os.Stdin)
 	if stdinErr != nil {
 		fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", stdinErr)
