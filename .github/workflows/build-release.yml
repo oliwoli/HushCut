@@ -42,6 +42,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Print Git ref
+        run: echo "Ref is $GITHUB_REF"
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -54,9 +57,9 @@ jobs:
 
       - name: Install Python deps
         run: |
-          pip install --upgrade pip setuptools wheel
-          pip install -r python-backend/requirements.txt
-          pip install pyinstaller
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r python-backend/requirements.txt
+          python -m pip install pyinstaller
 
       - name: Build Python backend
         run: |
@@ -67,13 +70,6 @@ jobs:
             cp -r dist/python_backend/_internal build/bin/
           fi
           rm -rf dist build/python_backend
-
-      - name: Build lua-go-http
-        run: |
-          cd lua-go-http
-          go build .
-          cd ..
-          cp lua-go-http/lua-go-http${{ matrix.ext }} build/bin/
 
       - name: Copy Lua script
         run: cp python-backend/src/HushCut.lua build/bin/
@@ -94,12 +90,16 @@ jobs:
           RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
           mkdir -p "$RESOURCE_DIR"
           mv -v build/bin/python_backend "$RESOURCE_DIR/"
-          mv -v build/bin/lua-go-http "$RESOURCE_DIR/"
           mv -v build/bin/HushCut.lua "$RESOURCE_DIR/"
 
       - name: Zip bin folder
         if: startsWith(github.ref, 'refs/tags/')
-        run: zip -r HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -Command "Compress-Archive -Path build/bin/* -DestinationPath HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
+          else
+            zip -r HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip build/bin
+          fi
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/tags/')
