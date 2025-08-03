@@ -587,8 +587,8 @@ func (a *App) shutdown(ctx context.Context) {
 	log.Println("Wails App: OnShutdown called.")
 
 	// Save file usage data and clean up old files
-	a.saveUsageData()
 	a.cleanupOldFiles()
+	a.saveUsageData()
 
 	// Case 1: The Go app launched the Python process. We own it and can terminate it.
 	if a.pythonCmd != nil && a.pythonCmd.Process != nil {
@@ -1164,9 +1164,9 @@ func (a *App) updateFileUsage(filePath string) {
 		return
 	}
 
-	// CRITICAL SAFETY CHECK: Only track files within effectiveAudioFolderPath
+	// CRITICAL SAFETY CHECK: Only track files within tmp path
 	if !strings.HasPrefix(absPath, a.tmpPath) {
-		log.Printf("WARNING: Attempted to track file outside effectiveAudioFolderPath. Skipping: %s", absPath)
+		log.Printf("WARNING: Attempted to track file outside tmp path. Skipping: %s", absPath)
 		return
 	}
 
@@ -1273,7 +1273,7 @@ func (a *App) cleanupOldFiles() {
 		log.Printf("Error getting settings for cleanup threshold: %v", err)
 		// Fallback to default if settings can't be read
 		settings = make(map[string]any)
-		settings["cleanupThresholdDays"] = 30
+		settings["cleanupThresholdDays"] = 14
 		settings["enableCleanup"] = true // Default to true if settings can't be read
 	}
 
@@ -1287,7 +1287,7 @@ func (a *App) cleanupOldFiles() {
 		return
 	}
 
-	cleanupThresholdDays := 30                                     // Default value
+	cleanupThresholdDays := 14                                     // Default value
 	if val, ok := settings["cleanupThresholdDays"].(float64); ok { // JSON numbers are float64 in Go
 		cleanupThresholdDays = int(val)
 	} else if val, ok := settings["cleanupThresholdDays"].(int); ok {
@@ -1308,6 +1308,10 @@ func (a *App) cleanupOldFiles() {
 		log.Printf("Deleting old file: %s (last used %s ago)", filePath, now.Sub(a.fileUsage[filePath]))
 		if err := os.Remove(filePath); err != nil {
 			log.Printf("Error deleting file %s: %v", filePath, err)
+			// if "no such file" error, remove from fileUsage map
+			if os.IsNotExist(err) {
+				delete(a.fileUsage, filePath)
+			}
 		} else {
 			delete(a.fileUsage, filePath)
 		}

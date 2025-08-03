@@ -26,7 +26,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     const [internalOpen, setInternalOpen] = useState(false);
     const [dialogOpacity, setDialogOpacity] = useState(1);
     const [davinciFolderPath, setDavinciFolderPath] = useState("");
-    const [cleanupThreshold, setCleanupThreshold] = useState(30);
+    const [cleanupThreshold, setCleanupThreshold] = useState(14);
     const [enableCleanup, setEnableCleanup] = useState(true);
 
     useEffect(() => {
