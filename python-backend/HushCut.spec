@@ -5,7 +5,6 @@ a = Analysis(
     ['src/HushCut.py'],
     pathex=[],
     binaries=[],
-    datas=[('src/hushcut_lib', 'hushcut_lib')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

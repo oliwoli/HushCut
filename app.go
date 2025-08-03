@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math"
 	"net/http"
@@ -151,20 +153,84 @@ func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
 	}
 }
 
+//go:embed all:build/bin/python_backend
+var embeddedPythonBackend embed.FS
+var extractedBackendPath string
+
+func extractEmbeddedBackend(tempDir string) (string, error) {
+	const embedRoot = "build/bin/python_backend"
+	var extractedBinaryPath string
+
+	// Get a sub-filesystem rooted at the directory we want to extract
+	subFS, err := fs.Sub(embeddedPythonBackend, embedRoot)
+	if err != nil {
+		return "", fmt.Errorf("failed to get sub-filesystem for embedded backend: %w", err)
+	}
+
+	// Walk the sub-filesystem and recreate it in the temp directory
+	err = fs.WalkDir(subFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Path is now relative to the sub-filesystem root (e.g., "python_backend" or "_internal/somefile")
+		targetPath := filepath.Join(tempDir, path)
+
+		if d.IsDir() {
+			return os.MkdirAll(targetPath, 0755)
+		}
+
+		data, err := fs.ReadFile(subFS, path)
+		if err != nil {
+			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
+		}
+
+		mode := os.FileMode(0644)
+		// The executable is now at the root of the sub-filesystem
+		if path == "python_backend" || path == "python_backend.exe" {
+			mode = 0755
+			extractedBinaryPath = targetPath
+		}
+
+		return os.WriteFile(targetPath, data, mode)
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("failed to extract embedded files: %w", err)
+	}
+
+	if extractedBinaryPath == "" {
+		return "", fmt.Errorf("could not locate extracted binary in embedded files")
+	}
+
+	return extractedBinaryPath, nil
+}
+
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
-	determinedPath, err := a.ResolveBinaryPath("python_backend")
+	tempDir, err := os.MkdirTemp("", "python_backend")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	log.Printf("Resolved path to python_backend: %s", determinedPath)
+	exePath, err := extractEmbeddedBackend(tempDir)
+	if err != nil {
+		return fmt.Errorf("failed to extract python backend: %w", err)
+	}
+	extractedBackendPath = exePath
+	log.Printf("Extracted backend to: %s", extractedBackendPath)
+
+	if extractedBackendPath == "" {
+		return fmt.Errorf("backend not initialized")
+	}
+
+	log.Printf("Resolved path to python_backend: %s", extractedBackendPath)
 
 	cmdArgs := []string{
 		"--go-port", fmt.Sprintf("%d", port),
 		"--listen-on-port", fmt.Sprintf("%d", pythonCommandPort),
 	}
 
-	cmd := exec.Command(determinedPath, cmdArgs...)
+	cmd := exec.Command(extractedBackendPath, cmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -183,7 +249,7 @@ func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	log.Printf("Go app: Python backend process started (PID: %d, Path: '%s'). Waiting for its HTTP ready signal.\n", cmd.Process.Pid, determinedPath)
+	log.Printf("Go app: Python backend process started (PID: %d, Path: '%s'). Waiting for its HTTP ready signal.\n", cmd.Process.Pid, extractedBackendPath)
 	return nil
 }
 

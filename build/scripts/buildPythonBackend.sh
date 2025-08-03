@@ -36,7 +36,7 @@ pyinstaller $MAIN_FILE -y
 echo "Copying PyInstaller output to Wails build directory..."
 
 PYINSTALLER_DIST_MAIN_DIR="dist/$MAIN_FILE_NAME" # PyInstaller output directory for the 'main' executable
-TARGET_WAILS_BIN_DIR="build/bin"      # Wails expects the backend executable here
+TARGET_WAILS_BIN_DIR="build/bin/python_backend"      # Wails expects the backend executable here
 
 mkdir -p "$TARGET_WAILS_BIN_DIR"
 
