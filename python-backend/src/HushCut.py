@@ -30,7 +30,7 @@ from subprocess import CompletedProcess
 
 # GLOBALS
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-TEMP_DIR: str = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "wav_files")
+TEMP_DIR: str = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "tmp")
 TEMP_DIR = os.path.abspath(TEMP_DIR)
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
@@ -2710,6 +2710,21 @@ def find_free_port():
         return s.getsockname()[1]
 
 
+def read_stdin_nonblocking(timeout=0.1):
+    result = []
+
+    def read():
+        line = sys.stdin.read()
+        result.append(line)
+
+    thread = threading.Thread(target=read)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout)
+
+    return str(result[0].strip()) if result else ""
+
+
 def init():
     global GO_SERVER_PORT
     global RESOLVE
@@ -2718,7 +2733,10 @@ def init():
     global SERVER_INSTANCE_HOLDER
     global AUTH_TOKEN
 
-    AUTH_TOKEN = sys.stdin.read().strip()
+    AUTH_TOKEN = read_stdin_nonblocking()
+    if AUTH_TOKEN == "":
+        print("No token specified, exiting.")
+        return
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -2745,13 +2763,6 @@ def init():
 
     GO_SERVER_PORT = args.go_port
     FFMPEG = args.ffmpeg
-
-    # --- FUTURE: Store shared secret ---
-    # global EXPECTED_GO_COMMAND_TOKEN, ENABLE_COMMAND_AUTH
-    # if args.auth-token:
-    #     EXPECTED_GO_COMMAND_TOKEN = args.auth-token
-    #     ENABLE_COMMAND_AUTH = True # Or make this a separate flag
-    #     print(f"Python Command Server: Will expect Go to authenticate commands with the shared secret.")
 
     print(f"Python Backend: Go's server port: {args.go_port}")
 

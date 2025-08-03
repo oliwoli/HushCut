@@ -25,7 +25,7 @@ import (
 //go:embed frontend/src/assets/images/hc-512.png
 var logo []byte
 
-const relativeAudioFolderName = "wav_files" // User-defined relative folder
+const relativeAudioFolderName = "tmp" // User-defined relative folder
 
 var (
 	serverListenAddress string // Stores "localhost:PORT" for display or "IP:PORT" from listener.Addr()
@@ -278,41 +278,15 @@ func (a *App) GetToken() string {
 // It sets the global actualPort and serverListenAddress if successful.
 // Returns an error if listener setup fails.
 func (a *App) LaunchHttpServer() error {
-	targetFolderName := "wav_files"
-
-	var audioFolderPath string
-
-	goExecutablePath, err := os.Executable()
-	if err == nil {
-		goExecutableDir := filepath.Dir(goExecutablePath)
-		pathAlongsideExe := filepath.Join(goExecutableDir, targetFolderName)
-
-		if _, statErr := os.Stat(pathAlongsideExe); statErr == nil {
-			// Found it next to the Go executable!
-			audioFolderPath = pathAlongsideExe
-		} else {
-			// make the folder
-			os.Mkdir(pathAlongsideExe, 0755)
-			audioFolderPath = pathAlongsideExe
-		}
-	}
-
-	// exePath, err := os.Executable()
-	// if err != nil {
-	// 	return fmt.Errorf("error getting executable path: %w", err)
-	// }
-	// exeDir := filepath.Dir(exePath)
-	a.effectiveAudioFolderPath = audioFolderPath
-
 	if a.authToken == "" {
 		a.authToken = "HushCut-" + uuid.NewString()
 	}
 	log.Println("Auth: Generated server auth token.")
 
-	log.Printf("Audio Server: Attempting to serve .wav files from: %s", a.effectiveAudioFolderPath)
+	log.Printf("Audio Server: Attempting to serve .wav files from: %s", a.tmpPath)
 
-	if _, err := os.Stat(a.effectiveAudioFolderPath); os.IsNotExist(err) {
-		log.Printf("Audio Server Warning: The audio folder '%s' does not exist. Please ensure it's created next to the executable.", a.effectiveAudioFolderPath)
+	if _, err := os.Stat(a.tmpPath); os.IsNotExist(err) {
+		log.Printf("Audio Server Warning: The audio folder '%s' does not exist. Please ensure it's created next to the executable.", a.tmpPath)
 	}
 
 	mux := http.NewServeMux()
@@ -359,7 +333,7 @@ func (a *App) LaunchHttpServer() error {
 	serverListenAddress = fmt.Sprintf("localhost:%d", actualPort)
 	isServerInitialized = true
 	log.Printf("🎵 Audio Server: Starting on http://%s", serverListenAddress)
-	log.Printf("Audio Server: Serving .wav files from: %s", a.effectiveAudioFolderPath)
+	log.Printf("Audio Server: Serving .wav files from: %s", a.tmpPath)
 
 	listener, err := net.Listen("tcp", serverListenAddress)
 	if err != nil {
@@ -406,7 +380,7 @@ func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Reques
 		if requestedPath == "/" || requestedPath == "" {
 			welcomeMsg := "Welcome to the internal WAV audio server."
 			if isServerInitialized && serverListenAddress != "" {
-				welcomeMsg += fmt.Sprintf(" Serving from http://%s (folder: %s)", serverListenAddress, a.effectiveAudioFolderPath)
+				welcomeMsg += fmt.Sprintf(" Serving from http://%s (folder: %s)", serverListenAddress, a.tmpPath)
 			} else {
 				welcomeMsg += " (Server initializing or encountered an issue)."
 			}
@@ -418,8 +392,8 @@ func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	fullPath := filepath.Join(a.effectiveAudioFolderPath, requestedPath)
-	absEffectiveAudioFolderPath, err := filepath.Abs(a.effectiveAudioFolderPath)
+	fullPath := filepath.Join(a.tmpPath, requestedPath)
+	absEffectiveAudioFolderPath, err := filepath.Abs(a.tmpPath)
 	if err != nil {
 		http.Error(writer, "Internal server error", http.StatusInternalServerError)
 		log.Printf("Audio Server Error: getting absolute path for effectiveAudioFolderPath: %v", err)
@@ -440,10 +414,10 @@ func (a *App) audioFileEndpoint(writer http.ResponseWriter, request *http.Reques
 
 	fileInfo, err := os.Stat(fullPath)
 	if os.IsNotExist(err) {
-		if _, statErr := os.Stat(a.effectiveAudioFolderPath); os.IsNotExist(statErr) {
-			errMsg := fmt.Sprintf("Audio folder '%s' not found. Please ensure it exists next to the executable and is named '%s'.", a.effectiveAudioFolderPath, relativeAudioFolderName)
+		if _, statErr := os.Stat(a.tmpPath); os.IsNotExist(statErr) {
+			errMsg := fmt.Sprintf("Audio folder '%s' not found. Please ensure it exists next to the executable and is named '%s'.", a.tmpPath, relativeAudioFolderName)
 			http.Error(writer, errMsg, http.StatusInternalServerError)
-			log.Printf("Base audio folder not found: %s", a.effectiveAudioFolderPath)
+			log.Printf("Base audio folder not found: %s", a.tmpPath)
 			return
 		}
 		http.NotFound(writer, request)
@@ -491,7 +465,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid file name parameter", http.StatusBadRequest)
 		return
 	}
-	originalFilePath := filepath.Join(a.effectiveAudioFolderPath, cleanFileName)
+	originalFilePath := filepath.Join(a.tmpPath, cleanFileName)
 	if _, err := os.Stat(originalFilePath); os.IsNotExist(err) {
 		http.NotFound(w, r)
 		return

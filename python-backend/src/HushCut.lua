@@ -709,11 +709,9 @@ local function get_script_dir()
 end
 
 local script_dir = get_script_dir()
-
 local go_server_port = nil
-local TEMP_DIR = script_dir .. "wav_files"
+local TEMP_DIR = script_dir .. "/.hushcut_res" .. "/tmp"
 local AUTH_TOKEN = ""
-
 
 ---
 -- Sends a JSON message to the Go server via an HTTP POST request.
@@ -769,8 +767,6 @@ local function send_message_to_go(message_type, payload, task_id)
   end
   f:write(json_payload)
   f:close()
-
-  print("Token just before sending smth to go: " .. AUTH_TOKEN)
 
   local command = string.format(
     'curl -s -X POST -H "Content-Type: application/json" --data-binary "@%s" "%s" -w "\\n%%{http_code}" --header "Authorization: Bearer %s"',
@@ -938,15 +934,12 @@ end
 -- Global tracker instance
 local TRACKER = ProgressTracker:new()
 local TASKS = { prepare = 10, append = 40, verify = 10, link = 40 }
-
-
-
 local os_type = jit.os
 local potential_paths
 
 
-
 if os_type == "OSX" then
+  TEMP_DIR = script_dir .. "HushCut.app/Contents/Resources/tmp"
   potential_paths = {
     script_dir .. "HushCut.app/Contents/MacOS/HushCut",
     script_dir .. "../../build/bin/HushCut.app/Contents/MacOS/HushCut",
@@ -964,6 +957,10 @@ else
   }
 end
 
+-- make sure the TEMP_DIR exists
+-- if not os.path.exists(TEMP_DIR) then
+--   os.makedirs(TEMP_DIR)
+-- end
 
 
 local go_app_path = nil
@@ -1043,7 +1040,7 @@ end
 
 
 
-local function create_temp_dir(path)
+local function make_dir(path)
   local is_windows = package.config:sub(1, 1) == '\\'
 
   local command
@@ -1060,7 +1057,8 @@ local function create_temp_dir(path)
 end
 
 -- Usage
-if not create_temp_dir(TEMP_DIR) then
+if not make_dir(TEMP_DIR) then
+  print("Error. Could not make temp directory")
   return
 end
 
@@ -1076,16 +1074,6 @@ end
 
 
 local bit = require("bit") -- assumes LuaBitOp or LuaJIT's bit library
-
--- FNV-1a hash using bitwise operations compatible with Lua 5.1
-local function fnv1a_hash(str)
-  local hash = 2166136261
-  for i = 1, #str do
-    hash = bit.bxor(hash, string.byte(str, i))
-    hash = (hash * 16777619) % 2 ^ 32
-  end
-  return hash
-end
 
 -- UUID generator with optional deterministic seed
 local function uuid()

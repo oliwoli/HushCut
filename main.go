@@ -320,20 +320,33 @@ func main() {
 		)
 		return
 	}
-	fmt.Print("Starting in normal mode... ?")
 
 	// Create an instance of the app structure
 	app := NewApp()
 	if *pythonPort != 0 {
 		app.pythonCommandPort = *pythonPort
 	}
-	tokenFromStdIn, stdinErr := io.ReadAll(os.Stdin)
-	if stdinErr != nil {
-		fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", stdinErr)
+
+	stat, stdErr := os.Stdin.Stat()
+	if stdErr != nil {
+		fmt.Fprintf(os.Stderr, "Could not stat stdin: %v\n", stdErr)
+		return
 	}
 
-	fmt.Printf("Received token from stdin: %s\n", string(tokenFromStdIn))
-	app.authToken = strings.TrimSpace(string(tokenFromStdIn))
+	var tokenFromStdIn []byte
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		// stdin is being piped
+		tokenFromStdIn, stdErr = io.ReadAll(os.Stdin)
+		if stdErr != nil {
+			fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", stdErr)
+			return
+		}
+		fmt.Printf("Token from stdin: %s\n", string(tokenFromStdIn))
+		fmt.Printf("Received token from stdin: %s\n", string(tokenFromStdIn))
+		app.authToken = strings.TrimSpace(string(tokenFromStdIn))
+	} else {
+		fmt.Println("No input piped to stdin, skipping read.")
+	}
 
 	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)
 	if pythonPortStr := os.Getenv("WAILS_PYTHON_PORT"); pythonPortStr != "" {

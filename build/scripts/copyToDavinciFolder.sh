@@ -44,13 +44,7 @@ copy_files() {
   cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
   # cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
   
-  cd "lua-go-http"
-  go build .
-  cd ..
-  cp "lua-go-http/lua-go-http" "$TARGET_FOLDER/lua-go-http"
-  chmod +x "$TARGET_FOLDER/lua-go-http"
-
-  cp "build/bin/python_backend" "$TARGET_FOLDER/python_backend"
+  # cp "build/bin/python_backend" "$TARGET_FOLDER/python_backend"
 
   # Copy HushCut.app directory for macOS
   if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -60,11 +54,6 @@ copy_files() {
     echo "Making HushCut binary executable"
     chmod +x "$TARGET_FOLDER/HushCut.app/Contents/MacOS/HushCut"
   fi
-
-  rm -rf "$TARGET_FOLDER/hushcut_lib"
-  echo "Removing existing hushcut_lib from $TARGET_FOLDER"
-  cp -r "python-backend/src/hushcut_lib" "$TARGET_FOLDER/hushcut_lib"
-  echo "Copied python-backend/src/hushcut_lib to $TARGET_FOLDER/hushcut_lib"
 }
 
 # Determine the target folder based on OS

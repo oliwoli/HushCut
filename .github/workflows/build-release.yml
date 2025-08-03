@@ -62,9 +62,9 @@ jobs:
         run: |
           pyinstaller python-backend/src/HushCut.py --name python_backend -y
           mkdir -p build/bin
-          cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend${{ matrix.ext }}
+          cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend/python_backend${{ matrix.ext }}
           if [ -d dist/python_backend/_internal ]; then
-            cp -r dist/python_backend/_internal build/bin/
+            cp -r dist/python_backend/_internal build/bin/python_backend/
           fi
           rm -rf dist build/python_backend
 
@@ -86,9 +86,6 @@ jobs:
         run: |
           RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
           mkdir -p "$RESOURCE_DIR"
-          mv -v build/bin/python_backend "$RESOURCE_DIR/"
-          mv -v build/bin/_internal "$RESOURCE_DIR/"
-          mv -v build/bin/HushCut.lua "$RESOURCE_DIR/"
           rm -f build/bin/HushCut.app.zip
           rm -f build/bin/HushCut.pkg
 

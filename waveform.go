@@ -32,7 +32,7 @@ func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 	cleanPath = strings.TrimPrefix(cleanPath, "/")
 
 	// Combine and clean the full path
-	fullPath := filepath.Join(a.effectiveAudioFolderPath, cleanPath)
+	fullPath := filepath.Join(a.tmpPath, cleanPath)
 	fullPath = filepath.Clean(fullPath)
 
 	return fullPath, nil

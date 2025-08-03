@@ -27,25 +27,26 @@ import (
 
 // App struct
 type App struct {
-	ctx                      context.Context
-	silenceCache             map[CacheKey][]SilencePeriod
-	waveformCache            map[WaveformCacheKey]*PrecomputedWaveformData
-	cacheMutex               sync.RWMutex
-	settingsPath             string
-	pythonCmd                *exec.Cmd
-	pythonReadyChan          chan bool
-	pythonReady              bool
-	pythonCommandPort        int
-	effectiveAudioFolderPath string
-	pendingMu                sync.Mutex
-	pendingTasks             map[string]chan PythonCommandResponse
-	ffmpegBinaryPath         string
-	hasFfmpeg                bool
-	ffmpegSemaphore          chan struct{}
-	waveformSemaphore        chan struct{}
-	conversionTracker        sync.Map
-	fileUsage                map[string]time.Time // New field for file usage tracking
-	mu                       sync.Mutex           // Mutex to protect fileUsage
+	ctx               context.Context
+	isDev             bool
+	silenceCache      map[CacheKey][]SilencePeriod
+	waveformCache     map[WaveformCacheKey]*PrecomputedWaveformData
+	cacheMutex        sync.RWMutex
+	pythonCmd         *exec.Cmd
+	pythonReadyChan   chan bool
+	pythonReady       bool
+	pythonCommandPort int
+	resourcesPath     string
+	tmpPath           string
+	pendingMu         sync.Mutex
+	pendingTasks      map[string]chan PythonCommandResponse
+	ffmpegBinaryPath  string
+	hasFfmpeg         bool
+	ffmpegSemaphore   chan struct{}
+	waveformSemaphore chan struct{}
+	conversionTracker sync.Map
+	fileUsage         map[string]time.Time // New field for file usage tracking
+	mu                sync.Mutex           // Mutex to protect fileUsage
 
 	// -- HTTP -- //
 	httpClient *http.Client
@@ -63,16 +64,15 @@ type App struct {
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
-		settingsPath:             "settings.json",
-		silenceCache:             make(map[CacheKey][]SilencePeriod),
-		waveformCache:            make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
-		pythonReadyChan:          make(chan bool, 1),                                  // Buffered channel
-		pythonReady:              false,
-		effectiveAudioFolderPath: "", // Will be initialized in startup
-		pendingTasks:             make(map[string]chan PythonCommandResponse),
-		ffmpegSemaphore:          make(chan struct{}, 8),
-		waveformSemaphore:        make(chan struct{}, 3),
-		conversionTracker:        sync.Map{}, // Initialize the new tracker
+		silenceCache:      make(map[CacheKey][]SilencePeriod),
+		waveformCache:     make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
+		pythonReadyChan:   make(chan bool, 1),                                  // Buffered channel
+		pythonReady:       false,
+		tmpPath:           "", // Will be initialized in startup
+		pendingTasks:      make(map[string]chan PythonCommandResponse),
+		ffmpegSemaphore:   make(chan struct{}, 8),
+		waveformSemaphore: make(chan struct{}, 3),
+		conversionTracker: sync.Map{}, // Initialize the new tracker
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -155,7 +155,6 @@ func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
 
 //go:embed all:build/bin/python_backend
 var embeddedPythonBackend embed.FS
-var extractedBackendPath string
 
 func extractEmbeddedBackend(tempDir string) (string, error) {
 	const embedRoot = "build/bin/python_backend"
@@ -208,29 +207,35 @@ func extractEmbeddedBackend(tempDir string) (string, error) {
 
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
-	tempDir, err := os.MkdirTemp("", "python_backend")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	exePath, err := extractEmbeddedBackend(tempDir)
-	if err != nil {
-		return fmt.Errorf("failed to extract python backend: %w", err)
-	}
-	extractedBackendPath = exePath
-	log.Printf("Extracted backend to: %s", extractedBackendPath)
 
-	if extractedBackendPath == "" {
-		return fmt.Errorf("backend not initialized")
+	pythonBinaryPath := filepath.Join(a.resourcesPath, "python_backend")
+
+	platform := runtime.Environment(a.ctx).Platform
+	if platform == "windows" {
+		pythonBinaryPath = filepath.Join(a.resourcesPath, "python_backend.exe")
 	}
 
-	log.Printf("Resolved path to python_backend: %s", extractedBackendPath)
+	if !binaryExists(pythonBinaryPath) || a.isDev {
+		exePath, err := extractEmbeddedBackend(a.resourcesPath)
+		if err != nil {
+			return fmt.Errorf("failed to extract python backend: %w", err)
+		}
+		pythonBinaryPath = exePath
+		log.Printf("Extracted backend to: %s", pythonBinaryPath)
+
+		if pythonBinaryPath == "" {
+			return fmt.Errorf("backend not initialized")
+		}
+
+		log.Printf("Resolved path to python_backend: %s", pythonBinaryPath)
+	}
 
 	cmdArgs := []string{
 		"--go-port", fmt.Sprintf("%d", port),
 		"--listen-on-port", fmt.Sprintf("%d", pythonCommandPort),
 	}
 
-	cmd := exec.Command(extractedBackendPath, cmdArgs...)
+	cmd := exec.Command(pythonBinaryPath, cmdArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -249,7 +254,7 @@ func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	log.Printf("Go app: Python backend process started (PID: %d, Path: '%s'). Waiting for its HTTP ready signal.\n", cmd.Process.Pid, extractedBackendPath)
+	log.Printf("Go app: Python backend process started (PID: %d, Path: '%s'). Waiting for its HTTP ready signal.\n", cmd.Process.Pid, pythonBinaryPath)
 	return nil
 }
 
@@ -273,9 +278,17 @@ func binaryExists(path string) bool {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	fmt.Print("startup")
 
-	// Initialize effectiveAudioFolderPath based on platform
+	envInfo := runtime.Environment(ctx)
+	if envInfo.BuildType == "production" {
+		fmt.Print("|> HushCut v" + a.GetAppVersion() + " - Production Build \n")
+		a.isDev = false
+	} else {
+		fmt.Print("|> HushCut v" + a.GetAppVersion() + " - Development Build \n")
+		a.isDev = true
+	}
+
+	// Initialize tmp and resources path based on platform
 	goExecutablePath, err_exec := os.Executable()
 	if err_exec != nil {
 		log.Fatalf("Could not get executable path: %v", err_exec)
@@ -285,16 +298,21 @@ func (a *App) startup(ctx context.Context) {
 	platform := runtime.Environment(a.ctx).Platform
 	switch platform {
 	case "darwin":
-		a.effectiveAudioFolderPath = filepath.Join(goExecutableDir, "..", "Resources", "wav_files")
+		a.resourcesPath = filepath.Join(goExecutableDir, "..", "Resources")
+		a.tmpPath = filepath.Join(a.resourcesPath, "tmp")
 	case "windows", "linux":
-		a.effectiveAudioFolderPath = filepath.Join(goExecutableDir, "wav_files")
+		a.resourcesPath = filepath.Join(goExecutableDir, ".hushcut_res")
+		a.tmpPath = filepath.Join(a.resourcesPath, "tmp")
 	default:
-		log.Fatalf("Unsupported platform for effectiveAudioFolderPath: %s", platform)
+		log.Fatalf("Unsupported platform found during path init: %s", platform)
 	}
 
-	// Ensure the directory exists
-	if err := os.MkdirAll(a.effectiveAudioFolderPath, 0755); err != nil {
-		log.Fatalf("Failed to create effective audio folder: %v", err)
+	// Ensure the directories exist
+	if err := os.MkdirAll(a.resourcesPath, 0755); err != nil {
+		log.Fatalf("Failed to create resources folder: %v", err)
+	}
+	if err := os.MkdirAll(a.tmpPath, 0755); err != nil {
+		log.Fatalf("Failed to create tmp folder: %v", err)
 	}
 
 	// Initialize file usage tracking
@@ -347,8 +365,8 @@ func (a *App) startup(ctx context.Context) {
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
 	var err error
-	a.ffmpegBinaryPath, err = a.ResolveBinaryPath("ffmpeg")
-	if err != nil || !binaryExists(a.ffmpegBinaryPath) {
+	a.ffmpegBinaryPath = filepath.Join(a.resourcesPath, "ffmpeg")
+	if a.ffmpegBinaryPath == "" || !binaryExists(a.ffmpegBinaryPath) {
 		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 
 		// TODO: enable this code when in production
@@ -544,20 +562,18 @@ func (a *App) DownloadFFmpeg() error {
 		return fmt.Errorf("could not find ffmpeg binary in extracted archive")
 	}
 
-	finalBinaryPath := filepath.Join(installDir, finalBinaryName)
-	log.Printf("Moving FFmpeg from %s to %s", extractedFfmpegPath, finalBinaryPath)
-	if err := moveFile(extractedFfmpegPath, finalBinaryPath); err != nil {
+	log.Printf("Moving FFmpeg from %s to %s", extractedFfmpegPath, a.ffmpegBinaryPath)
+	if err := moveFile(extractedFfmpegPath, a.ffmpegBinaryPath); err != nil {
 		return fmt.Errorf("failed to move ffmpeg binary: %w", err)
 	}
 
 	if platform != "windows" {
-		if err := os.Chmod(finalBinaryPath, 0755); err != nil {
+		if err := os.Chmod(a.ffmpegBinaryPath, 0755); err != nil {
 			return fmt.Errorf("could not make ffmpeg executable: %w", err)
 		}
 	}
 
 	// Update the app state
-	a.ffmpegBinaryPath = finalBinaryPath
 	a.hasFfmpeg = true
 	a.signalFfmpegReady()
 	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
@@ -718,8 +734,9 @@ func (a *App) registerWithPython(goPort int) error {
 // GetSettings reads settings.json. Creates it with defaults if it doesn't exist.
 func (a *App) GetSettings() (map[string]any, error) {
 	var settingsData map[string]any
+	settingsPath := filepath.Join(a.resourcesPath, "settings.json")
 
-	fileBytes, err := os.ReadFile(a.settingsPath)
+	fileBytes, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File doesn't exist, create it
@@ -734,24 +751,24 @@ func (a *App) GetSettings() (map[string]any, error) {
 				return nil, fmt.Errorf("failed to marshal default settings: %w", marshalErr)
 			}
 
-			dir := filepath.Dir(a.settingsPath)
+			dir := filepath.Dir(settingsPath)
 			if mkDirErr := os.MkdirAll(dir, 0755); mkDirErr != nil {
 				return nil, fmt.Errorf("failed to create settings directory %s: %w", dir, mkDirErr)
 			}
 
-			if writeErr := os.WriteFile(a.settingsPath, jsonData, 0644); writeErr != nil {
-				return nil, fmt.Errorf("failed to write default settings file %s: %w", a.settingsPath, writeErr)
+			if writeErr := os.WriteFile(settingsPath, jsonData, 0644); writeErr != nil {
+				return nil, fmt.Errorf("failed to write default settings file %s: %w", settingsPath, writeErr)
 			}
 			settingsData = defaultSettings
 		} else {
 			// Other error reading file
-			return nil, fmt.Errorf("failed to read settings file %s: %w", a.settingsPath, err)
+			return nil, fmt.Errorf("failed to read settings file %s: %w", settingsPath, err)
 		}
 	} else {
 		// File exists, unmarshal it
 		if unmarshalErr := json.Unmarshal(fileBytes, &settingsData); unmarshalErr != nil {
 			// If JSON is malformed, consider returning default or empty settings instead of erroring out.
-			return nil, fmt.Errorf("failed to unmarshal settings file %s: %w", a.settingsPath, unmarshalErr)
+			return nil, fmt.Errorf("failed to unmarshal settings file %s: %w", settingsPath, unmarshalErr)
 		}
 	}
 	return settingsData, nil
@@ -763,14 +780,15 @@ func (a *App) SaveSettings(settingsData map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal settings data for saving: %w", err)
 	}
+	settingsPath := filepath.Join(a.resourcesPath, "settings.json")
 
-	dir := filepath.Dir(a.settingsPath)
+	dir := filepath.Dir(settingsPath)
 	if mkDirErr := os.MkdirAll(dir, 0755); mkDirErr != nil {
 		return fmt.Errorf("failed to create settings directory %s for saving: %w", dir, mkDirErr)
 	}
 
-	if err := os.WriteFile(a.settingsPath, jsonData, 0644); err != nil {
-		return fmt.Errorf("failed to write settings file %s: %w", a.settingsPath, err)
+	if err := os.WriteFile(settingsPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write settings file %s: %w", settingsPath, err)
 	}
 	return nil
 }
@@ -872,7 +890,7 @@ func (a *App) DetectSilences(
 		return nil, fmt.Errorf("clip end (%.3f) must be greater than start (%.3f)", clipEndSeconds, clipStartSeconds)
 	}
 
-	absPath := filepath.Join(a.effectiveAudioFolderPath, filePath)
+	absPath := filepath.Join(a.tmpPath, filePath)
 	// Mark the input file as used after its absolute path is determined
 	a.updateFileUsage(absPath)
 	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)
@@ -1147,7 +1165,7 @@ func (a *App) updateFileUsage(filePath string) {
 	}
 
 	// CRITICAL SAFETY CHECK: Only track files within effectiveAudioFolderPath
-	if !strings.HasPrefix(absPath, a.effectiveAudioFolderPath) {
+	if !strings.HasPrefix(absPath, a.tmpPath) {
 		log.Printf("WARNING: Attempted to track file outside effectiveAudioFolderPath. Skipping: %s", absPath)
 		return
 	}
@@ -1163,7 +1181,7 @@ func (a *App) GetAppVersion() string {
 }
 
 func (a *App) getFileUsagePath() string {
-	return filepath.Join(a.effectiveAudioFolderPath, fileUsageFileName)
+	return filepath.Join(a.tmpPath, fileUsageFileName)
 }
 
 func (a *App) loadUsageData() {
@@ -1205,7 +1223,7 @@ func (a *App) loadUsageData() {
 			continue
 		}
 		// Reconstruct the full path for internal use
-		fullPath := filepath.Join(a.effectiveAudioFolderPath, fileName)
+		fullPath := filepath.Join(a.tmpPath, fileName)
 		a.fileUsage[fullPath] = t
 	}
 	log.Printf("Successfully loaded %d entries from file_usage.json", len(a.fileUsage))
@@ -1721,7 +1739,7 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 			if item.ProcessedFileName == nil || *item.ProcessedFileName == "" {
 				continue
 			}
-			targetWavPath := filepath.Join(a.effectiveAudioFolderPath, *item.ProcessedFileName)
+			targetWavPath := filepath.Join(a.tmpPath, *item.ProcessedFileName)
 			jobsToProcess[targetWavPath] = audioJob{
 				SourcePath: item.SourceFilePath,
 				Channel:    item.SourceChannel,
@@ -1738,7 +1756,7 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 				if nestedItem.ProcessedFileName == "" {
 					continue
 				}
-				targetWavPath := filepath.Join(a.effectiveAudioFolderPath, nestedItem.ProcessedFileName)
+				targetWavPath := filepath.Join(a.tmpPath, nestedItem.ProcessedFileName)
 				jobsToProcess[targetWavPath] = audioJob{
 					SourcePath: nestedItem.SourceFilePath,
 					Channel:    nestedItem.SourceChannel,
@@ -1807,7 +1825,7 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 			continue
 		}
 		if _, found := sourceMap[nc.ProcessedFileName]; !found {
-			fullPath := filepath.Join(a.effectiveAudioFolderPath, nc.ProcessedFileName)
+			fullPath := filepath.Join(a.tmpPath, nc.ProcessedFileName)
 			sourceMap[nc.ProcessedFileName] = len(uniqueSourceFiles)
 			uniqueSourceFiles = append(uniqueSourceFiles, fullPath)
 		}
@@ -1892,7 +1910,7 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 	// It does not need to wait for them or handle their errors directly,
 	// as any part of the app that needs the file will wait and get the error.
 	for processedName, representativeItem := range contentMap {
-		outputPath := filepath.Join(a.effectiveAudioFolderPath, processedName)
+		outputPath := filepath.Join(a.tmpPath, processedName)
 
 		// Mark the processed file as used
 		a.updateFileUsage(outputPath)
