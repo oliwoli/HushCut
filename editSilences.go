@@ -137,8 +137,16 @@ func CreateEditsWithOptionalSilence(
 				timelineRoundingOffset := float64(startFrame) - timelineCursorF
 				sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
 
+				maybeOffset := (soundTimelineDuration - float64(durationInFrames)) / frameRateRatio
+
 				sourceStart := sourceCursorF + sourceRoundingOffset
 				sourceEnd := sil.Start - eps
+				if !keepSilenceSegments {
+					sourceStart += math.Abs(maybeOffset)
+					secondOffset := float64(round(sourceEnd-sourceStart)) - (sourceEnd - sourceStart)
+					sourceStart += math.Abs(secondOffset / 2)
+				}
+
 				emitEdit(sourceStart, sourceEnd, startFrame, endFrame, true)
 			}
 			timelineCursorF += soundTimelineDuration
