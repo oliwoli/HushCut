@@ -75,7 +75,7 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
-      - name: Build Wails frontend
+      - name: Build Wails App
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
         with:
           build-name: HushCut
@@ -90,6 +90,10 @@ jobs:
           rm -f build/bin/HushCut.app.zip
           rm -f build/bin/HushCut.pkg
 
+      - name: delete python_backend
+        run: |
+          rm -rf build/bin/python_backend
+      
       - name: Zip bin folder
         if: startsWith(github.ref, 'refs/tags/')
         run: |
