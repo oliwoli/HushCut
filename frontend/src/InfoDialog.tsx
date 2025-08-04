@@ -17,6 +17,8 @@ import { GetAppVersion } from "@wails/go/main/App";
 import { CopyrightIcon, ExternalLinkIcon } from "lucide-react";
 import { BrowserOpenURL } from "@wails/runtime/runtime";
 
+import logo from "./assets/images/hc-512.png"
+
 // This component is now "controlled" by its parent via these props.
 interface InfoDialogProps {
     open: boolean;
@@ -68,12 +70,17 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                 disableRadixAnimations={dialogOpacity === 0}
                 disableOutsideClick={true}
             >
-                <DialogHeader>
-                    <DialogTitle>HushCut</DialogTitle>
-                    <DialogDescription>
-                        v{appVersion} - {new Date().getFullYear()}
-                    </DialogDescription>
-                </DialogHeader>
+                <div className="flex gap-4 items-center h-10 overflow-visible">
+                    <div className="w-20 h-20 ml-[-15px] mr-[-18px] mt-[-10px]">
+                        <img src={logo} alt="HushCut Logo" className="w-22 h-22" />
+                    </div>
+                    <DialogHeader className="gap-1 pt-[5px]">
+                        <DialogTitle>HushCut</DialogTitle>
+                        <DialogDescription>
+                            v{appVersion} - {new Date().getFullYear()}
+                        </DialogDescription>
+                    </DialogHeader>
+                </div>
 
                 <div className="text-sm text-muted-foreground space-y-4">
                     {/* <p>A simple, efficient application built with Wails and React.</p> */}
