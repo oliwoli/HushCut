@@ -1,7 +1,4 @@
 {
   "name": "hushcut",
-  "version": "0.1.5",
-  "devDependencies": {
-    "create-dmg": "^7.0.0"
-  }
+  "version": "0.1.5"
 }
