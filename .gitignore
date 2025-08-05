@@ -17,3 +17,4 @@ lua-go-http/lua-go-http
 
 settings.json
 debug_project_data_from_go.json
+*.dmg
