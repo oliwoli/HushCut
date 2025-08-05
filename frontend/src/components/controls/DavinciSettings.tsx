@@ -23,7 +23,7 @@ const _MakeNewTimelineSetting = React.memo(() => {
                     </TooltipTrigger>
                 </Label>
                 <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-bold tracking-tight'>New Timeline</h1>
+                    <h1 className='font-[600] tracking-tight'>New Timeline</h1>
                     <p>Apply the edits in a new timeline.</p>
 
                 </TooltipContent>

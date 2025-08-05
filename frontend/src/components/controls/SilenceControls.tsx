@@ -35,7 +35,7 @@ const _MinDurationControl = React.memo(() => {
                     </TooltipTrigger>
                 </Label>
                 <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-extrabold'>Minimum Silence Duration</h1>
+                    <h1 className='font-[600] tracking-tight'>Minimum Silence Duration</h1>
                     <p>Minimum Duration for a segment to be considered silent.</p>
                 </TooltipContent>
             </Tooltip>
@@ -119,7 +119,7 @@ const _PaddingControl = React.memo(() => {
                                     <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[200px]'>
-                                    <h1 className='font-extrabold'>Padding Left</h1>
+                                    <h1 className='font-[600] tracking-tight'>Padding Left</h1>
                                     <p>Trims the start of the silence.</p>
                                     <p>Content before the detected silence extends.</p>
                                 </TooltipContent>
@@ -149,7 +149,7 @@ const _PaddingControl = React.memo(() => {
                                     <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[200px]'>
-                                    <h1 className='font-extrabold'>Padding Right</h1>
+                                    <h1 className='font-[600] tracking-tight'>Padding Right</h1>
                                     <p>Trims the end of the silence.</p>
                                     <p>The content after the detected silence starts sooner.</p>
                                 </TooltipContent>
@@ -185,7 +185,7 @@ const _MinContentControl = React.memo(() => {
                     </TooltipTrigger>
                 </Label>
                 <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-extrabold'>Silence Merge</h1>
+                    <h1 className='font-[600] tracking-tight'>Silence Merge</h1>
                     <p>Content segments shorter than this will be considered as silence and merged with surrounding silences.</p>
                     <p>Use this to remove mic bumps, lip smacks, etc.</p>
 
