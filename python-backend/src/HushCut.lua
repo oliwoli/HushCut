@@ -922,7 +922,7 @@ function ProgressTracker:update_task_progress(task_name, percentage, message)
   end
 
   self._task_progress[task_name] = self._tasks[task_name] * (percentage / 100.0)
-  local update_message = message or task_name
+  local update_message = message or ""
   print(string.format("Updating '%s' to %.1f%%. Overall: %.2f%%", task_name, percentage, self:get_percentage()))
   self:_report_progress(update_message, important)
 end
@@ -2613,7 +2613,7 @@ if go_app_path and free_port then
   elseif os_type == "OSX" then
     -- macOS: Similar to Linux but doesn't need GDK_BACKEND.
     hushcut_command = string.format(
-      "sh -c 'echo -n %s | %s --python-port=%s &'",
+      "sh -c 'printf %%s %s | %s --python-port=%s &'",
       quote(AUTH_TOKEN),
       quote(go_app_path),
       free_port
@@ -2687,6 +2687,8 @@ if go_app_path and free_port then
     local auth_passed = false
     if req_auth == AUTH_TOKEN then
       auth_passed = true
+    else
+      print("auth failed")
     end
 
     if json_data and json_data.go_server_port then
