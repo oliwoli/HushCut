@@ -86,14 +86,14 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                     {/* <p>A simple, efficient application built with Wails and React.</p> */}
                     {md && (
                         <ScrollArea className="max-h-[60vh] overflow-y-auto pr-2">
-                            <h3 className="font-bold text-foreground mt-4 mb-2">License</h3>
+                            <h3 className="font-normal text-foreground mt-4 mb-2">License</h3>
                             <p className="flex items-center gap-1"><CopyrightIcon size={14} className="" /> Oliver Weiss | All rights reserved.</p>
-                            <h2 className="font-bold text-foreground mt-4 mb-2 text-[18px]">Found a bug, want to share feedback, or just chat?</h2>
-                            <p>Join our discord server</p>
+                            <h1 className="font-extralight text-foreground mt-8 mb-1 text-2xl">Found a bug, want to share feedback, or just chat?</h1>
+                            <p>Join our <b className="font-[350] text-zinc-200">discord server</b></p>
                             <a href="#" onClick={() => discordLink && BrowserOpenURL(discordLink)} className="text-orange-400 flex gap-1 underline">{discordLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
 
 
-                            <div className="prose prose-sm dark:prose-invert max-w-none mt-4 max-h-2xl">
+                            <div className="prose prose-sm dark:prose-invert max-w-none pt-3 max-h-2xl">
                                 <MarkdownRenderer markdown={md} />
                             </div>
                         </ScrollArea>
@@ -101,7 +101,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                 </div>
                 <DialogFooter>
                     <DialogClose asChild>
-                        <Button type="button">Close</Button>
+                        <Button type="button" variant={"outline"}>Close</Button>
                     </DialogClose>
                 </DialogFooter>
             </DialogContent>

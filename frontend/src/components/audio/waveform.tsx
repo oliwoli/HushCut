@@ -1034,7 +1034,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         >
           <RedoDotIcon size={21} className={`mr-1 ${skipClass}`} />
           <span className={`hidden [@media(min-width:30rem)]:flex ${skipRegionsEnabled ? "text-stone-300" : "text-stone-500"} w-12 `}>
-            {skipRegionsEnabled ? "Skip ON" : "Skip OFF"}
+            {skipRegionsEnabled ? (
+              <div><span className="text-stone-400 font-light">Skip</span> <span className="font-medium text-stone-300">ON</span></div>
+            )
+              : "Skip OFF"}
           </span>
         </button>
       );

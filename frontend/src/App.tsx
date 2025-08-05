@@ -1,7 +1,7 @@
 import React from "react";
 import { scan } from "react-scan";
 scan({
-  enabled: true,
+  enabled: false,
 });
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -254,7 +254,7 @@ function AppContent() {
 
       EventsEmit("showAlert", {
         title: "FFmpeg Not Found",
-        message: "FFmpeg is required for certain features. Would you like to download it now?",
+        message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
         actions: [
           {
             label: "Download",
@@ -447,7 +447,7 @@ function AppContent() {
             console.log("no ffmpeg!");
             EventsEmit("showAlert", {
               title: "FFmpeg Not Found",
-              message: "FFmpeg is required for certain features. Would you like to download it now?",
+              message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
               actions: [
                 {
                   label: "Download",
@@ -714,7 +714,7 @@ function AppContent() {
                 )}
               </div>
             </div>
-            <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 shadow-xl h-min flex flex-col">
+            <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 shadow-xl h-min flex flex-col mx-auto">
               <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow">
                 <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
                   <SilenceControls key={currentClipId} />
@@ -776,7 +776,7 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
         disableRadixAnimations={dialogOpacity === 0}
       >
         <div className="max-w-full p-4 px-8 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
-          <DrawerTitle className="text-2xl sm:text-4xl md:text-5xl mt-12 font-medium">{displayMessage}</DrawerTitle>
+          <DrawerTitle className="text-2xl sm:text-4xl md:text-5xl mt-12 font-normal tracking-tighter">{displayMessage}</DrawerTitle>
           {Number.isFinite(progressPercentage) && (
             <Progress value={progressPercentage} className="h-0.5" />
           )}

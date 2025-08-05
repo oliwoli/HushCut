@@ -28,7 +28,7 @@ const _MinDurationControl = React.memo(() => {
     return (
         <div className='space-y-1'>
             <Tooltip delayDuration={350}>
-                <Label className="font-medium w-52 text-stone-400 flex text-center gap-2">
+                <Label className="font-normal text-sm w-52 text-stone-400  flex text-center gap-2">
                     Minimum Duration
                     <TooltipTrigger asChild>
                         <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
@@ -91,7 +91,7 @@ const _PaddingControl = React.memo(() => {
 
     return (
         <div className='space-y-1'>
-            <Label className="font-medium w-32 text-right text-stone-400">
+            <Label className="font-normal text-sm w-52 text-stone-400 flex text-center gap-2">
                 Padding
             </Label>
             <div className="flex items-baseline space-x-5">
@@ -112,8 +112,8 @@ const _PaddingControl = React.memo(() => {
                                 {paddingLocked ? <Link className="h-4 w-4" /> : <Unlink className="h-4 w-4" />}
                             </Button>
                         </div>
-                        <div className='flex gap-2 text-center'>
-                            <span className="text-sm text-zinc-400">Left: <span className="text-zinc-100 font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
+                        <div className='items-center flex gap-2 text-center'>
+                            <span className="text-sm tracking-normal text-zinc-400 text-center">Left: <span className="text-zinc-100 text-sm font-normal font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1 lowercase">s</span></span></span>
                             <Tooltip delayDuration={350}>
                                 <TooltipTrigger asChild>
                                     <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
@@ -142,8 +142,8 @@ const _PaddingControl = React.memo(() => {
                             />
                             <span className='relative left-4'><ResetButton onClick={resetPadding} disabled={isDisabled} /></span>
                         </div>
-                        <div className='flex gap-2 text-center'>
-                            <span className="text-sm text-zinc-400">Right: <span className="text-zinc-100 font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1">s</span></span></span>
+                        <div className='flex gap-2 text-center items-center'>
+                            <span className="text-sm tracking-normal text-zinc-400 text-center">Right: <span className="text-zinc-100 text-sm font-normal font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1 lowercase">s</span></span></span>
                             <Tooltip delayDuration={350}>
                                 <TooltipTrigger asChild>
                                     <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
@@ -178,15 +178,15 @@ const _MinContentControl = React.memo(() => {
     return (
         <div className='space-y-1'>
             <Tooltip delayDuration={350}>
-                <Label className="font-medium w-52 text-stone-400 flex text-center gap-2">
-                    Short Spikes Removal
+                <Label className="font-normal text-sm w-52 text-stone-400 flex text-center gap-2">
+                    Silence Merge
                     <TooltipTrigger asChild>
                         <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                     </TooltipTrigger>
                 </Label>
                 <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-extrabold'>Short Spikes Removal (Minimum Content Duration)</h1>
-                    <p>Content segments shorter than this will be considered as silence.</p>
+                    <h1 className='font-extrabold'>Silence Merge</h1>
+                    <p>Content segments shorter than this will be considered as silence and merged with surrounding silences.</p>
                     <p>Use this to remove mic bumps, lip smacks, etc.</p>
 
                 </TooltipContent>
@@ -216,10 +216,10 @@ const _MinContentControl = React.memo(() => {
 
 export const SilenceControls = () => {
     return (
-        <div className="w-full px-5 pt-6 flex flex-col gap-6 space-y-1">
+        <div className="w-full px-2 sm:px-3 xl:px-4 pt-4 sm:pt-5 flex flex-col gap-6 space-y-1">
             {/* Unified label and separator */}
             <div>
-                <Label className="mb-2 block text-sm/tight text-zinc-200">Silence Detection</Label>
+                <Label className="mb-2 block text-sm/tight leading-3 text-zinc-200 font-normal tracking-[-0.0125rem]">Silence Detection</Label>
                 <Separator aria-orientation="horizontal" className="h-px bg-zinc-700/80" />
             </div>
 

@@ -314,11 +314,14 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
       disabled={buttonDisabled}
-      className={cn(`bg-stone-700/10 shadow-xl border-2 rounded-xl border-orange-400/60 hover:bg-gradient-to-b from-red-800/10 to-orange-800/20 text-white p-8 font-[200] ${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`,
-        "w-[12rem] md:w-3xs"
-      )}
+      className={
+        cn(
+          "bg-stone-700/10 shadow-xl border-2 rounded-xl border-orange-400/60 hover:bg-gradient-to-b from-red-800/10 to-orange-800/20 text-white p-8 font-[200]",
+          `${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`,
+          "w-[12rem] md:w-3xs"
+        )}
     >
-      <span className="items-center align-middle flex text-base md:text-xl gap-4 font-[50]">
+      <span className="items-center font-label align-middle flex text-base md:text-[23px] tracking-normal gap-4 font-[300]">
         <AudioWaveformIcon size={32} className="scale-125 md:scale-150 text-gray-500" />
         {currentButtonText}
       </span>

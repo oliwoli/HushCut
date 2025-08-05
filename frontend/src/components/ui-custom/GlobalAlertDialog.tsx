@@ -12,6 +12,21 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { useAppState } from "@/stores/appSync";
+import { AlertTriangle, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
+import { buttonVariants } from "../ui/button";
+
+const getAlertIcon = (type: AlertData["severity"]) => {
+  switch (type) {
+    case "error":
+      return <XCircle className="w-6 h-6 ml-[2px] text-red-700 mb-[1px]" />;
+    case "warning":
+      return <AlertTriangle className="w-6 h-6 ml-[2px] text-yellow-700 mb-[1px]" />;
+    case "info":
+    default:
+      return <Info className="fill-teal-950/60 w-7 h-7 text-teal-700 mb-1 text-center" />;
+  }
+};
+
 
 interface AlertAction {
   label: string;
@@ -23,6 +38,7 @@ interface AlertData {
   title: string;
   message: string;
   actions?: AlertAction[]; // Add actions array to the interface
+  severity?: "error" | "warning" | "info";
 }
 
 const GlobalAlertDialog = () => {
@@ -52,17 +68,13 @@ const GlobalAlertDialog = () => {
   const setBusy = useAppState(s => s.setBusy);
   const isBusyRef = useRef(isBusy);
 
-
-  const alertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
     isBusyRef.current = isBusy;
   }, [isBusy]);
 
   useEffect(() => {
-    // --- THIS IS THE KEY CHANGE ---
-    // The handler now takes full control of the busy state.
     const handler = (data: AlertData) => {
+      console.log("alert data: ", data)
       // 1. Set the app to busy *when the event is received*.
       setBusy(true);
 
@@ -71,6 +83,7 @@ const GlobalAlertDialog = () => {
         title: data.title || "No title",
         message: data.message || "No message",
         actions: data.actions || [],
+        severity: data.severity || "info"
       });
       setAlertOpen(true);
     };
@@ -99,15 +112,35 @@ const GlobalAlertDialog = () => {
     <AlertDialog open={internalOpen} onOpenChange={handleOpenChange}>
       <AlertDialogContent
         style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
-        disableRadixAnimations={dialogOpacity === 0}
+        disableRadixAnimations={dialogOpacity === 0
+        }
+        className="overflow-hidden rounded-sm"
       >
-        <AlertDialogHeader>
-          <AlertDialogTitle>{alertData.title}</AlertDialogTitle>
-          <AlertDialogDescription>{alertData.message}</AlertDialogDescription>
+        <div
+          className={`absolute top-0 w-full h-[4px] ${{
+            error: "bg-red-700",
+            warning: "bg-amber-700",
+            info: "bg-teal-800",
+          }[alertData.severity ?? "info"]
+            }`}
+        />
+        <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5">{getAlertIcon(alertData.severity)}</div>
+        <AlertDialogHeader className="pl-11 gap-1 mt-2">
+          <AlertDialogTitle className="mb-0">
+            <div className="flex gap-2 items-center text-center">
+              {alertData.title}
+            </div>
+          </AlertDialogTitle>
+          <AlertDialogDescription className="mt-0">{alertData.message}</AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogAction>Continue</AlertDialogAction>
-          {alertData.actions && alertData.actions.map((action, index) => (
+        <AlertDialogFooter className="mt-1">
+          <AlertDialogAction
+            className={buttonVariants({
+              variant: alertData.actions?.length ? "outline" : "default",
+            })}
+          >
+            Continue
+          </AlertDialogAction>          {alertData.actions && alertData.actions.map((action, index) => (
             <AlertDialogAction key={index} onClick={action.onClick}>
               {action.label}
             </AlertDialogAction>

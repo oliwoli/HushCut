@@ -1814,7 +1814,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         PROJECT_DATA = None
         alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
-        send_result_with_alert(alert_title, message, task_id)
+        send_result_with_alert(alert_title, message, task_id, "warning")
         return False
 
     if not RESOLVE.GetProjectManager():
@@ -1822,7 +1822,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         PROJECT = None
         alert_title = "DaVinci Resolve Error"
         message = "Could not connect to DaVinci Resolve. Is it running?"
-        send_result_with_alert(alert_title, message, task_id)
+        send_result_with_alert(alert_title, message, task_id, "warning")
 
     PROJECT = RESOLVE.GetProjectManager().GetCurrentProject()
 
@@ -1859,7 +1859,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
             "shouldShowAlert": True,
             "alertTitle": "No Open Timeline",
             "alertMessage": message,  # Specific message for the alert
-            "alertSeverity": "error",
+            "alertSeverity": "info",
         }
 
         send_message_to_go("taskResult", response_payload, task_id=task_id)

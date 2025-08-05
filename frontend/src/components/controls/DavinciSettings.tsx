@@ -16,14 +16,14 @@ const _MakeNewTimelineSetting = React.memo(() => {
     return (
         <div className='space-y-2'>
             <Tooltip delayDuration={350}>
-                <Label className="font-medium w-full text-stone-400 flex text-center gap-2 leading-5">
+                <Label className="font-normal text-xs w-full text-stone-400 flex text-center gap-2 leading-5">
                     New Timeline
                     <TooltipTrigger asChild>
                         <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                     </TooltipTrigger>
                 </Label>
                 <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-extrabold'>New Timeline</h1>
+                    <h1 className='font-bold tracking-tight'>New Timeline</h1>
                     <p>Apply the edits in a new timeline.</p>
 
                 </TooltipContent>
@@ -40,7 +40,7 @@ const _KeepSilenceSetting = React.memo(() => {
 
     return (
         <div className='space-y-2 mx-auto gap-2 justify-center'>
-            <Label className="font-medium w-full text-stone-400 leading-5">
+            <Label className="font-normal text-xs w-full text-stone-400 leading-5">
                 Preserve Silences
             </Label>
             <Switch checked={keepSilence} onCheckedChange={setKeepSilence} />

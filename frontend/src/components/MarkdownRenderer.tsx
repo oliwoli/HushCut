@@ -26,7 +26,8 @@ export const MarkdownRenderer = ({ markdown }: Props) => {
                                 <ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} />
                             </span>
                         )
-                    }
+                    },
+
                 }
             }}
         >

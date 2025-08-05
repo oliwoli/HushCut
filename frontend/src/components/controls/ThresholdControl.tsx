@@ -30,7 +30,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
             <div className="h-[40px] flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300 pl-2 pt-3 pr-0">
                 <Tooltip delayDuration={950}>
                     <TooltipTrigger asChild>
-                        <Label className="font-medium text-stone-400 flex text-center gap-2 text-sm/tight sm:text-base/tight">
+                        <Label className="font-[185] text-stone-300 flex text-center gap-2 text-sm/tight">
                             Silence Threshold
                         </Label>
                     </TooltipTrigger>

@@ -73,29 +73,27 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 disableOutsideClick={true}
             >
                 <DialogHeader className="">
-                    <DialogTitle>Settings</DialogTitle>
+                    <DialogTitle className="text-gray-200">Settings</DialogTitle>
                     <DialogDescription>
                     </DialogDescription>
                 </DialogHeader>
 
 
                 <div className="grid gap-4 h-max max-w-6xl mx-auto select-none">
-                    <Description>General</Description>
+                    <h2 className="font-medium tracking-tight text-base">General</h2>
                     <div className="grid grid-cols-4 items-center gap-4">
                         <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
                             <span className="block truncate">DaVinci Path</span>
                         </Label>
-                        <Button
-                            id="davinci-folder-path"
-                            variant="outline"
-                            className="col-span-2 w-full overflow-hidden"
-                            onClick={handleSelectFolder}
+                        <div
+                            className="col-span-2 w-full overflow-hidden border-1 px-4 py-2 rounded-md text-gray-400"
                         >
-                            <span className="block truncate">{davinciFolderPath || "Select a folder"}</span>
-                        </Button>
+                            <span className="block truncate pointer-events-auto select-text text-sm">{davinciFolderPath || "(default path)"}</span>
+                        </div>
                         <Button
                             onClick={handleSelectFolder}
                             className="col-span-1 text-center whitespace-normal break-words leading-tight p-2 py-2.5 h-auto gap-1"
+                            variant={"secondary"}
                         >
                             Select<span className="hidden sm:inline">Folder</span>
 
@@ -107,7 +105,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                         "space-y-4",
                         enableCleanup ? "opacity-100" : "opacity-30"
                     )}>
-                        <p className="text-zinc-300 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been accessed in a while will automatically get deleted before the app exits.</p>
+                        <p className="text-zinc-400 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been accessed in a while will automatically get deleted before the app exits.</p>
                         <div className="flex gap-4">
                             <div className="grid grid-cols-4 items-center gap-4">
                                 <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
