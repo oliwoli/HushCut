@@ -34,6 +34,8 @@ export function GetToken():Promise<string>;
 
 export function GetWaveform(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
 
+export function HasAValidLicense():Promise<boolean>;
+
 export function LaunchHttpServer():Promise<void>;
 
 export function LaunchPythonBackend(arg1:number,arg2:number):Promise<void>;
@@ -67,5 +69,7 @@ export function SetWindowAlwaysOnTop(arg1:boolean):Promise<void>;
 export function StandardizeAudioToWav(arg1:string,arg2:string,arg3:any):Promise<void>;
 
 export function SyncWithDavinci():Promise<main.PythonCommandResponse>;
+
+export function VerifyLicense(arg1:string):Promise<Record<string, any>>;
 
 export function WaitForFile(arg1:string):Promise<void>;

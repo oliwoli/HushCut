@@ -27,8 +27,14 @@ import (
 
 // App struct
 type App struct {
-	ctx               context.Context
-	isDev             bool
+	ctx   context.Context
+	isDev bool
+
+	licenseMutex     sync.Mutex // Mutex to protect license operations
+	licenseVerifyKey []byte     // Public key for verifying license file signatures
+	licenseValid     bool
+	licenseOkChan    chan bool // Channel to signal license validity
+
 	silenceCache      map[CacheKey][]SilencePeriod
 	waveformCache     map[WaveformCacheKey]*PrecomputedWaveformData
 	cacheMutex        sync.RWMutex
@@ -64,6 +70,7 @@ type App struct {
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
+		licenseOkChan:     make(chan bool, 1), // Buffered channel to avoid blocking
 		silenceCache:      make(map[CacheKey][]SilencePeriod),
 		waveformCache:     make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
 		pythonReadyChan:   make(chan bool, 1),                                  // Buffered channel
@@ -77,8 +84,9 @@ func NewApp() *App {
 			Timeout: 30 * time.Second,
 		},
 		ffmpegReadyChan: make(chan struct{}),
-		AppVersion:      AppVersion,
-		fileUsage:       make(map[string]time.Time),
+
+		AppVersion: AppVersion,
+		fileUsage:  make(map[string]time.Time),
 	}
 }
 
@@ -315,6 +323,12 @@ func (a *App) startup(ctx context.Context) {
 		log.Fatalf("Failed to create tmp folder: %v", err)
 	}
 
+	a.licenseValid = a.HasAValidLicense()
+	if !a.licenseValid {
+		runtime.EventsEmit(a.ctx, "license:invalid", nil)
+		log.Println("Wails App: License is invalid or not found. (Prompt for license on frontend)")
+	}
+
 	// Initialize file usage tracking
 	a.loadUsageData()
 
@@ -424,6 +438,34 @@ func (a *App) signalFfmpegReady() {
 		log.Println("Signaling that FFmpeg is now ready.")
 		close(a.ffmpegReadyChan)
 	})
+}
+
+func (a *App) signalLicenseOk() {
+	log.Println("Signaling that license is now valid.")
+	a.licenseValid = true
+	a.licenseOkChan <- true
+	runtime.EventsEmit(a.ctx, "license:valid", nil)
+}
+
+func (a *App) waitForValidLicense() error {
+	a.licenseMutex.Lock()
+	isReady := a.licenseValid
+	a.licenseMutex.Unlock()
+
+	if isReady {
+		return nil // License valid, proceed.
+	}
+
+	// If not ready, block and wait for the signal.
+	log.Println("Task is waiting for License activation...")
+	select {
+	case <-a.licenseOkChan:
+		log.Println("License activated. Resuming task.")
+		return nil
+	case <-a.ctx.Done():
+		log.Println("Application is shutting down; aborting License activation.")
+		return a.ctx.Err()
+	}
 }
 
 func (a *App) waitForFfmpeg() error {
@@ -879,6 +921,10 @@ func (a *App) DetectSilences(
 	clipEndSeconds float64,
 	framerate float64,
 ) ([]SilencePeriod, error) {
+	if err := a.waitForValidLicense(); err != nil {
+		return nil, fmt.Errorf("license validation failed: %w", err)
+	}
+
 	if err := a.waitForFfmpeg(); err != nil {
 		return nil, err
 	}

@@ -66,6 +66,10 @@ export function GetWaveform(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['GetWaveform'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
+export function HasAValidLicense() {
+  return window['go']['main']['App']['HasAValidLicense']();
+}
+
 export function LaunchHttpServer() {
   return window['go']['main']['App']['LaunchHttpServer']();
 }
@@ -132,6 +136,10 @@ export function StandardizeAudioToWav(arg1, arg2, arg3) {
 
 export function SyncWithDavinci() {
   return window['go']['main']['App']['SyncWithDavinci']();
+}
+
+export function VerifyLicense(arg1) {
+  return window['go']['main']['App']['VerifyLicense'](arg1);
 }
 
 export function WaitForFile(arg1) {

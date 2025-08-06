@@ -17,6 +17,8 @@ import {
   ProcessProjectAudio,
   SyncWithDavinci,
   MakeFinalTimeline,
+  HasAValidLicense,
+  VerifyLicense
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
@@ -62,6 +64,7 @@ import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
+import LicensePrompt from "./components/ui-custom/LicensePrompt";
 
 
 
@@ -132,6 +135,7 @@ function supportsRealBackdrop() {
 function AppContent() {
   const [ffmpegReady, setFFmpegReady] = useState<boolean | null>(null)
   const prevFfmpegReady = usePrevious(ffmpegReady);
+  const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
 
   useEffect(() => {
     // Don't do anything until the initial status check is complete.
@@ -179,13 +183,11 @@ function AppContent() {
   const timelineFps = projectData?.timeline?.fps || 30;
 
   useEffect(() => {
-    // If there is no timecode or no clips, there's nothing to select.
     if (audioItems.length === 0) {
       setCurrentClipId(null);
       return;
     }
     if (currTimecode) {
-      // 1. Convert the current timecode to frames
       const currentFrame = currTimecode.frameCount;
 
       // 2. Find the clip that contains the current frame
@@ -489,6 +491,32 @@ function AppContent() {
       initialInitDone.current = true;
     };
   }, []);
+
+  // check if the license is valid
+  useEffect(() => {
+    const checkLicenseValidity = async () => {
+      if (hasValidLicense !== null) return; // Already checked
+      const hasLicense = await HasAValidLicense();
+      console.log("App.tsx: License validity check result:", hasLicense);
+      setHasValidLicense(hasLicense);
+      if (!hasLicense) {
+        console.log("App.tsx: License is invalid, prompting user for license key.");
+        EventsEmit("license:invalid", {
+          title: "License Invalid",
+          message: "Please enter your license key.",
+          status: "warning",
+        });
+
+        // if (userLicenseKey) {
+        //   const licenseData = await VerifyLicense(userLicenseKey);
+        //   console.log("App.tsx: License verification result:", licenseData);
+        // };
+      }
+
+    }
+    checkLicenseValidity();
+  }, []);
+
 
   // Effect to register Wails event listeners (runs once on mount)
   useEffect(() => {
@@ -903,6 +931,7 @@ export default function App() {
   return (
     <>
       <ClientPortal targetId="overlays">
+        <LicensePrompt />
         <GlobalAlertDialog />
         <FinalTimelineProgress
           open={showFinalProgress}

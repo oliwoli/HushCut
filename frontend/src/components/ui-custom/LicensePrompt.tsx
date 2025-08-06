@@ -13,9 +13,11 @@ import {
 
 import { useAppState } from "@/stores/appSync";
 import { AlertTriangle, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
-import { buttonVariants } from "../ui/button";
+import { Button, buttonVariants } from "../ui/button";
+import { Input } from "../ui/input";
+import { VerifyLicense } from "@wails/go/main/App";
 
-const getAlertIcon = (type: AlertData["severity"]) => {
+const getAlertIcon = (type: AlertData["status"]) => {
   switch (type) {
     case "error":
       return <XCircle className="w-6 h-6 ml-[2px] text-red-700 mb-[1px]" />;
@@ -39,10 +41,10 @@ interface AlertData {
   title: string;
   message: string;
   actions?: AlertAction[]; // Add actions array to the interface
-  severity?: "error" | "warning" | "info";
+  status?: "invalid" | "expired" | "error" | "warning" | "info";
 }
 
-const GlobalAlertDialog = () => {
+const LicensePrompt = () => {
   const [alertOpen, setAlertOpen] = useState(false);
   const [alertData, setAlertData] = useState<AlertData>({
     title: "",
@@ -51,6 +53,9 @@ const GlobalAlertDialog = () => {
 
   const [internalOpen, setInternalOpen] = useState(false);
   const [dialogOpacity, setDialogOpacity] = useState(1);
+
+  const [licenseKey, setLicenseKey] = useState("");
+
 
   useEffect(() => {
     if (alertOpen) {
@@ -74,27 +79,42 @@ const GlobalAlertDialog = () => {
   }, [isBusy]);
 
   useEffect(() => {
-    const handler = (data: AlertData) => {
-      console.log("alert data: ", data)
-      // 1. Set the app to busy *when the event is received*.
-      setBusy(true);
-
-      // 2. Set the alert data and open it.
+    const licenseInvalidEvent = EventsOn("license:invalid", () => {
+      console.log("license invalid event triggered");
       setAlertData({
-        title: data.title || "No title",
-        message: data.message || "No message",
-        actions: data.actions || [],
-        severity: data.severity || "info"
+        title: "Activate License",
+        message: "Please enter your license key below",
+        status: "warning",
       });
       setAlertOpen(true);
-    };
-
-    const alertEvent = EventsOn("showAlert", handler);
+    });
     return () => {
-      if (alertEvent) alertEvent();
+      if (licenseInvalidEvent) licenseInvalidEvent();
     };
 
-  }, []); // The handler no longer needs dependencies
+  }, []);
+
+  const handleVerify = async () => {
+    setBusy(true);
+    try {
+      // This calls the Go function
+      const licenseData = await VerifyLicense(licenseKey);
+      console.log("License is valid!", licenseData);
+      // On success, you'd likely close the dialog and maybe
+      // trigger a global state change to unlock the app.
+      handleOpenChange(false);
+    } catch (error) {
+      console.error("License verification failed:", error);
+      // Update the alert to show the error message
+      setAlertData({
+        title: "Activation Failed",
+        message: String(error),
+        status: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Dialog open/close logic
   const handleOpenChange = (isOpen: boolean) => {
@@ -122,10 +142,12 @@ const GlobalAlertDialog = () => {
             error: "bg-red-700",
             warning: "bg-amber-700",
             info: "bg-teal-800",
-          }[alertData.severity ?? "info"]
+            expired: "bg-yellow-700",
+            invalid: "bg-red-700",
+          }[alertData.status ?? "info"]
             }`}
         />
-        <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5">{getAlertIcon(alertData.severity)}</div>
+        <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5">{getAlertIcon(alertData.status)}</div>
         <AlertDialogHeader className="pl-11 gap-1 mt-2">
           <AlertDialogTitle className="mb-0">
             <div className="flex gap-2 items-center text-center">
@@ -133,23 +155,25 @@ const GlobalAlertDialog = () => {
             </div>
           </AlertDialogTitle>
           <AlertDialogDescription className="mt-0">{alertData.message}</AlertDialogDescription>
+          <Input
+            type="text"
+            placeholder="Add License Key"
+            value={licenseKey}
+            onChange={(e) => setLicenseKey(e.target.value)}
+          />
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">
-          <AlertDialogAction
-            className={buttonVariants({
-              variant: alertData.actions?.length ? "outline" : "default",
-            })}
+          <Button
+            variant={"secondary"}
+            onClick={handleVerify}
+            disabled={licenseKey.length < 35 || isBusy}
           >
             Continue
-          </AlertDialogAction>          {alertData.actions && alertData.actions.map((action, index) => (
-            <AlertDialogAction key={index} onClick={action.onClick}>
-              {action.label}
-            </AlertDialogAction>
-          ))}
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
   );
 };
 
-export default GlobalAlertDialog;
+export default LicensePrompt;

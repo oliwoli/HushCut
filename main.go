@@ -80,6 +80,9 @@ func (h *FileLoader) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 //go:embed build/appicon.png
 var icon []byte
 
+//go:embed secrets/public_key.pem
+var PublicKeyPEM []byte
+
 // various functionalities which are hard to implement in lua without 3rd party packages directly, therefore lua starts HushCut in this mode to get certain functions
 // includes uuid, deterministic uuid by string, http server
 func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *string) {
@@ -323,6 +326,7 @@ func main() {
 
 	// Create an instance of the app structure
 	app := NewApp()
+	app.licenseVerifyKey = PublicKeyPEM
 	if *pythonPort != 0 {
 		app.pythonCommandPort = *pythonPort
 	}
