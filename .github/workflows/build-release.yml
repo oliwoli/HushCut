@@ -78,7 +78,7 @@ jobs:
       - name: make public_key files
         run: |
           mkdir -p secrets
-          echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public.pem
+          echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
 
       - name: Build Wails App
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
