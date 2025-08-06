@@ -38,6 +38,11 @@ echo "Copying PyInstaller output to Wails build directory..."
 PYINSTALLER_DIST_MAIN_DIR="dist/$MAIN_FILE_NAME" # PyInstaller output directory for the 'main' executable
 TARGET_WAILS_BIN_DIR="build/bin/python_backend"      # Wails expects the backend executable here
 
+if [ -f "$TARGET_WAILS_BIN_DIR" ]; then
+  echo "Removing existing file: $TARGET_WAILS_BIN_DIR"
+  rm "$TARGET_WAILS_BIN_DIR"
+fi
+
 mkdir -p "$TARGET_WAILS_BIN_DIR"
 
 echo "Cleaning up old backend dependencies in $PROJECT_ROOT/$TARGET_WAILS_BIN_DIR/_internal (if any)..."

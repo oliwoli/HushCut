@@ -41,7 +41,7 @@ copy_files() {
 
 
   cp "python-backend/src/HushCut.lua" "$TARGET_FOLDER/HushCut.lua"
-  cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
+  
   # cp "python-backend/src/dkjson.lua" "$TARGET_FOLDER/dkjson.lua"
   
   # cp "build/bin/python_backend" "$TARGET_FOLDER/python_backend"
@@ -53,6 +53,8 @@ copy_files() {
     cp -r "build/bin/HushCut.app" "$TARGET_FOLDER/HushCut.app"
     echo "Making HushCut binary executable"
     chmod +x "$TARGET_FOLDER/HushCut.app/Contents/MacOS/HushCut"
+  else
+    cp "build/bin/HushCut" "$TARGET_FOLDER/HushCut"
   fi
 }
 

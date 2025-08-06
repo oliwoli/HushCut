@@ -35,7 +35,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                         </Label>
                     </TooltipTrigger>
                     <TooltipContent className='max-w-[200px]'>
-                        <h1 className='font-extrabold'>Silence Threshold</h1>
+                        <h1 className='font-[600] tracking-tight'>Silence Threshold</h1>
                         <p>Audio louder than this threshold is considered <b>content</b>.</p>
                         <p>Anything below is considered <b>silence</b>.</p>
                         <Separator className='text-gray-800 h-px w-full bg-zinc-300 mb-1 mt-2 rounded-full' />
