@@ -93,7 +93,7 @@ func (a *App) saveLocalLicense(license *SignedLicenseData) error {
 
 func (a *App) HasAValidLicense() bool {
 	if a.licenseValid {
-		log.Println("Returning saved value for license check.")
+		log.Printf("Returning saved value for license check. (%t)", a.licenseValid)
 		return a.licenseValid
 	}
 
@@ -156,7 +156,7 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 		return nil, errors.New("license key cannot be empty")
 	}
 	// 1. Perform online verification.
-	verifyURL := "https://api.hushcut.com/verify_license"
+	verifyURL := "https://api.hushcut.app/verify_license"
 	if a.isDev {
 		verifyURL = "http://localhost:8080/verify_license"
 	}
@@ -168,7 +168,7 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 
 	resp, err := http.Post(verifyURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("cannot connect to verification server; please check your internet connection and try again (error: %w)", err)
+		return nil, fmt.Errorf("cannot connect to verification server; please check your internet connection and try again")
 	}
 	defer resp.Body.Close()
 

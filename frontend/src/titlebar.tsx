@@ -86,8 +86,8 @@ const _TitleBar = () => {
               />
             </Button>
           </div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline">HushCut
+          <div className="flex items-center gap-2 select-none">
+            <h1 className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline select-none">HushCut
             </h1>
             <CircleIcon
               size={8}

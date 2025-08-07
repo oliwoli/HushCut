@@ -81,6 +81,8 @@ const LicensePrompt = () => {
   useEffect(() => {
     const licenseInvalidEvent = EventsOn("license:invalid", () => {
       console.log("license invalid event triggered");
+      console.log("set busy, license prompt")
+      setBusy(true);
       setAlertData({
         title: "Activate License",
         message: "Please enter your license key below",
@@ -89,13 +91,14 @@ const LicensePrompt = () => {
       setAlertOpen(true);
     });
     return () => {
-      if (licenseInvalidEvent) licenseInvalidEvent();
+      if (licenseInvalidEvent) {
+        licenseInvalidEvent();
+      }
     };
 
   }, []);
 
   const handleVerify = async () => {
-    setBusy(true);
     try {
       // This calls the Go function
       const licenseData = await VerifyLicense(licenseKey);
@@ -103,6 +106,7 @@ const LicensePrompt = () => {
       // On success, you'd likely close the dialog and maybe
       // trigger a global state change to unlock the app.
       handleOpenChange(false);
+      setBusy(false);
     } catch (error) {
       console.error("License verification failed:", error);
       // Update the alert to show the error message
@@ -111,8 +115,6 @@ const LicensePrompt = () => {
         message: String(error),
         status: "error",
       });
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -123,6 +125,7 @@ const LicensePrompt = () => {
       setBusy(false);
       console.log("closing alert!");
     } else {
+      setBusy(true);
       console.log("opening alert!");
     }
   };
@@ -135,7 +138,7 @@ const LicensePrompt = () => {
         style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
         disableRadixAnimations={dialogOpacity === 0
         }
-        className="overflow-hidden rounded-sm"
+        className="overflow-hidden rounded-sm select-none"
       >
         <div
           className={`absolute top-0 w-full h-[4px] ${{
@@ -166,7 +169,7 @@ const LicensePrompt = () => {
           <Button
             variant={"secondary"}
             onClick={handleVerify}
-            disabled={licenseKey.length < 35 || isBusy}
+            disabled={licenseKey.length < 35}
           >
             Continue
           </Button>

@@ -18,7 +18,6 @@ import {
   SyncWithDavinci,
   MakeFinalTimeline,
   HasAValidLicense,
-  VerifyLicense
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
@@ -251,7 +250,7 @@ function AppContent() {
       return
     }
 
-    if (!ffmpegReady) {
+    if (!ffmpegReady && hasValidLicense) {
       console.log("no ffmpeg! (handle sync");
 
       EventsEmit("showAlert", {

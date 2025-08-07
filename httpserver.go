@@ -631,7 +631,7 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 				log.Printf("msgEndpoint: WARNING - Could not send to respCh for task %s. Channel full/listener gone.", taskID)
 				// If SyncWithDavinci is gone but Python wanted an alert, we *could* emit it here as a fallback.
 				// However, this implies SyncWithDavinci might have timed out or errored earlier.
-				if taskData.ShouldShowAlert {
+				if taskData.ShouldShowAlert && a.licenseValid {
 					log.Printf("msgEndpoint: SyncWithDavinci listener gone for task %s, but Python requested alert. Emitting globally.", taskID)
 					runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
 						"title":    taskData.AlertTitle,
@@ -643,7 +643,7 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Printf("msgEndpoint: Warning - Received 'taskResult' for taskID '%s', but no pending task found.", taskID)
 			// Similar to above, if no pending task, but Python wanted an alert for this orphaned task_id.
-			if taskData.ShouldShowAlert {
+			if taskData.ShouldShowAlert && a.licenseValid {
 				log.Printf("msgEndpoint: No pending task for %s, but Python requested alert. Emitting globally.", taskID)
 				runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
 					"title":    taskData.AlertTitle,
@@ -667,6 +667,9 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 		runtime.EventsEmit(a.ctx, "showToast", data)
 
 	case "showAlert": // This is now for alerts NOT related to a SyncWithDavinci task
+		if !a.licenseValid {
+			return
+		}
 		if taskID != "" {
 			log.Printf("msgEndpoint: 'showAlert' with task_id '%s' received. This is likely an old Python flow. Emitting alert globally but not notifying task channel.", taskID)
 		}
@@ -750,7 +753,7 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 	finalResponse := <-respCh // Wait for Python's actual processing response
 	log.Printf("Go: Received final Python response for task %s", taskID)
 
-	if finalResponse.ShouldShowAlert {
+	if finalResponse.ShouldShowAlert && a.licenseValid {
 		log.Printf("Go: Python requested an alert. Title: '%s', Message: '%s', Severity: '%s'",
 			finalResponse.AlertTitle, finalResponse.AlertMessage, finalResponse.AlertSeverity)
 
@@ -784,6 +787,9 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline bool) (*PythonCommandResponse, error) {
 	if !a.pythonReady {
 		return nil, fmt.Errorf("python backend not ready")
+	}
+	if !a.licenseValid {
+		return nil, fmt.Errorf("invalid license. Action not permitted")
 	}
 	runtime.EventsEmit(a.ctx, "showFinalTimelineProgress")
 
