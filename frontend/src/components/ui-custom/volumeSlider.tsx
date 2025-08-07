@@ -1,9 +1,10 @@
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { useGlobalStore } from "@/stores/clipStore";
-import * as React from "react";
 import * as slider from "@zag-js/slider";
 import { useMachine, normalizeProps } from "@zag-js/react";
+
+import faderImg from "../../assets/images/ex09.png"
 
 const defaultMarks = [0, -5, -10, -20, -30, -40, -50, -60];
 
@@ -88,19 +89,18 @@ export function ThresholdSlider({
               key={index}
               {...api.getThumbProps({ index })}
               className={cn(
-                "block h-8 w-4 bg-zinc-400 rounded-[1px] relative",
-                "ring-offset-0 transition-colors",
+                "h-12 w-12 flex items-center justify-items-center",
                 "focus-visible:outline-none focus-visible:ring-8 focus-visible:ring-zinc-200/10 focus-visible:ring-offset-0",
-                "disabled:pointer-events-none disabled:opacity-50",
-                "overflow-hidden"
+                "disabled:pointer-events-none disabled:opacity-50"
               )}
             >
+              <div
+                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-15px]"
+                style={{
+                  backgroundImage: `url(${faderImg})`,
+                }}
+              />
               <input {...api.getHiddenInputProps({ index })} />
-              <div className="absolute top-1/2 -translate-y-1/2 h-[1px] w-3 bg-zinc-800 pointer-events-none left-1/2 transform -translate-x-1/2 z-2" />
-              <div className="absolute top-1/2 -translate-y-[45%] h-[40%] w-full bg-zinc-400 pointer-events-none left-1/2 transform -translate-x-1/2 z-1" />
-              <div className="absolute bottom-0 -translate-y-0 h-[5px] w-full bg-zinc-600 pointer-events-none left-1/2 transform -translate-x-1/2 z-1" />
-              <div className="absolute top-0 h-[3px] w-full bg-zinc-300 pointer-events-none left-1/2 transform -translate-x-1/2 z-1" />
-
             </div>
           ))}
 
