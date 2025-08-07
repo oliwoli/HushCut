@@ -88,9 +88,10 @@ export function ThresholdSlider({
             <div
               key={index}
               {...api.getThumbProps({ index })}
+              tabIndex={-1}
               className={cn(
                 "h-12 w-12 flex items-center justify-items-center",
-                "focus-visible:outline-none focus-visible:ring-8 focus-visible:ring-zinc-200/10 focus-visible:ring-offset-0",
+                "focus-visible:outline-none",
                 "disabled:pointer-events-none disabled:opacity-50"
               )}
             >
@@ -99,8 +100,9 @@ export function ThresholdSlider({
                 style={{
                   backgroundImage: `url(${faderImg})`,
                 }}
+                tabIndex={-1}
               />
-              <input {...api.getHiddenInputProps({ index })} />
+              <input {...api.getHiddenInputProps({ index })} tabIndex={-1} />
             </div>
           ))}
 
