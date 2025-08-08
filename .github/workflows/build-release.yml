@@ -108,32 +108,8 @@ jobs:
           else
             zip -r ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip .
           fi
-
-      - name: Upload artifact
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
-        with:
-          name: HushCut-${{ github.ref_name }}-${{ matrix.label }}
-          path: HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
-
-  upload-release-assets:
-    env:
-      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Display downloaded files
-        run: ls -R artifacts
-
-      - name: Get short-lived access token
+      
+      - name: Get Dropbox access token
         id: dropbox
         run: |
           ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
@@ -145,12 +121,56 @@ jobs:
 
       - name: Upload to Dropbox
         run: |
-          for f in artifacts/*.zip; do
-            FILENAME=$(basename "$f")
-            echo "Uploading $f to Dropbox..."
-            curl -X POST https://content.dropboxapi.com/2/files/upload \
-              --header "Authorization: Bearer $ACCESS_TOKEN" \
-              --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
-              --header "Content-Type: application/octet-stream" \
-              --data-binary @"$f"
-          done
+          FILENAME="HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
+          echo "Uploading $FILENAME to Dropbox..."
+          curl -X POST https://content.dropboxapi.com/2/files/upload \
+            --header "Authorization: Bearer $ACCESS_TOKEN" \
+            --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary @"$FILENAME"
+
+      # - name: Upload artifact
+      #   if: startsWith(github.ref, 'refs/tags/')
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: HushCut-${{ github.ref_name }}-${{ matrix.label }}
+      #     path: HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
+
+  # upload-release-assets:
+  #   env:
+  #     IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+  #   if: startsWith(github.ref, 'refs/tags/')
+  #   needs: build
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+  #     - name: Download all artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         path: artifacts
+  #         merge-multiple: true
+
+  #     - name: Display downloaded files
+  #       run: ls -R artifacts
+
+  #     - name: Get short-lived access token
+  #       id: dropbox
+  #       run: |
+  #         ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
+  #           -u "${{ secrets.DROPBOX_KEY }}:${{ secrets.DROPBOX_SECRET }}" \
+  #           -d grant_type=refresh_token \
+  #           -d refresh_token="${{ secrets.DROPBOX_REFRESH_TOKEN }}" \
+  #           | jq -r '.access_token')
+  #         echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+
+  #     - name: Upload to Dropbox
+  #       run: |
+  #         for f in artifacts/*.zip; do
+  #           FILENAME=$(basename "$f")
+  #           echo "Uploading $f to Dropbox..."
+  #           curl -X POST https://content.dropboxapi.com/2/files/upload \
+  #             --header "Authorization: Bearer $ACCESS_TOKEN" \
+  #             --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
+  #             --header "Content-Type: application/octet-stream" \
+  #             --data-binary @"$f"
+  #         done
