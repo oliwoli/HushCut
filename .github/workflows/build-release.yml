@@ -86,6 +86,28 @@ jobs:
           build-name: HushCut
           build-platform: ${{ matrix.platform }}
           package: false
+      
+      # - name: MacOS download gon for code signing and app notarization
+      #   if: matrix.label == 'macos'
+      #   run: |
+      #     brew install Bearer/tap/gon
+
+      - name: Import Code-Signing Certificates for macOS
+        if: matrix.label == 'macos'
+        uses: Apple-Actions/import-codesign-certs@v3
+        with:
+          # The certificates in a PKCS12 file encoded as a base64 string
+          p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
+          # The password used to import the PKCS12 file.
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+      - name: Sign our macOS binary
+        if: matrix.label == 'macos'
+        env:
+          AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
+          AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
+        run: |
+          echo "Signing Package"
+          gon -log-level=info ./code-signing/gon-sign.json
 
       - name: Move binaries to macOS Resources folder
         if: matrix.label == 'macos'
@@ -110,6 +132,7 @@ jobs:
           fi
       
       - name: Get Dropbox access token
+        if: startsWith(github.ref, 'refs/tags/')
         id: dropbox
         run: |
           ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
@@ -120,6 +143,7 @@ jobs:
           echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
 
       - name: Upload to Dropbox
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           FILENAME="HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
           echo "Uploading $FILENAME to Dropbox..."
