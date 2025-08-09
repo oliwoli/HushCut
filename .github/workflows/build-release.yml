@@ -121,6 +121,7 @@ jobs:
         env:
           AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
           AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
+          AC_PROVIDER: ${{ secrets.APPLE_TEAM_ID}}
         run: |
           echo "Signing Package"
           gon -log-level=info ./code-signing/gon-sign.json
