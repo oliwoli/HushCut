@@ -1,6 +1,4 @@
-build/*
-build/bin
-!build/scripts
+build
 node_modules
 frontend/dist
 
@@ -17,5 +15,7 @@ lua-go-http/lua-go-http
 
 settings.json
 debug_project_data_from_go.json
-secrets/public_key.pem
+secrets
 *.dmg
+.DS_Store
+
