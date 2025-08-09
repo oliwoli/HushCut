@@ -87,11 +87,6 @@ jobs:
           build-platform: ${{ matrix.platform }}
           package: false
       
-      # - name: MacOS download gon for code signing and app notarization
-      #   if: matrix.label == 'macos'
-      #   run: |
-      #     brew install Bearer/tap/gon
-
       - name: delete python_backend
         run: |
           rm -rf build/bin/python_backend
@@ -103,6 +98,15 @@ jobs:
           mkdir -p "$RESOURCE_DIR"
           rm -f build/bin/HushCut.app.zip
           rm -f build/bin/HushCut.pkg
+
+      - name: Install latest gon for notarization
+        if: matrix.label == 'macos'
+        run: |
+          # Uninstall any old version that might be on the runner, ignore error if it doesn't exist
+          brew uninstall gon || true
+          
+          # Install the latest version from the official repository
+          brew install Bearer/tap/gon
 
       - name: Import Code-Signing Certificates for macOS
         if: matrix.label == 'macos'
