@@ -5,7 +5,7 @@
     "application_identity": "Developer ID Application: Oliver Weiss (7SD86W66T3)"
   },
   "zip": {
-    "path": "./build/bin/HushCut-macOS.zip"
+    "output_path": "./build/bin/HushCut-macOS.zip"
   },
   "notarize": {
     "path": "./build/bin/HushCut-macOS.zip",
