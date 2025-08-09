@@ -92,6 +92,18 @@ jobs:
       #   run: |
       #     brew install Bearer/tap/gon
 
+      - name: delete python_backend
+        run: |
+          rm -rf build/bin/python_backend
+
+      - name: Add macOS Resources folder and cleanup
+        if: matrix.label == 'macos'
+        run: |
+          RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
+          mkdir -p "$RESOURCE_DIR"
+          rm -f build/bin/HushCut.app.zip
+          rm -f build/bin/HushCut.pkg
+
       - name: Import Code-Signing Certificates for macOS
         if: matrix.label == 'macos'
         uses: Apple-Actions/import-codesign-certs@v3
@@ -108,21 +120,14 @@ jobs:
         run: |
           echo "Signing Package"
           gon -log-level=info ./code-signing/gon-sign.json
-
-      - name: Move binaries to macOS Resources folder
-        if: matrix.label == 'macos'
+            
+      - name: Rename macOS Release Asset
+        if: matrix.label == 'macos' && startsWith(github.ref, 'refs/tags/')
         run: |
-          RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
-          mkdir -p "$RESOURCE_DIR"
-          rm -f build/bin/HushCut.app.zip
-          rm -f build/bin/HushCut.pkg
-
-      - name: delete python_backend
-        run: |
-          rm -rf build/bin/python_backend
+          mv build/bin/HushCut-macOS.zip HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
       
       - name: Zip bin folder
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && matrix.label != 'macos'
         run: |
           cd build/bin
           if [[ "$RUNNER_OS" == "Windows" ]]; then
