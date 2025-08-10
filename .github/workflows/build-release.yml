@@ -121,6 +121,7 @@ jobs:
         run: |
           echo "Signing Package"
           gon -log-level=info ./code-signing/gon-sign.json
+          cd build/bin
           # zip the .app folder
           zip -r HushCut-macOS.zip HushCut.app
 
