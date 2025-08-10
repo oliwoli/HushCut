@@ -5,15 +5,17 @@ on:
     branches:
       - '**'
     tags:
+      # It's good practice to be more specific, e.g., 'v*.*.*'
       - '*'
 
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
 
 jobs:
+  #===================================================================
+  # JOB 1: Build binaries for each platform in parallel
+  #===================================================================
   build:
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -80,12 +82,12 @@ jobs:
           echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
 
       - name: Build Wails App
-        uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
+        uses: dAppServer/wails-build-action@v2 # Using stable v2
         with:
           build-name: HushCut
           build-platform: ${{ matrix.platform }}
           package: false
-      
+
       - name: Delete python_backend
         run: rm -rf build/bin/python_backend
 
@@ -120,51 +122,87 @@ jobs:
           echo "Signing Package"
           gon -log-level=info ./code-signing/gon-sign.json
 
-      - name: Rename macOS Release Asset
-        if: startsWith(github.ref, 'refs/tags/') && matrix.label == 'macos'
-        run: |
-          mv build/bin/HushCut-macOS.zip build/bin/HushCut-${{ github.ref_name }}-macos.zip
-      
-      - name: Zip bin folder
-        if: startsWith(github.ref, 'refs/tags/') && matrix.label != 'macos'
+      - name: Package Release Asset
+        # This step will only run when you push a tag
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           cd build/bin
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
-          else
-            zip -r ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip .
+          ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
+          if [[ "${{ matrix.label }}" == "macos" ]]; then
+            # 'gon' creates 'HushCut-macOS.zip', so we just move it
+            mv HushCut-macOS.zip "../../${ARTIFACT_FILENAME}"
+          elif [[ "${{ matrix.label }}" == "windows" ]]; then
+            powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../${ARTIFACT_FILENAME}"
+          else # Linux
+            zip -r "../../${ARTIFACT_FILENAME}" .
           fi
 
-      - name: Checkout public repo
+      - name: Upload Release Asset as Artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: HushCut-${{ matrix.label }} # Unique artifact name per platform
+          path: HushCut-${{ matrix.label }}.zip # Path to the packaged file
+
+  #===================================================================
+  # JOB 2: Publish all binaries to the public repository
+  # This job runs only on tag pushes and after all builds succeed.
+  #===================================================================
+  publish:
+    name: Publish to Public Repo
+    needs: build # Ensures this job runs only after the 'build' job completes
+    if: startsWith(github.ref, 'refs/tags/') # Condition to run only for tags
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Permission to push to the repository
+
+    steps:
+      - name: Checkout current repo (for package.json)
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts # Download all artifacts into an 'artifacts' directory
+
+      - name: Display downloaded file structure
+        run: ls -R artifacts
+
+      - name: Checkout public releases repo
         uses: actions/checkout@v4
         with:
           repository: oliwoli/hushcut-releases
           token: ${{ secrets.GH_PUBLISH_TOKEN }}
           path: public-repo
 
-      - name: Copy binaries and package.json to public repo folder
+      - name: Organize artifacts and push to public repo
         run: |
+          # Create destination directories
           mkdir -p public-repo/build/macos
           mkdir -p public-repo/build/windows
           mkdir -p public-repo/build/linux
 
-          # Copy package.json
+          # Copy package.json from the main repo
+          echo "Copying package.json"
           cp package.json public-repo/package.json
 
-          # Copy macOS zip (already named with version in private repo, rename to fixed name)
-          cp build/bin/HushCut-macOS.zip public-repo/build/macos/HushCut-macOS.zip
+          # Copy artifacts into the public repo checkout
+          # Note: download-artifact creates subdirectories named after the artifact
+          echo "Copying artifacts"
+          cp artifacts/HushCut-linux/HushCut-linux.zip public-repo/build/linux/
+          cp artifacts/HushCut-windows/HushCut-windows.zip public-repo/build/windows/
+          cp artifacts/HushCut-macos/HushCut-macos.zip public-repo/build/macos/HushCut-macOS.zip
 
-          # Copy Windows zip (rename from versioned name to fixed name)
-          cp HushCut-${{ github.ref_name }}-windows.zip public-repo/build/windows/HushCut-windows.zip
-
-          # Copy Linux zip (rename from versioned name to fixed name)
-          cp HushCut-${{ github.ref_name }}-linux.zip public-repo/build/linux/HushCut-linux.zip
-
-      - name: Commit and push binaries and package.json to public repo
-        run: |
+          # Commit and push changes to the public repo
           cd public-repo
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add build/macos/HushCut-macOS.zip build/windows/HushCut-windows.zip build/linux/HushCut-linux.zip package.json
-          git commit -m "Update build artifacts and package.json for tag ${{ github.ref_name }}" || echo "No changes to commit"
-          git push origin main
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add build/ package.json
+          
+          # Commit only if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update build artifacts and package.json for tag ${{ github.ref_name }}"
+            git push
+          fi
