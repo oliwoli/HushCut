@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload Release Asset as Artifact
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: HushCut-${{ matrix.label }} # Unique artifact name per platform
           path: HushCut-${{ matrix.label }}.zip # Path to the packaged file
