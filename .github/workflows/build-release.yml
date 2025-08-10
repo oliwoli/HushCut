@@ -1,73 +1,72 @@
-# name: Build and optionally make Release
+name: Build and optionally make Release
 
-# on:
-#   push:
-#     branches:
-#       - '**'
-#     tags:
-#       - '*'
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '*'
 
-# env:
-#   NODE_OPTIONS: "--max-old-space-size=4096"
+env:
+  NODE_OPTIONS: "--max-old-space-size=4096"
 
-# jobs:
-#   build:
-#     permissions:
-#       contents: write
-#     strategy:
-#       fail-fast: false
-#       matrix:
-#         include:
-#           - os: ubuntu-latest
-#             platform: linux/amd64
-#             ext: ''
-#             label: linux
-#           - os: windows-latest
-#             platform: windows/amd64
-#             ext: .exe
-#             label: windows
-#           - os: macos-latest
-#             platform: darwin/universal
-#             ext: ''
-#             label: macos
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux/amd64
+            ext: ''
+            label: linux
+          - os: windows-latest
+            platform: windows/amd64
+            ext: .exe
+            label: windows
+          - os: macos-latest
+            platform: darwin/universal
+            ext: ''
+            label: macos
 
-#     runs-on: ${{ matrix.os }}
-#     defaults:
-#       run:
-#         shell: bash
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
 
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v4
-#         with:
-#           submodules: recursive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-#       - name: Set up Python
-#         uses: actions/setup-python@v4
-#         with:
-#           python-version: '3.13'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
 
-#       - name: Set up Go
-#         uses: actions/setup-go@v5
-#         with:
-#           go-version: '1.22'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
 
-#       - name: Install Python deps
-#         run: |
-#           python -m pip install --upgrade pip setuptools wheel
-#           python -m pip install -r python-backend/requirements.txt
-#           python -m pip install pyinstaller
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r python-backend/requirements.txt
+          python -m pip install pyinstaller
 
-#       - name: Build Python backend
-#         run: |
-#           pyinstaller python-backend/src/HushCut.py --name python_backend -y
-#           mkdir -p build/bin
-#           mkdir -p build/bin/python_backend
-#           cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend/python_backend${{ matrix.ext }}
-#           if [ -d dist/python_backend/_internal ]; then
-#             cp -r dist/python_backend/_internal build/bin/python_backend/
-#           fi
-#           rm -rf dist build/python_backend
+      - name: Build Python backend
+        run: |
+          pyinstaller python-backend/src/HushCut.py --name python_backend -y
+          mkdir -p build/bin/python_backend
+          cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend/python_backend${{ matrix.ext }}
+          if [ -d dist/python_backend/_internal ]; then
+            cp -r dist/python_backend/_internal build/bin/python_backend/
+          fi
+          rm -rf dist build/python_backend
 
 #       - name: Copy Lua script
 #         run: cp python-backend/src/HushCut.lua build/bin/
@@ -75,10 +74,10 @@
 #       - name: Install pnpm
 #         run: npm install -g pnpm
 
-#       - name: make public_key files
-#         run: |
-#           mkdir -p secrets
-#           echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
+      - name: Make public_key files
+        run: |
+          mkdir -p secrets
+          echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
 
 #       - name: Build Wails App
 #         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
@@ -87,9 +86,8 @@
 #           build-platform: ${{ matrix.platform }}
 #           package: false
       
-#       - name: delete python_backend
-#         run: |
-#           rm -rf build/bin/python_backend
+      - name: Delete python_backend
+        run: rm -rf build/bin/python_backend
 
 #       - name: Add macOS Resources folder and cleanup
 #         if: matrix.label == 'macos'
@@ -99,112 +97,74 @@
 #           rm -f build/bin/HushCut.app.zip
 #           rm -f build/bin/HushCut.pkg
 
-#       - name: Install latest gon for notarization
-#         if: matrix.label == 'macos'
-#         run: |
-#           # Uninstall any old version that might be on the runner, ignore error if it doesn't exist
-#           brew uninstall gon || true
-          
-#           # Install the latest version from the official repository
-#           brew install Bearer/tap/gon
+      - name: Install latest gon for notarization
+        if: matrix.label == 'macos'
+        run: |
+          brew uninstall gon || true
+          brew install Bearer/tap/gon
 
-#       - name: Import Code-Signing Certificates for macOS
-#         if: matrix.label == 'macos'
-#         uses: Apple-Actions/import-codesign-certs@v3
-#         with:
-#           # The certificates in a PKCS12 file encoded as a base64 string
-#           p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
-#           # The password used to import the PKCS12 file.
-#           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
-#       - name: Sign our macOS binary
-#         if: matrix.label == 'macos'
-#         env:
-#           AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
-#           AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
-#           AC_PROVIDER: ${{ secrets.APPLE_TEAM_ID}}
-#         run: |
-#           echo "Signing Package"
-#           gon -log-level=info ./code-signing/gon-sign.json
-            
-#       - name: Rename macOS Release Asset
-#         if: startsWith(github.ref, 'refs/tags/') && matrix.label == 'macos'
-#         run: |
-#           mv build/bin/HushCut-macOS.zip HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
+      - name: Import Code-Signing Certificates for macOS
+        if: matrix.label == 'macos'
+        uses: Apple-Actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+
+      - name: Sign our macOS binary
+        if: matrix.label == 'macos'
+        env:
+          AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
+          AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
+          AC_PROVIDER: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Signing Package"
+          gon -log-level=info ./code-signing/gon-sign.json
+
+      - name: Rename macOS Release Asset
+        if: startsWith(github.ref, 'refs/tags/') && matrix.label == 'macos'
+        run: |
+          mv build/bin/HushCut-macOS.zip build/bin/HushCut-${{ github.ref_name }}-macos.zip
       
-#       - name: Zip bin folder
-#         if: startsWith(github.ref, 'refs/tags/') && matrix.label != 'macos'
-#         run: |
-#           cd build/bin
-#           if [[ "$RUNNER_OS" == "Windows" ]]; then
-#             powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
-#           else
-#             zip -r ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip .
-#           fi
-      
-#       - name: Get Dropbox access token
-#         if: startsWith(github.ref, 'refs/tags/')
-#         id: dropbox
-#         run: |
-#           ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
-#             -u "${{ secrets.DROPBOX_KEY }}:${{ secrets.DROPBOX_SECRET }}" \
-#             -d grant_type=refresh_token \
-#             -d refresh_token="${{ secrets.DROPBOX_REFRESH_TOKEN }}" \
-#             | jq -r '.access_token')
-#           echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+      - name: Zip bin folder
+        if: startsWith(github.ref, 'refs/tags/') && matrix.label != 'macos'
+        run: |
+          cd build/bin
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
+          else
+            zip -r ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip .
+          fi
 
-#       - name: Upload to Dropbox
-#         if: startsWith(github.ref, 'refs/tags/')
-#         run: |
-#           FILENAME="HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
-#           echo "Uploading $FILENAME to Dropbox..."
-#           curl -X POST https://content.dropboxapi.com/2/files/upload \
-#             --header "Authorization: Bearer $ACCESS_TOKEN" \
-#             --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
-#             --header "Content-Type: application/octet-stream" \
-#             --data-binary @"$FILENAME"
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+        with:
+          repository: oliwoli/hushcut-releases
+          token: ${{ secrets.GH_PUBLISH_TOKEN }}
+          path: public-repo
 
-#       # - name: Upload artifact
-#       #   if: startsWith(github.ref, 'refs/tags/')
-#       #   uses: actions/upload-artifact@v4
-#       #   with:
-#       #     name: HushCut-${{ github.ref_name }}-${{ matrix.label }}
-#       #     path: HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
+      - name: Copy binaries and package.json to public repo folder
+        run: |
+          mkdir -p public-repo/build/macos
+          mkdir -p public-repo/build/windows
+          mkdir -p public-repo/build/linux
 
-#   # upload-release-assets:
-#   #   env:
-#   #     IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
-#   #   if: startsWith(github.ref, 'refs/tags/')
-#   #   needs: build
-#   #   runs-on: ubuntu-latest
+          # Copy package.json
+          cp package.json public-repo/package.json
 
-#   #   steps:
-#   #     - name: Download all artifacts
-#   #       uses: actions/download-artifact@v4
-#   #       with:
-#   #         path: artifacts
-#   #         merge-multiple: true
+          # Copy macOS zip (already named with version in private repo, rename to fixed name)
+          cp build/bin/HushCut-macOS.zip public-repo/build/macos/HushCut-macOS.zip
 
-#   #     - name: Display downloaded files
-#   #       run: ls -R artifacts
+          # Copy Windows zip (rename from versioned name to fixed name)
+          cp HushCut-${{ github.ref_name }}-windows.zip public-repo/build/windows/HushCut-windows.zip
 
-#   #     - name: Get short-lived access token
-#   #       id: dropbox
-#   #       run: |
-#   #         ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
-#   #           -u "${{ secrets.DROPBOX_KEY }}:${{ secrets.DROPBOX_SECRET }}" \
-#   #           -d grant_type=refresh_token \
-#   #           -d refresh_token="${{ secrets.DROPBOX_REFRESH_TOKEN }}" \
-#   #           | jq -r '.access_token')
-#   #         echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+          # Copy Linux zip (rename from versioned name to fixed name)
+          cp HushCut-${{ github.ref_name }}-linux.zip public-repo/build/linux/HushCut-linux.zip
 
-#   #     - name: Upload to Dropbox
-#   #       run: |
-#   #         for f in artifacts/*.zip; do
-#   #           FILENAME=$(basename "$f")
-#   #           echo "Uploading $f to Dropbox..."
-#   #           curl -X POST https://content.dropboxapi.com/2/files/upload \
-#   #             --header "Authorization: Bearer $ACCESS_TOKEN" \
-#   #             --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
-#   #             --header "Content-Type: application/octet-stream" \
-#   #             --data-binary @"$f"
-#   #         done
+      - name: Commit and push binaries and package.json to public repo
+        run: |
+          cd public-repo
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add build/macos/HushCut-macOS.zip build/windows/HushCut-windows.zip build/linux/HushCut-linux.zip package.json
+          git commit -m "Update build artifacts and package.json for tag ${{ github.ref_name }}" || echo "No changes to commit"
+          git push origin main
