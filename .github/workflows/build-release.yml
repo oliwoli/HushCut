@@ -207,5 +207,6 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "Update build artifacts and package.json for tag ${{ github.ref_name }}"
-            git push
+            git tag ${{ github.ref_name }}
+            git push && git push --tags
           fi
