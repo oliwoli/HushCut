@@ -76,14 +76,17 @@ jobs:
               --name python_backend \
               -y \
               --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" --onefile
+            BACKEND_BINARY="dist/python_backend" 
+          
           else
             echo "Building Python backend without code signing..."
             pyinstaller python-backend/src/HushCut.py --name python_backend -y
+            BACKEND_BINARY="dist/python_backend/python_backend${{ matrix.ext }}"
           fi
 
           # Copy built files
           mkdir -p build/bin/python_backend
-          cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend/python_backend${{ matrix.ext }}
+          cp "$BACKEND_BINARY" build/bin/python_backend/python_backend${{ matrix.ext }}
           if [ -d dist/python_backend/_internal ]; then
             cp -r dist/python_backend/_internal build/bin/python_backend/
           fi
