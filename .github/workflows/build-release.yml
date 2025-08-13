@@ -59,20 +59,27 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r python-backend/requirements.txt
           python -m pip install pyinstaller
+      
+      - name: Import Code-Signing Certificates for macOS
+        if: matrix.label == 'macos'
+        uses: Apple-Actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
       - name: Build Python backend
-        env:
-          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
         run: |
-          # Add signing arguments only on the macOS runner
+          # Run the correct pyinstaller command based on the OS
           if [[ "${{ matrix.label }}" == "macos" ]]; then
-            PYINSTALLER_OPTS="--codesign-identity \"$SIGNING_IDENTITY\""
+            echo "Building Python backend with code signing for macOS..."
+            pyinstaller python-backend/src/HushCut.py \
+              --name python_backend \
+              -y \
+              --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" --onefile
           else
-            PYINSTALLER_OPTS=""
+            echo "Building Python backend without code signing..."
+            pyinstaller python-backend/src/HushCut.py --name python_backend -y
           fi
-
-          # Build the app
-          pyinstaller $PYINSTALLER_OPTS python-backend/src/HushCut.py --name python_backend -y
 
           # Copy built files
           mkdir -p build/bin/python_backend
@@ -123,13 +130,6 @@ jobs:
         run: |
           brew uninstall gon || true
           brew install Bearer/tap/gon
-
-      - name: Import Code-Signing Certificates for macOS
-        if: matrix.label == 'macos'
-        uses: Apple-Actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
-          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
       - name: install create-dmg for macOS
         if: matrix.label == 'macos'
