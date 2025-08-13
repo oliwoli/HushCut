@@ -61,13 +61,26 @@ jobs:
           python -m pip install pyinstaller
 
       - name: Build Python backend
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
         run: |
-          pyinstaller python-backend/src/HushCut.py --name python_backend -y
+          # Add signing arguments only on the macOS runner
+          if [[ "${{ matrix.label }}" == "macos" ]]; then
+            PYINSTALLER_OPTS="--codesign-identity \"$SIGNING_IDENTITY\""
+          else
+            PYINSTALLER_OPTS=""
+          fi
+
+          # Build the app
+          pyinstaller $PYINSTALLER_OPTS python-backend/src/HushCut.py --name python_backend -y
+
+          # Copy built files
           mkdir -p build/bin/python_backend
           cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend/python_backend${{ matrix.ext }}
           if [ -d dist/python_backend/_internal ]; then
             cp -r dist/python_backend/_internal build/bin/python_backend/
           fi
+
 
       - name: Copy Lua script
         run: cp python-backend/src/HushCut.lua build/bin/
