@@ -54,6 +54,19 @@ mv -f "$PYINSTALLER_DIST_MAIN_DIR/$MAIN_FILE_NAME" "$TARGET_WAILS_BIN_DIR/python
 echo "Moving new backend dependencies to $PROJECT_ROOT/$TARGET_WAILS_BIN_DIR/_internal..."
 mv -f "$PYINSTALLER_DIST_MAIN_DIR/_internal" "$TARGET_WAILS_BIN_DIR/"
 
+# If we have a macOS .app bundle, copy directly into Contents/Resources
+MACAPP_DIR="build/bin/HushCut.app"
+if [ -d "$MACAPP_DIR" ]; then
+    echo "Detected macOS app bundle. Copying Python backend into Resources..."
+    RESOURCES_DIR="$MACAPP_DIR/Contents/Resources"
+
+    rm -f "$RESOURCES_DIR/python_backend"
+    rm -rf "$RESOURCES_DIR/_internal"
+
+    cp "$TARGET_WAILS_BIN_DIR/python_backend" "$RESOURCES_DIR/"
+    cp -R "$TARGET_WAILS_BIN_DIR/_internal" "$RESOURCES_DIR/"
+fi
+
 echo "Cleaning up PyInstaller temporary directories (PROJECT_ROOT/build/main and PROJECT_ROOT/dist)..."
 rm -rf build/main # This is PyInstaller's own 'build' folder, not PROJECT_ROOT/build
 rm -rf dist       # PyInstaller's 'dist' folder
