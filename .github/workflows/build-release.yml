@@ -68,7 +68,6 @@ jobs:
           if [ -d dist/python_backend/_internal ]; then
             cp -r dist/python_backend/_internal build/bin/python_backend/
           fi
-          rm -rf dist build/python_backend
 
       - name: Copy Lua script
         run: cp python-backend/src/HushCut.lua build/bin/
@@ -88,14 +87,21 @@ jobs:
           build-platform: ${{ matrix.platform }}
           package: false
 
-      - name: Delete python_backend
-        run: rm -rf build/bin/python_backend
-
       - name: Add macOS Resources folder and cleanup
         if: matrix.label == 'macos'
         run: |
           RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
           mkdir -p "$RESOURCE_DIR"
+
+          # Copy python backend into Resources
+          cp build/bin/python_backend/python_backend "$RESOURCE_DIR/"
+          if [ -d build/bin/python_backend/_internal ]; then
+            cp -R build/bin/python_backend/_internal "$RESOURCE_DIR/"
+          fi
+
+          cp build/bin/HushCut.lua "$RESOURCE_DIR/"
+          
+          # Remove unnecessary package/zip from wails
           rm -f build/bin/HushCut.app.zip
           rm -f build/bin/HushCut.pkg
 
@@ -112,7 +118,12 @@ jobs:
           p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
-      - name: Sign our macOS binary
+      - name: install create-dmg for macOS
+        if: matrix.label == 'macos'
+        run: |
+          npm install --global create-dmg
+
+      - name: Sign macOS binary and create dmg
         if: matrix.label == 'macos'
         env:
           AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
@@ -122,30 +133,38 @@ jobs:
           echo "Signing Package"
           gon -log-level=info ./code-signing/gon-sign.json
           cd build/bin
-          # zip the .app folder
-          zip -r HushCut-macOS.zip HushCut.app
+          # should code sign the dmg again automatically
+          create-dmg HushCut.app 
+          mv HushCut*.dmg HushCut-macOS.dmg
 
       - name: Package Release Asset
         # This step will only run when you push a tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          cd build/bin
-          ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
+          # For macOS, the DMG is already created. We just need to define its path for the upload.
           if [[ "${{ matrix.label }}" == "macos" ]]; then
-            # 'gon' creates 'HushCut-macOS.zip', so we just move it
-            mv HushCut-macOS.zip "../../${ARTIFACT_FILENAME}"
-          elif [[ "${{ matrix.label }}" == "windows" ]]; then
-            powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../${ARTIFACT_FILENAME}"
-          else # Linux
-            zip -r "../../${ARTIFACT_FILENAME}" .
+            ARTIFACT_PATH="build/bin/HushCut-macOS.dmg"
+            echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
+          
+          # For Windows and Linux, we create a zip file.
+          else
+            cd build/bin
+            ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
+            if [[ "${{ matrix.label }}" == "windows" ]]; then
+              powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../${ARTIFACT_FILENAME}"
+            else # Linux
+              zip -r "../../${ARTIFACT_FILENAME}" .
+            fi
+            ARTIFACT_PATH="${ARTIFACT_FILENAME}"
+            echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
           fi
 
-      - name: Upload Release Asset as Artifact
+      - name: Upload Release Artifact
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4
         with:
-          name: HushCut-${{ matrix.label }} # Unique artifact name per platform
-          path: HushCut-${{ matrix.label }}.zip # Path to the packaged file
+          name: HushCut-${{ matrix.label }}
+          path: ${{ env.ARTIFACT_PATH }}
 
   #===================================================================
   # JOB 2: Publish all binaries to the public repository
@@ -194,7 +213,7 @@ jobs:
           echo "Copying artifacts"
           cp artifacts/HushCut-linux/HushCut-linux.zip public-repo/build/linux/
           cp artifacts/HushCut-windows/HushCut-windows.zip public-repo/build/windows/
-          cp artifacts/HushCut-macos/HushCut-macos.zip public-repo/build/macos/HushCut-macOS.zip
+          cp artifacts/HushCut-macos/HushCut-macOS.dmg public-repo/build/macos/
 
           # Commit and push changes to the public repo
           cd public-repo
