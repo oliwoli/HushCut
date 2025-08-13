@@ -941,6 +941,7 @@ local potential_paths
 if os_type == "OSX" then
   TEMP_DIR = script_dir .. "HushCut.app/Contents/Resources/tmp"
   potential_paths = {
+    "/Applications/HushCut.app/Contents/MacOS/HushCut",
     script_dir .. "HushCut.app/Contents/MacOS/HushCut",
     script_dir .. "../../build/bin/HushCut.app/Contents/MacOS/HushCut",
     script_dir .. "../../build/bin/HushCut",
