@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { useAppState } from "@/stores/appSync";
-import { AlertTriangle, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
+import { AlertTriangle, ChevronRightIcon, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
 import { buttonVariants } from "../ui/button";
 
 const getAlertIcon = (type: AlertData["severity"]) => {
@@ -27,6 +27,24 @@ const getAlertIcon = (type: AlertData["severity"]) => {
       return <Info className="fill-teal-950/60 w-7 h-7 text-teal-700 mb-1 text-center" />;
   }
 };
+
+const davinciNotConnectedMessage = (msg: AlertData["message"]) => {
+  if (!msg.includes("Is it running?")) return ""
+  
+
+  return ( 
+  <div className="mt-8 space-y-2 text-gray-400 text-xs">
+    <div>Own the free version of DaVinci?</div>
+    Make sure to open HushCut from Resolve by navigating to
+    <div className="flex gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
+      Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
+      Scripts <ChevronRightIcon size={16}  className="text-zinc-700" />
+      Edit <ChevronRightIcon size={16} className="text-zinc-700" />
+      HushCut
+</div>
+  </div>
+  )
+}
 
 
 interface AlertAction {
@@ -132,7 +150,7 @@ const GlobalAlertDialog = () => {
               {alertData.title}
             </div>
           </AlertDialogTitle>
-          <AlertDialogDescription className="mt-0">{alertData.message}</AlertDialogDescription>
+          <AlertDialogDescription className="mt-0">{alertData.message}{davinciNotConnectedMessage(alertData.message)}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">
           <AlertDialogAction
