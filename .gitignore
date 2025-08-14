@@ -19,3 +19,4 @@ secrets
 *.dmg
 .DS_Store
 
+python_backend.spec
