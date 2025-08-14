@@ -69,27 +69,27 @@ jobs:
 
       - name: Build Python backend
         run: |
-          # Run the correct pyinstaller command based on the OS
+          BACKEND_BINARY="dist/python_backend"
+
           if [[ "${{ matrix.label }}" == "macos" ]]; then
             echo "Building Python backend with code signing for macOS..."
             pyinstaller python-backend/src/HushCut.py \
               --name python_backend \
-              -y \
-              --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" --onefile
-            BACKEND_BINARY="dist/python_backend" 
-          
+              --onefile \
+              --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" \
+              -y
           else
             echo "Building Python backend without code signing..."
-            pyinstaller python-backend/src/HushCut.py --name python_backend -y
-            BACKEND_BINARY="dist/python_backend/python_backend${{ matrix.ext }}"
+            pyinstaller python-backend/src/HushCut.py \
+              --name python_backend \
+              --onefile \
+              -y
           fi
 
-          # Copy built files
-          mkdir -p build/bin/python_backend
-          cp "$BACKEND_BINARY" build/bin/python_backend/python_backend${{ matrix.ext }}
-          if [ -d dist/python_backend/_internal ]; then
-            cp -r dist/python_backend/_internal build/bin/python_backend/
-          fi
+          # Copy the built binary to where Wails expects it
+          mkdir -p build/bin
+          cp "$BACKEND_BINARY${{ matrix.ext }}" build/bin/python_backend${{ matrix.ext }}
+          chmod +x build/bin/python_backend${{ matrix.ext }}
 
 
       - name: Copy Lua script
@@ -117,10 +117,10 @@ jobs:
           mkdir -p "$RESOURCE_DIR"
 
           # Copy python backend into Resources
-          cp build/bin/python_backend/python_backend "$RESOURCE_DIR/"
-          if [ -d build/bin/python_backend/_internal ]; then
-            cp -R build/bin/python_backend/_internal "$RESOURCE_DIR/"
-          fi
+          cp build/bin/python_backend "$RESOURCE_DIR/"
+          # if [ -d build/bin/python_backend/_internal ]; then
+          #   cp -R build/bin/python_backend/_internal "$RESOURCE_DIR/"
+          # fi
 
           cp build/bin/HushCut.lua "$RESOURCE_DIR/"
           
