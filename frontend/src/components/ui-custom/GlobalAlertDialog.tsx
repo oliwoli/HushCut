@@ -35,7 +35,7 @@ const davinciNotConnectedMessage = (msg: AlertData["message"]) => {
   return ( 
   <div className="mt-8 space-y-2 text-gray-400 text-xs">
     <div>Own the free version of DaVinci?</div>
-    Make sure to open HushCut from Resolve by navigating to
+    Make sure to open HushCut from DaVinci by navigating to
     <div className="flex gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
       Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
       Scripts <ChevronRightIcon size={16}  className="text-zinc-700" />

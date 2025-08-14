@@ -2,11 +2,10 @@ name: Build and optionally make Release
 
 on:
   push:
-    branches:
-      - '**'
+    # branches:
+    #   - '**'
     tags:
-      # It's good practice to be more specific, e.g., 'v*.*.*'
-      - '*'
+      - 'v*.*.*'
 
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
