@@ -87,8 +87,8 @@ const _TitleBar = () => {
             </Button>
           </div>
           <div className="flex items-center gap-2 select-none">
-            <h1 className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline select-none">HushCut
-            </h1>
+            <label className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline select-none">HushCut
+            </label>
             <CircleIcon
               size={8}
               className={clsx(
@@ -99,7 +99,7 @@ const _TitleBar = () => {
               )}
             />
             {timelineName && (
-              <span className="text-neutral-500 text-xs ">{timelineName}</span>
+              <label className="text-neutral-500 text-xs select-none">{timelineName}</label>
             )}
 
           </div>

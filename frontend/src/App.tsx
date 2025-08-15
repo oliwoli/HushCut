@@ -254,7 +254,7 @@ function AppContent() {
       console.log("no ffmpeg! (handle sync");
 
       EventsEmit("showAlert", {
-        title: "FFmpeg Not Found",
+        title: "FFmpeg Download Needed",
         message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
         actions: [
           {
@@ -447,7 +447,7 @@ function AppContent() {
           } else {
             console.log("no ffmpeg!");
             EventsEmit("showAlert", {
-              title: "FFmpeg Not Found",
+              title: "FFmpeg Download Needed",
               message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
               actions: [
                 {

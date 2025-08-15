@@ -2,18 +2,19 @@ name: Build and optionally make Release
 
 on:
   push:
-    branches:
-      - '**'
+    # branches:
+    #   - '**'
     tags:
-      - '*'
+      - 'v*.*.*'
 
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
 
 jobs:
+  #===================================================================
+  # JOB 1: Build binaries for each platform in parallel
+  #===================================================================
   build:
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -57,17 +58,38 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r python-backend/requirements.txt
           python -m pip install pyinstaller
+      
+      - name: Import Code-Signing Certificates for macOS
+        if: matrix.label == 'macos'
+        uses: Apple-Actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
+          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
       - name: Build Python backend
         run: |
-          pyinstaller python-backend/src/HushCut.py --name python_backend -y
-          mkdir -p build/bin
-          mkdir -p build/bin/python_backend
-          cp dist/python_backend/python_backend${{ matrix.ext }} build/bin/python_backend/python_backend${{ matrix.ext }}
-          if [ -d dist/python_backend/_internal ]; then
-            cp -r dist/python_backend/_internal build/bin/python_backend/
+          BACKEND_BINARY="dist/python_backend"
+
+          if [[ "${{ matrix.label }}" == "macos" ]]; then
+            echo "Building Python backend with code signing for macOS..."
+            pyinstaller python-backend/src/HushCut.py \
+              --name python_backend \
+              --onefile \
+              --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" \
+              -y
+          else
+            echo "Building Python backend without code signing..."
+            pyinstaller python-backend/src/HushCut.py \
+              --name python_backend \
+              --onefile \
+              -y
           fi
-          rm -rf dist build/python_backend
+
+          # Copy the built binary to where Wails expects it
+          mkdir -p build/bin
+          cp "$BACKEND_BINARY${{ matrix.ext }}" build/bin/python_backend${{ matrix.ext }}
+          chmod +x build/bin/python_backend${{ matrix.ext }}
+
 
       - name: Copy Lua script
         run: cp python-backend/src/HushCut.lua build/bin/
@@ -75,7 +97,7 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
-      - name: make public_key files
+      - name: Make public_key files
         run: |
           mkdir -p secrets
           echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
@@ -87,90 +109,138 @@ jobs:
           build-platform: ${{ matrix.platform }}
           package: false
 
-      - name: Move binaries to macOS Resources folder
+      - name: Add macOS Resources folder and cleanup
         if: matrix.label == 'macos'
         run: |
           RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
           mkdir -p "$RESOURCE_DIR"
+
+          # Copy python backend into Resources
+          cp build/bin/python_backend "$RESOURCE_DIR/"
+          # if [ -d build/bin/python_backend/_internal ]; then
+          #   cp -R build/bin/python_backend/_internal "$RESOURCE_DIR/"
+          # fi
+
+          cp build/bin/HushCut.lua "$RESOURCE_DIR/"
+          
+          # Remove unnecessary package/zip from wails
           rm -f build/bin/HushCut.app.zip
           rm -f build/bin/HushCut.pkg
 
-      - name: delete python_backend
+      - name: Install latest gon for notarization
+        if: matrix.label == 'macos'
         run: |
-          rm -rf build/bin/python_backend
-      
-      - name: Zip bin folder
+          brew uninstall gon || true
+          brew install Bearer/tap/gon
+
+      - name: install create-dmg for macOS
+        if: matrix.label == 'macos'
+        run: |
+          npm install --global create-dmg
+
+      - name: Sign macOS binary and create dmg
+        if: matrix.label == 'macos'
+        env:
+          AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
+          AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
+          AC_PROVIDER: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "Signing Package"
+          gon -log-level=info ./code-signing/gon-sign.json
+          cd build/bin
+          # should code sign the dmg again automatically
+          create-dmg HushCut.app 
+          mv HushCut*.dmg HushCut-macOS.dmg
+
+      - name: Package Release Asset
+        # This step will only run when you push a tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          cd build/bin
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
+          # For macOS, the DMG is already created. We just need to define its path for the upload.
+          if [[ "${{ matrix.label }}" == "macos" ]]; then
+            ARTIFACT_PATH="build/bin/HushCut-macOS.dmg"
+            echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
+          
+          # For Windows and Linux, we create a zip file.
           else
-            zip -r ../../HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip .
+            cd build/bin
+            ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
+            if [[ "${{ matrix.label }}" == "windows" ]]; then
+              powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../${ARTIFACT_FILENAME}"
+            else # Linux
+              zip -r "../../${ARTIFACT_FILENAME}" .
+            fi
+            ARTIFACT_PATH="${ARTIFACT_FILENAME}"
+            echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
           fi
-      
-      - name: Get Dropbox access token
-        id: dropbox
+
+      - name: Upload Release Artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: HushCut-${{ matrix.label }}
+          path: ${{ env.ARTIFACT_PATH }}
+
+  #===================================================================
+  # JOB 2: Publish all binaries to the public repository
+  # This job runs only on tag pushes and after all builds succeed.
+  #===================================================================
+  publish:
+    name: Publish to Public Repo
+    needs: build # Ensures this job runs only after the 'build' job completes
+    if: startsWith(github.ref, 'refs/tags/') # Condition to run only for tags
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Permission to push to the repository
+
+    steps:
+      - name: Checkout current repo (for package.json)
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts # Download all artifacts into an 'artifacts' directory
+
+      - name: Display downloaded file structure
+        run: ls -R artifacts
+
+      - name: Checkout public releases repo
+        uses: actions/checkout@v4
+        with:
+          repository: oliwoli/hushcut-releases
+          token: ${{ secrets.GH_PUBLISH_TOKEN }}
+          path: public-repo
+
+      - name: Organize artifacts and push to public repo
         run: |
-          ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
-            -u "${{ secrets.DROPBOX_KEY }}:${{ secrets.DROPBOX_SECRET }}" \
-            -d grant_type=refresh_token \
-            -d refresh_token="${{ secrets.DROPBOX_REFRESH_TOKEN }}" \
-            | jq -r '.access_token')
-          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+          # Create destination directories
+          mkdir -p public-repo/build/macos
+          mkdir -p public-repo/build/windows
+          mkdir -p public-repo/build/linux
 
-      - name: Upload to Dropbox
-        run: |
-          FILENAME="HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip"
-          echo "Uploading $FILENAME to Dropbox..."
-          curl -X POST https://content.dropboxapi.com/2/files/upload \
-            --header "Authorization: Bearer $ACCESS_TOKEN" \
-            --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
-            --header "Content-Type: application/octet-stream" \
-            --data-binary @"$FILENAME"
+          # Copy package.json from the main repo
+          echo "Copying package.json"
+          cp package.json public-repo/package.json
 
-      # - name: Upload artifact
-      #   if: startsWith(github.ref, 'refs/tags/')
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: HushCut-${{ github.ref_name }}-${{ matrix.label }}
-      #     path: HushCut-${{ github.ref_name }}-${{ matrix.label }}.zip
+          # Copy artifacts into the public repo checkout
+          # Note: download-artifact creates subdirectories named after the artifact
+          echo "Copying artifacts"
+          cp artifacts/HushCut-linux/HushCut-linux.zip public-repo/build/linux/
+          cp artifacts/HushCut-windows/HushCut-windows.zip public-repo/build/windows/
+          cp artifacts/HushCut-macos/HushCut-macOS.dmg public-repo/build/macos/
 
-  # upload-release-assets:
-  #   env:
-  #     IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
-  #   if: startsWith(github.ref, 'refs/tags/')
-  #   needs: build
-  #   runs-on: ubuntu-latest
-
-  #   steps:
-  #     - name: Download all artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         path: artifacts
-  #         merge-multiple: true
-
-  #     - name: Display downloaded files
-  #       run: ls -R artifacts
-
-  #     - name: Get short-lived access token
-  #       id: dropbox
-  #       run: |
-  #         ACCESS_TOKEN=$(curl -s -X POST https://api.dropbox.com/oauth2/token \
-  #           -u "${{ secrets.DROPBOX_KEY }}:${{ secrets.DROPBOX_SECRET }}" \
-  #           -d grant_type=refresh_token \
-  #           -d refresh_token="${{ secrets.DROPBOX_REFRESH_TOKEN }}" \
-  #           | jq -r '.access_token')
-  #         echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
-
-  #     - name: Upload to Dropbox
-  #       run: |
-  #         for f in artifacts/*.zip; do
-  #           FILENAME=$(basename "$f")
-  #           echo "Uploading $f to Dropbox..."
-  #           curl -X POST https://content.dropboxapi.com/2/files/upload \
-  #             --header "Authorization: Bearer $ACCESS_TOKEN" \
-  #             --header "Dropbox-API-Arg: {\"path\": \"/releases/$FILENAME\",\"mode\": \"add\",\"autorename\": true,\"mute\": false}" \
-  #             --header "Content-Type: application/octet-stream" \
-  #             --data-binary @"$f"
-  #         done
+          # Commit and push changes to the public repo
+          cd public-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add build/ package.json
+          
+          # Commit only if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update build artifacts and package.json for tag ${{ github.ref_name }}"
+            git tag ${{ github.ref_name }}
+            git push && git push --tags
+          fi

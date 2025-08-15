@@ -1,0 +1,6 @@
+{
+  "notarize": {
+    "path": "./build/bin/HushCut-macOS.zip",
+    "bundle_id": "app.hushcut"
+  }
+}

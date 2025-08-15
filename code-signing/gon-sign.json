@@ -1,0 +1,9 @@
+{
+  "source": [
+    "./build/bin/HushCut.app"
+  ],
+  "bundle_id": "app.hushcut",
+  "sign": {
+    "application_identity": "Developer ID Application: Oliver Weiss (7SD86W66T3)"
+  }
+}

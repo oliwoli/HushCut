@@ -63,7 +63,7 @@ type SignedLicenseData struct {
 
 // loadAndVerifyLocalLicense attempts to read, decode, and verify the license file.
 func (a *App) loadAndVerifyLocalLicense() (*SignedLicenseData, error) {
-	fileBytes, err := os.ReadFile(path.Join(a.resourcesPath, "license.json"))
+	fileBytes, err := os.ReadFile(path.Join(a.userResourcesPath, "license.json"))
 	if err != nil {
 		// This is not a critical error, just means no local license exists.
 		return nil, fmt.Errorf("local license file not found: %w", err)
@@ -87,7 +87,7 @@ func (a *App) saveLocalLicense(license *SignedLicenseData) error {
 	if err != nil {
 		return fmt.Errorf("failed to serialize license for saving: %w", err)
 	}
-	licenseFile := path.Join(a.resourcesPath, "license.json")
+	licenseFile := path.Join(a.userResourcesPath, "license.json")
 	return os.WriteFile(licenseFile, fileBytes, 0644)
 }
 
@@ -157,9 +157,9 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 	}
 	// 1. Perform online verification.
 	verifyURL := "https://api.hushcut.app/verify_license"
-	if a.isDev {
-		verifyURL = "http://localhost:8080/verify_license"
-	}
+	// if a.isDev {
+	// 	verifyURL = "http://localhost:8080/verify_license"
+	// }
 
 	reqBody, err := json.Marshal(map[string]string{"license_key": licenseKey})
 	if err != nil {

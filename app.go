@@ -4,11 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"embed"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"math"
 	"net/http"
@@ -42,7 +41,8 @@ type App struct {
 	pythonReadyChan   chan bool
 	pythonReady       bool
 	pythonCommandPort int
-	resourcesPath     string
+	resourcesPath     string // → a.appResourcesPath (immutable, inside bundle)
+	userResourcesPath string // → Application Support or config dir (writable)
 	tmpPath           string
 	pendingMu         sync.Mutex
 	pendingTasks      map[string]chan PythonCommandResponse
@@ -161,58 +161,6 @@ func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
 	}
 }
 
-//go:embed all:build/bin/python_backend
-var embeddedPythonBackend embed.FS
-
-func extractEmbeddedBackend(tempDir string) (string, error) {
-	const embedRoot = "build/bin/python_backend"
-	var extractedBinaryPath string
-
-	// Get a sub-filesystem rooted at the directory we want to extract
-	subFS, err := fs.Sub(embeddedPythonBackend, embedRoot)
-	if err != nil {
-		return "", fmt.Errorf("failed to get sub-filesystem for embedded backend: %w", err)
-	}
-
-	// Walk the sub-filesystem and recreate it in the temp directory
-	err = fs.WalkDir(subFS, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Path is now relative to the sub-filesystem root (e.g., "python_backend" or "_internal/somefile")
-		targetPath := filepath.Join(tempDir, path)
-
-		if d.IsDir() {
-			return os.MkdirAll(targetPath, 0755)
-		}
-
-		data, err := fs.ReadFile(subFS, path)
-		if err != nil {
-			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
-		}
-
-		mode := os.FileMode(0644)
-		// The executable is now at the root of the sub-filesystem
-		if path == "python_backend" || path == "python_backend.exe" {
-			mode = 0755
-			extractedBinaryPath = targetPath
-		}
-
-		return os.WriteFile(targetPath, data, mode)
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("failed to extract embedded files: %w", err)
-	}
-
-	if extractedBinaryPath == "" {
-		return "", fmt.Errorf("could not locate extracted binary in embedded files")
-	}
-
-	return extractedBinaryPath, nil
-}
-
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 
@@ -221,21 +169,6 @@ func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 	platform := runtime.Environment(a.ctx).Platform
 	if platform == "windows" {
 		pythonBinaryPath = filepath.Join(a.resourcesPath, "python_backend.exe")
-	}
-
-	if !binaryExists(pythonBinaryPath) || a.isDev {
-		exePath, err := extractEmbeddedBackend(a.resourcesPath)
-		if err != nil {
-			return fmt.Errorf("failed to extract python backend: %w", err)
-		}
-		pythonBinaryPath = exePath
-		log.Printf("Extracted backend to: %s", pythonBinaryPath)
-
-		if pythonBinaryPath == "" {
-			return fmt.Errorf("backend not initialized")
-		}
-
-		log.Printf("Resolved path to python_backend: %s", pythonBinaryPath)
 	}
 
 	cmdArgs := []string{
@@ -284,6 +217,78 @@ func binaryExists(path string) bool {
 	return cmd.Run() == nil
 }
 
+//go:embed python-backend/src/HushCut.lua
+var luaScriptData []byte
+
+func (a *App) installLuaScript() {
+	// The source script data is now embedded directly in the binary.
+	if len(luaScriptData) == 0 {
+		log.Println("Embedded Lua script is empty. Skipping installation.")
+		return
+	}
+
+	// 1. Determine the correct destination directory (logic is unchanged)
+	platform := runtime.Environment(a.ctx).Platform
+	var destScriptsDir string
+	// ... switch statement for platform is the same as before ...
+	switch platform {
+	case "darwin":
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Printf("Could not get user home directory on macOS: %v", err)
+			return
+		}
+		destScriptsDir = filepath.Join(homeDir, "Library", "Application Support", "Blackmagic Design", "DaVinci Resolve", "Fusion", "Scripts", "Edit")
+
+	case "windows":
+		appDataDir := os.Getenv("APPDATA")
+		if appDataDir == "" {
+			log.Println("Could not resolve %APPDATA% directory on Windows.")
+			return
+		}
+		destScriptsDir = filepath.Join(appDataDir, "Blackmagic Design", "DaVinci Resolve", "Support", "Fusion", "Scripts", "Edit")
+
+	case "linux":
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Printf("Could not get user home directory on Linux: %v", err)
+			return
+		}
+		destScriptsDir = filepath.Join(homeDir, ".local", "share", "DaVinciResolve", "Fusion", "Scripts", "Edit")
+
+	default:
+		log.Printf("Resolve script installation not supported on this platform: %s", platform)
+		return
+	}
+
+	// 2. Check if the script needs to be copied by comparing file content
+	destScriptPath := filepath.Join(destScriptsDir, "HushCut.lua")
+	existingData, err := os.ReadFile(destScriptPath)
+	if err == nil {
+		// File exists, now compare its content with the embedded script
+		if bytes.Equal(existingData, luaScriptData) {
+			log.Printf("Resolve script is already up-to-date at %s", destScriptPath)
+			return
+		}
+	}
+
+	log.Printf("Installing or updating Resolve script at %s", destScriptPath)
+
+	// 3. Ensure the destination directory exists
+	if err := os.MkdirAll(destScriptsDir, 0755); err != nil {
+		log.Printf("Failed to create destination directory %s: %v", destScriptsDir, err)
+		return
+	}
+
+	// 4. Write the embedded data to the destination
+	if err := os.WriteFile(destScriptPath, luaScriptData, 0644); err != nil {
+		log.Printf("Failed to write destination script %s: %v", destScriptPath, err)
+		return
+	}
+
+	log.Println("✅ Successfully installed DaVinci Resolve script.")
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
@@ -306,17 +311,34 @@ func (a *App) startup(ctx context.Context) {
 	platform := runtime.Environment(a.ctx).Platform
 	switch platform {
 	case "darwin":
-		a.resourcesPath = filepath.Join(goExecutableDir, "..", "Resources")
-		a.tmpPath = filepath.Join(a.resourcesPath, "tmp")
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			log.Fatalf("failed to get user config dir: %v", err)
+		}
+
+		// Store resources in ~/Library/Application Support/HushCut
+		a.userResourcesPath = filepath.Join(configDir, "HushCut")
+		a.resourcesPath = filepath.Join(filepath.Dir(goExecutableDir), "Resources")
+
+		// Temp folder in system tmp
+		a.tmpPath = filepath.Join(os.TempDir(), "HushCut")
+
+		if err := os.MkdirAll(a.userResourcesPath, 0755); err != nil {
+			log.Fatalf("failed to create resources dir: %v", err)
+		}
+		if err := os.MkdirAll(a.tmpPath, 0755); err != nil {
+			log.Fatalf("failed to create tmp dir: %v", err)
+		}
 	case "windows", "linux":
-		a.resourcesPath = filepath.Join(goExecutableDir, ".hushcut_res")
-		a.tmpPath = filepath.Join(a.resourcesPath, "tmp")
+		a.resourcesPath = goExecutableDir
+		a.userResourcesPath = filepath.Join(goExecutableDir, ".hushcut_res")
+		a.tmpPath = filepath.Join(a.userResourcesPath, "tmp")
 	default:
 		log.Fatalf("Unsupported platform found during path init: %s", platform)
 	}
 
 	// Ensure the directories exist
-	if err := os.MkdirAll(a.resourcesPath, 0755); err != nil {
+	if err := os.MkdirAll(a.userResourcesPath, 0755); err != nil {
 		log.Fatalf("Failed to create resources folder: %v", err)
 	}
 	if err := os.MkdirAll(a.tmpPath, 0755); err != nil {
@@ -328,6 +350,8 @@ func (a *App) startup(ctx context.Context) {
 		runtime.EventsEmit(a.ctx, "license:invalid", nil)
 		log.Println("Wails App: License is invalid or not found. (Prompt for license on frontend)")
 	}
+
+	a.installLuaScript()
 
 	// Initialize file usage tracking
 	a.loadUsageData()
@@ -379,17 +403,16 @@ func (a *App) startup(ctx context.Context) {
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
 	var err error
-	a.ffmpegBinaryPath = filepath.Join(a.resourcesPath, "ffmpeg")
+	a.ffmpegBinaryPath = filepath.Join(a.userResourcesPath, "ffmpeg")
 	if a.ffmpegBinaryPath == "" || !binaryExists(a.ffmpegBinaryPath) {
 		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 
 		// TODO: enable this code when in production
-		// if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
-		// 	a.ffmpegBinaryPath = pathInSystem
-		// 	log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
-		// 	a.hasFfmpeg = true
-		// } else {
-		if true {
+		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+			a.ffmpegBinaryPath = pathInSystem
+			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
+			a.hasFfmpeg = true
+		} else {
 			//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
 			a.hasFfmpeg = false
 			log.Print("no ffmpeg installation")
@@ -776,7 +799,7 @@ func (a *App) registerWithPython(goPort int) error {
 // GetSettings reads settings.json. Creates it with defaults if it doesn't exist.
 func (a *App) GetSettings() (map[string]any, error) {
 	var settingsData map[string]any
-	settingsPath := filepath.Join(a.resourcesPath, "settings.json")
+	settingsPath := filepath.Join(a.userResourcesPath, "settings.json")
 
 	fileBytes, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -822,7 +845,7 @@ func (a *App) SaveSettings(settingsData map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal settings data for saving: %w", err)
 	}
-	settingsPath := filepath.Join(a.resourcesPath, "settings.json")
+	settingsPath := filepath.Join(a.userResourcesPath, "settings.json")
 
 	dir := filepath.Dir(settingsPath)
 	if mkDirErr := os.MkdirAll(dir, 0755); mkDirErr != nil {

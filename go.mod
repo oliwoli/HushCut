@@ -2,9 +2,12 @@ module hushcut
 
 go 1.23
 
-require github.com/wailsapp/wails/v2 v2.10.1
+require github.com/wailsapp/wails/v2 v2.10.2
 
-require github.com/go-audio/riff v1.0.0 // indirect
+require (
+	github.com/go-audio/riff v1.0.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
+)
 
 require (
 	github.com/bep/debounce v1.2.1 // indirect
