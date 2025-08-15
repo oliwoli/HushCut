@@ -14,6 +14,7 @@ import {
 import { useAppState } from "@/stores/appSync";
 import { AlertTriangle, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
 import { buttonVariants } from "../ui/button";
+import { cn } from "@/lib/utils";
 
 const getAlertIcon = (type: AlertData["severity"]) => {
   switch (type) {
@@ -136,9 +137,12 @@ const GlobalAlertDialog = () => {
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">
           <AlertDialogAction
-            className={buttonVariants({
-              variant: alertData.actions?.length ? "outline" : "default",
-            })}
+            className={cn(
+              buttonVariants({
+                variant: alertData.actions?.length ? "outline" : "default",
+              }),
+              "focus-visible:border-0 focus-visible:ring-teal-600 focus-visible:ring-2 focus-visible:bg-teal-100"
+            )}
           >
             Continue
           </AlertDialogAction>          {alertData.actions && alertData.actions.map((action, index) => (
