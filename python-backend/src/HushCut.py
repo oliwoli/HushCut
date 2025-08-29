@@ -1387,7 +1387,7 @@ def get_items_by_tracktype(
                 # This branch means it's likely a compound clip, generator, or title.
                 # Capture its type, and initialize nested_clips for later OTIO population.
                 clip_type = media_pool_item.GetClipProperty("Type")
-                print(f"Detected clip type: {clip_type} for item: {item_name}")
+                # print(f"Detected clip type: {clip_type} for item: {item_name}")
                 timeline_item["type"] = clip_type
                 timeline_item["nested_clips"] = []  # Initialize as empty list
 

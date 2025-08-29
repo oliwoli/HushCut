@@ -232,7 +232,7 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 
 	for i := range projectData.Timeline.AudioTrackItems {
 		item := &projectData.Timeline.AudioTrackItems[i]
-		log.Printf("sourceFPS is %f", item.SourceFPS)
+		//log.Printf("sourceFPS is %f", item.SourceFPS)
 		// Ratio to convert source frames FROM timeline domain TO project domain for processing.
 		sourceToTimelineFpsRatio := item.SourceFPS / timelineFPS
 		itemSpecificSilencesInSeconds, silencesFound := allClipSilencesMap[item.ID]

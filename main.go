@@ -89,7 +89,7 @@ func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *st
 	// --- UUID logic ---
 	if *uuidCount > 0 {
 		for i := 0; i < *uuidCount; i++ {
-			fmt.Println(uuid.New())
+			log.Println(uuid.New())
 		}
 		return
 	}
@@ -101,7 +101,7 @@ func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *st
 		// This creates a deterministic UUID based on the content of the string.
 		u := uuid.NewMD5(uuid.Nil, []byte(s))
 		uuidStr := u.String()
-		fmt.Println(uuidStr)
+		log.Println(uuidStr)
 		return
 	}
 	// ------------------
@@ -117,7 +117,7 @@ func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *st
 			log.Fatalf("could not listen on tcp addr: %v", err)
 		}
 		defer l.Close()
-		fmt.Println(l.Addr().(*net.TCPAddr).Port)
+		log.Println(l.Addr().(*net.TCPAddr).Port)
 		return
 	}
 
@@ -333,13 +333,12 @@ func main() {
 		app.pythonCommandPort = *pythonPort
 	}
 	app.testApi = testApi
-	fmt.Println("test api is: ", testApi)
 
-	if token := os.Getenv("HUSHCUT_TOKEN"); token != "" {
+	if token := os.Getenv("HUSHCUT_AUTH_TOKEN"); token != "" {
 		log.Printf("Received HushCut Token from environment variable.")
 		app.authToken = strings.TrimSpace(token)
 	} else {
-		log.Printf("No HUSHCUT_TOKEN provided in environment.")
+		log.Printf("No HUSHCUT_AUTH_TOKEN provided in environment.")
 	}
 
 	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)

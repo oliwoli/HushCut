@@ -2604,25 +2604,32 @@ if go_app_path and free_port then
   print("Found free port: " .. free_port)
 
   local hushcut_command
+  local token_env_var = "HUSHCUT_AUTH_TOKEN" -- Define the environment variable name
+
   if os_type == "Linux" then
+    -- Linux: Use `env` to set the environment variable for the command.
     hushcut_command = string.format(
-      "env GDK_BACKEND=x11 sh -c 'echo %s | %s --python-port=%s &'",
+      "env %s=%s GDK_BACKEND=x11 %s --python-port=%s &",
+      token_env_var,
       quote(AUTH_TOKEN),
       quote(go_app_path),
       free_port
     )
   elseif os_type == "OSX" then
-    -- macOS: Similar to Linux but doesn't need GDK_BACKEND.
+    -- macOS: Set the environment variable directly before the command.
     hushcut_command = string.format(
-      "sh -c 'printf %%s %s | %s --python-port=%s &'",
+      "%s=%s %s --python-port=%s &",
+      token_env_var,
       quote(AUTH_TOKEN),
       quote(go_app_path),
       free_port
     )
   elseif os_type == "Windows" then
-    -- Windows: Uses `start /B` for backgrounding and `cmd /c` to execute a pipeline.
+    -- Windows: Use `set` within `cmd /c` to create a local environment variable
+    -- for the process. The `&&` ensures the app runs after the variable is set.
     hushcut_command = string.format(
-      'start /B cmd /c "echo %s | %s --python-port=%s"',
+      'start /B cmd /c "set %s=%s && %s --python-port=%s"',
+      token_env_var,
       quote(AUTH_TOKEN),
       quote(go_app_path),
       free_port

@@ -660,25 +660,11 @@ func (a *App) DownloadFFmpeg() error {
 	}
 	downloadURL := platformInfo.FFmpeg
 
-	// 3. Set up installation paths
-	goExecutablePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("could not get executable path: %w", err)
-	}
-	goExecutableDir := filepath.Dir(goExecutablePath)
-
-	var installDir string
+	var installDir = a.userResourcesPath
 	finalBinaryName := "ffmpeg"
-	switch platform {
-	case "darwin":
-		installDir = filepath.Join(goExecutableDir, "..", "Resources")
-	case "windows":
-		installDir = goExecutableDir
+	if platform == "windows" {
 		finalBinaryName = "ffmpeg.exe"
-	case "linux":
-		installDir = goExecutableDir
 	}
-	a.ffmpegBinaryPath = filepath.Join(installDir, finalBinaryName)
 
 	if err := os.MkdirAll(installDir, 0755); err != nil {
 		return fmt.Errorf("could not create install directory at %s: %w", installDir, err)
@@ -1292,7 +1278,7 @@ func (a *App) updateFileUsage(filePath string) {
 	// Store only the base filename as the key
 	fileName := filepath.Base(absPath)
 	a.fileUsage[fileName] = time.Now()
-	log.Printf("Updated usage for file: %s", fileName)
+	//log.Printf("Updated usage for file: %s", fileName)
 }
 
 func (a *App) GetAppVersion() string {
