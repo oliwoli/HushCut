@@ -228,11 +228,11 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		return projectData, fmt.Errorf("invalid FPS values: timeline=%.2f, project=%.2f", timelineFPS, projectFPS)
 	}
 
-	fmt.Printf("timelineFPS is %f - projectFPS is %f\n", timelineFPS, projectFPS)
+	log.Printf("timelineFPS is %f - projectFPS is %f\n", timelineFPS, projectFPS)
 
 	for i := range projectData.Timeline.AudioTrackItems {
 		item := &projectData.Timeline.AudioTrackItems[i]
-		fmt.Printf("sourceFPS is %f", item.SourceFPS)
+		log.Printf("sourceFPS is %f", item.SourceFPS)
 		// Ratio to convert source frames FROM timeline domain TO project domain for processing.
 		sourceToTimelineFpsRatio := item.SourceFPS / timelineFPS
 		itemSpecificSilencesInSeconds, silencesFound := allClipSilencesMap[item.ID]

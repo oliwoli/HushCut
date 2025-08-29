@@ -83,7 +83,7 @@ var icon []byte
 //go:embed secrets/public_key.pem
 var PublicKeyPEM []byte
 
-// various functionalities which are hard to implement in lua without 3rd party packages directly, therefore lua starts HushCut in this mode to get certain functions
+// some things are hard to implement in lua directly, so lua starts HushCut in this mode to get certain functions
 // includes uuid, deterministic uuid by string, http server
 func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *string) {
 	// --- UUID logic ---
@@ -305,6 +305,7 @@ func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *st
 
 func main() {
 	testApi := os.Getenv("TEST_API") == "1"
+
 	luaMode := flag.Bool("lua-helper", false, "start headless in lua-helper mode")
 	port := flag.Int("port", 8080, "port to listen on")
 	findPort := flag.Bool("find-port", false, "find a free port and exit")
@@ -334,25 +335,11 @@ func main() {
 	app.testApi = testApi
 	fmt.Println("test api is: ", testApi)
 
-	stat, stdErr := os.Stdin.Stat()
-	if stdErr != nil {
-		fmt.Fprintf(os.Stderr, "Could not stat stdin: %v\n", stdErr)
-		return
-	}
-
-	var tokenFromStdIn []byte
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		// stdin is being piped
-		tokenFromStdIn, stdErr = io.ReadAll(os.Stdin)
-		if stdErr != nil {
-			fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", stdErr)
-			return
-		}
-		fmt.Printf("Token from stdin: %s\n", string(tokenFromStdIn))
-		fmt.Printf("Received token from stdin: %s\n", string(tokenFromStdIn))
-		app.authToken = strings.TrimSpace(string(tokenFromStdIn))
+	if token := os.Getenv("HUSHCUT_TOKEN"); token != "" {
+		log.Printf("Received HushCut Token from environment variable.")
+		app.authToken = strings.TrimSpace(token)
 	} else {
-		fmt.Println("No input piped to stdin, skipping read.")
+		log.Printf("No HUSHCUT_TOKEN provided in environment.")
 	}
 
 	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)
@@ -394,6 +381,6 @@ func main() {
 	})
 
 	if err != nil {
-		println("Error:", err.Error())
+		log.Println("Error:", err.Error())
 	}
 }

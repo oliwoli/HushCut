@@ -297,10 +297,10 @@ func (a *App) startup(ctx context.Context) {
 
 	envInfo := runtime.Environment(ctx)
 	if envInfo.BuildType == "production" {
-		fmt.Print("|> HushCut v" + a.GetAppVersion() + " - Production Build \n")
+		log.Println("|> HushCut v" + a.GetAppVersion() + " - Production Build")
 		a.isDev = false
 	} else {
-		fmt.Print("|> HushCut v" + a.GetAppVersion() + " - Development Build \n")
+		log.Println("|> HushCut v" + a.GetAppVersion() + " - Development Build")
 		a.isDev = true
 	}
 
@@ -1046,11 +1046,11 @@ func (a *App) GetOrDetectSilencesWithCache(
 	a.cacheMutex.RUnlock()
 
 	if found {
-		//fmt.Println("Cache hit for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
+		//log.Println("Cache hit for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
 		return cachedSilences, nil
 	}
 
-	// fmt.Println("Cache miss for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
+	// log.Println("Cache miss for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
 
 	// 2. If not found, perform the detection
 	silences, err := a.DetectSilences(
