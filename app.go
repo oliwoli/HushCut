@@ -1289,6 +1289,10 @@ func (a *App) GetAppVersion() string {
 	return a.appVersion
 }
 
+func (a *App) GetFfmpegVersion() string {
+	return a.ffmpegVersion
+}
+
 func (a *App) getFileUsagePath() string {
 	return filepath.Join(a.tmpPath, fileUsageFileName)
 }

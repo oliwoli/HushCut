@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import { useEffect, useState } from "react";
-import { GetAppVersion } from "@wails/go/main/App";
+import { GetAppVersion, GetFfmpegVersion } from "@wails/go/main/App";
 import { CopyrightIcon, ExternalLinkIcon } from "lucide-react";
 import { BrowserOpenURL } from "@wails/runtime/runtime";
 
@@ -27,6 +27,7 @@ interface InfoDialogProps {
 
 export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
     const [appVersion, setAppVersion] = useState("Unknown");
+    const [ffmpegVersion, setFfmpegVersion] = useState("Unknown");
     const [md, setMd] = useState('');
     const [internalOpen, setInternalOpen] = useState(false); // Controls the Dialog's 'open' prop
     const [dialogOpacity, setDialogOpacity] = useState(1); // Controls the DialogContent's opacity
@@ -54,6 +55,9 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
 
         GetAppVersion().then((version: string) => {
             setAppVersion(version);
+        });
+        GetFfmpegVersion().then((version: string) => {
+            setFfmpegVersion(version);
         });
     }, []);
 
@@ -96,8 +100,8 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                             <p>Compiled binaries for windows, mac and linux can be found on:</p>
                             <a href="#" onClick={() => githubRepoLink && BrowserOpenURL(githubRepoLink)} className="text-orange-400 flex gap-1 underline">{githubRepoLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
 
-
-                            <div className="prose prose-sm dark:prose-invert max-w-none pt-3 max-h-2xl">
+                            <p className="font-extralight mt-12 mb-1"><span className="text-foreground font-[350]">FFmpeg version</span> v{ffmpegVersion}</p>
+                            <div className="prose prose-sm dark:prose-invert max-w-none max-h-2xl">
                                 <MarkdownRenderer markdown={md} />
                             </div>
                         </ScrollArea>
