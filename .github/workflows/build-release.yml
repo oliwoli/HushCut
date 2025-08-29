@@ -82,6 +82,7 @@ jobs:
             pyinstaller python-backend/src/HushCut.py \
               --name python_backend \
               --onefile \
+              --noconsole \
               -y
           fi
 
