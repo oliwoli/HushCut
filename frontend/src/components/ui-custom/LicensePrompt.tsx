@@ -107,6 +107,7 @@ const LicensePrompt = () => {
       // trigger a global state change to unlock the app.
       handleOpenChange(false);
       setBusy(false);
+      window.location.reload()
     } catch (error) {
       console.error("License verification failed:", error);
       // Update the alert to show the error message

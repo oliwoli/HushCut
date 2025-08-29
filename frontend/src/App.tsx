@@ -350,6 +350,7 @@ function AppContent() {
     try {
       const response = await SyncWithDavinci();
       console.log("SyncWithDavinci response from Go:", response);
+      setSyncing(false);
 
       if (response && response.alertIssued) {
         console.warn(
@@ -450,7 +451,6 @@ function AppContent() {
 
   const initialInitDone = useRef(false); // Ref to track if the effect has run
 
-
   useEffect(() => {
     const hasBlur = supportsRealBackdrop();
     document.body.classList.add(hasBlur ? "has-blur" : "no-blur");
@@ -468,7 +468,6 @@ function AppContent() {
 
       console.log("App.tsx: Backend is ready, proceeding with initialization...");
 
-      // The rest of your initialization logic from the previous step goes here...
       EventsOn("pythonStatusUpdate", (data) => {
         if (data && typeof data.isReady === 'boolean') {
           console.log(`Event: Python status changed to ${data.isReady}`);
@@ -549,7 +548,6 @@ function AppContent() {
         //   console.log("App.tsx: License verification result:", licenseData);
         // };
       }
-
     }
     checkLicenseValidity();
   }, []);
