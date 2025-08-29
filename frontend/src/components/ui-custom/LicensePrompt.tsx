@@ -163,7 +163,7 @@ const LicensePrompt = () => {
             type="text"
             placeholder="Add License Key"
             value={licenseKey}
-            onChange={(e) => setLicenseKey(e.target.value)}
+            onChange={(e) => setLicenseKey(e.target.value.replace(/\s+/g, ""))}
           />
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">

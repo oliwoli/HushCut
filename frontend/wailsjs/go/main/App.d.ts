@@ -32,6 +32,8 @@ export function GetSettings():Promise<Record<string, any>>;
 
 export function GetToken():Promise<string>;
 
+export function GetUpdateInfo():Promise<main.UpdateResponseV1>;
+
 export function GetWaveform(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
 
 export function HasAValidLicense():Promise<boolean>;
@@ -53,8 +55,6 @@ export function ProcessWavToLinearPeaks(arg1:string,arg2:number,arg3:number,arg4
 export function ProcessWavToLogarithmicPeaks(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number):Promise<main.PrecomputedWaveformData>;
 
 export function ResolveBinaryPath(arg1:string):Promise<string>;
-
-export function RunPythonScriptWithArgs(arg1:Array<string>):Promise<void>;
 
 export function SaveSettings(arg1:Record<string, any>):Promise<void>;
 

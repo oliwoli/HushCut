@@ -62,6 +62,10 @@ export function GetToken() {
   return window['go']['main']['App']['GetToken']();
 }
 
+export function GetUpdateInfo() {
+  return window['go']['main']['App']['GetUpdateInfo']();
+}
+
 export function GetWaveform(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['GetWaveform'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -104,10 +108,6 @@ export function ProcessWavToLogarithmicPeaks(arg1, arg2, arg3, arg4, arg5, arg6)
 
 export function ResolveBinaryPath(arg1) {
   return window['go']['main']['App']['ResolveBinaryPath'](arg1);
-}
-
-export function RunPythonScriptWithArgs(arg1) {
-  return window['go']['main']['App']['RunPythonScriptWithArgs'](arg1);
 }
 
 export function SaveSettings(arg1) {

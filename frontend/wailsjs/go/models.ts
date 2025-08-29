@@ -1,5 +1,23 @@
 export namespace main {
 	
+	export class AlertContent {
+	    title: string;
+	    message: string;
+	    button_label: string;
+	    button_url: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AlertContent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.button_label = source["button_label"];
+	        this.button_url = source["button_url"];
+	    }
+	}
 	export class EditInstruction {
 	    source_start_frame: number;
 	    source_end_frame: number;
@@ -216,6 +234,60 @@ export namespace main {
 	}
 	
 	
+	export class GithubAsset {
+	    browser_download_url: string;
+	    name: string;
+	    size: number;
+	    content_type: string;
+	    digest: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GithubAsset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.browser_download_url = source["browser_download_url"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.content_type = source["content_type"];
+	        this.digest = source["digest"];
+	    }
+	}
+	export class GithubData {
+	    tag_name: string;
+	    html_url: string;
+	    assets: GithubAsset[];
+	
+	    static createFrom(source: any = {}) {
+	        return new GithubData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag_name = source["tag_name"];
+	        this.html_url = source["html_url"];
+	        this.assets = this.convertValues(source["assets"], GithubAsset);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class PrecomputedWaveformData {
 	    duration: number;
@@ -349,6 +421,53 @@ export namespace main {
 	    }
 	}
 	
+	
+	export class UpdateResponseV1 {
+	    schema_version: number;
+	    latest_version: string;
+	    url: string;
+	    update_label: string;
+	    show_alert: boolean;
+	    alert_content: AlertContent;
+	    alert_severity: string;
+	    github_data: GithubData;
+	    signature: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateResponseV1(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.latest_version = source["latest_version"];
+	        this.url = source["url"];
+	        this.update_label = source["update_label"];
+	        this.show_alert = source["show_alert"];
+	        this.alert_content = this.convertValues(source["alert_content"], AlertContent);
+	        this.alert_severity = source["alert_severity"];
+	        this.github_data = this.convertValues(source["github_data"], GithubData);
+	        this.signature = source["signature"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
