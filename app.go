@@ -411,7 +411,11 @@ func (a *App) startup(ctx context.Context) {
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
 	var err error
-	a.ffmpegBinaryPath = filepath.Join(a.userResourcesPath, "ffmpeg")
+	ffmpegBinName := "ffmpeg"
+	if runtime.Environment(a.ctx).Platform == "windows" {
+		ffmpegBinName = "ffmpeg.exe"
+	}
+	a.ffmpegBinaryPath = filepath.Join(a.userResourcesPath, ffmpegBinName)
 	if a.ffmpegBinaryPath == "" || !binaryExists(a.ffmpegBinaryPath) {
 		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 
