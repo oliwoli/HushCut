@@ -316,6 +316,13 @@ div[part="minimap-overlay"] {
     100% { transform: rotate(-359deg) scale(0.95); }
   }
 
+   --animate-sync-box: 125ms linear-fade-in 500ms cubic-bezier(0, 0.99, 0.99, 1) forwards;
+
+  @keyframes linear-fade-in {
+    0% { opacity: 0; top: 25%}
+    100% { opacity: 100; top: 20%}
+  }
+
 }
 
 @layer utilities {

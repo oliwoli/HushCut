@@ -1,6 +1,6 @@
 // components/SilenceControls.tsx
 
-import { ClipStore, defaultParameters, useClipParameter, useClipStore } from '@/stores/clipStore';
+import { defaultParameters, useClipParameter, useClipStore } from '@/stores/clipStore';
 import { InfoIcon, Link, Unlink } from 'lucide-react';
 import React, { useCallback, useState } from 'react';
 

@@ -26,8 +26,12 @@ import (
 
 // App struct
 type App struct {
-	ctx   context.Context
-	isDev bool
+	ctx     context.Context
+	isDev   bool
+	testApi bool
+
+	appVersion string
+	updateInfo *UpdateResponseV1
 
 	licenseMutex     sync.Mutex // Mutex to protect license operations
 	licenseVerifyKey []byte     // Public key for verifying license file signatures
@@ -64,7 +68,6 @@ type App struct {
 	ffmpegOnce      sync.Once     // Ensures the ready channel is closed only once
 	// ----- //
 
-	AppVersion string
 }
 
 // NewApp creates a new App application struct
@@ -85,7 +88,7 @@ func NewApp() *App {
 		},
 		ffmpegReadyChan: make(chan struct{}),
 
-		AppVersion: AppVersion,
+		appVersion: AppVersion,
 		fileUsage:  make(map[string]time.Time),
 	}
 }
@@ -350,6 +353,8 @@ func (a *App) startup(ctx context.Context) {
 		runtime.EventsEmit(a.ctx, "license:invalid", nil)
 		log.Println("Wails App: License is invalid or not found. (Prompt for license on frontend)")
 	}
+
+	a.checkForUpdate("v" + a.appVersion)
 
 	a.installLuaScript()
 
@@ -858,52 +863,6 @@ func (a *App) SaveSettings(settingsData map[string]interface{}) error {
 	return nil
 }
 
-func (a *App) RunPythonScriptWithArgs(args []string) error {
-	binaryPath := "python_backend"
-	cmd := exec.Command("python3", append([]string{binaryPath}, args...)...)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	// Stream stdout
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := scanner.Text()
-			runtime.EventsEmit(a.ctx, "python:log", line)
-		}
-	}()
-
-	// Stream stderr
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			runtime.EventsEmit(a.ctx, "python:log", "[stderr] "+line)
-		}
-	}()
-
-	// Wait in background
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("Python backend exited with error: %v", err)
-		}
-	}()
-
-	return nil
-}
-
 func (a *App) SelectDirectory() (string, error) {
 	settings, err := a.GetSettings()
 	if err != nil {
@@ -1246,7 +1205,7 @@ func (a *App) updateFileUsage(filePath string) {
 }
 
 func (a *App) GetAppVersion() string {
-	return a.AppVersion
+	return a.appVersion
 }
 
 func (a *App) getFileUsagePath() string {

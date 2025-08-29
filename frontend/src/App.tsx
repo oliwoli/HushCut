@@ -64,6 +64,7 @@ import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LicensePrompt from "./components/ui-custom/LicensePrompt";
+import { LoaderCircleIcon } from "lucide-react";
 
 
 
@@ -135,6 +136,35 @@ function AppContent() {
   const [ffmpegReady, setFFmpegReady] = useState<boolean | null>(null)
   const prevFfmpegReady = usePrevious(ffmpegReady);
   const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
+  const [pythonReady, setPythonReady] = useState<boolean | null>(null)
+  const prevPythonReady = usePrevious(pythonReady);
+
+  useEffect(() => {
+    // This ensures we only run when the status changes from false to true
+    if (pythonReady && !prevPythonReady) {
+      console.log("Python backend is now ready, triggering a re-sync.");
+      handleSyncRef.current();
+    }
+  }, [pythonReady, prevPythonReady]);
+
+  // Effect to listen for Python status updates from the Go backend
+  useEffect(() => {
+    const checkInitialStatus = async () => {
+      setPythonReady(await GetPythonReadyStatus());
+    };
+    checkInitialStatus(); // Check status on component mount
+
+    const unsubscribe = EventsOn("pythonStatusUpdate", (data) => {
+      if (data && typeof data.isReady === 'boolean') {
+        console.log(`Event: Python status changed to ${data.isReady}`);
+        setPythonReady(data.isReady);
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe(); // Cleanup listener
+    };
+  }, []); // Empty dependency array means this runs once on mount
 
   useEffect(() => {
     // Don't do anything until the initial status check is complete.
@@ -159,6 +189,9 @@ function AppContent() {
   const isBusy = useAppState(s => s.isBusy);
   const setBusy = useAppState(s => s.setBusy);
 
+  const syncing = useAppState(s => s.syncing);
+  const setSyncing = useAppState(s => s.setSyncing);
+
   const setHasProjectData = useAppState(s => s.setHasProjectData);
   const setTimelineName = useAppState(s => s.setTimelineName);
 
@@ -168,7 +201,6 @@ function AppContent() {
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
-  const token = useAppState(s => s.token);
   const setToken = useAppState(s => s.setToken);
 
   //const projectData = useGlobalStore((s) => s.projectData);
@@ -280,6 +312,7 @@ function AppContent() {
 
     //const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
     setBusy(true);
+    setSyncing(true);
 
     const conditionalSetProjectData = async (
       newData: main.ProjectDataPayload | null
@@ -338,6 +371,7 @@ function AppContent() {
         //   duration: 5000,
         // });
         setBusy(false);
+        setSyncing(false);
       } else if (response && response.status === "success") {
         await conditionalSetProjectData(response.data);
         // toast.success("Synced with DaVinci Resolve", {
@@ -345,6 +379,7 @@ function AppContent() {
         //   duration: 1500,
         // });
         setBusy(false);
+        setSyncing(false);
       } else {
         alert("SyncWithDavinci: Unexpected response structure from Go");
         console.error(
@@ -359,10 +394,11 @@ function AppContent() {
         //   duration: 5000,
         // });
         setBusy(false);
+        setSyncing(false);
       }
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
-      alert(`Error calling SyncWithDavinci or Go-level error: ${err}`);
+      //alert(`Error calling SyncWithDavinci or Go-level error: ${err}`);
       setProjectData(null);
       setHasProjectData(false);
       setTimelineName(null)
@@ -380,6 +416,7 @@ function AppContent() {
         // });
       }
       setBusy(false);
+      setSyncing(false);
     }
   };
 
@@ -421,75 +458,76 @@ function AppContent() {
   }, []);
 
 
+  const initHasRun = useRef(false);
+
   useEffect(() => {
-    const getInitialServerInfo = async () => {
-      if (initialInitDone.current) return;
-      console.log("App.tsx: Attempting to get Go HTTP server port...");
+    const initializeApp = async () => {
+      // Guard to ensure this logic only runs once
+      if (initHasRun.current) return;
+      initHasRun.current = true;
+
+      console.log("App.tsx: Backend is ready, proceeding with initialization...");
+
+      // The rest of your initialization logic from the previous step goes here...
+      EventsOn("pythonStatusUpdate", (data) => {
+        if (data && typeof data.isReady === 'boolean') {
+          console.log(`Event: Python status changed to ${data.isReady}`);
+          setPythonReady(data.isReady);
+        }
+      });
+
       try {
-        const goToken = await GetToken();
-        if (goToken) {
-          setToken(goToken)
+        const port = await GetGoServerPort();
+        if (!port || port <= 0) {
+          throw new Error(`Received invalid port: ${port}`);
         }
 
-        const port = await GetGoServerPort();
+        console.log("App.tsx: HTTP Server Port received:", port);
+        setHttpPort(port);
 
-        if (port && port > 0) {
-          console.log("App.tsx: HTTP Server Port received:", port);
-          setHttpPort(port); // This will trigger a re-render
+        const [isFfmpegReady, pyReady, goToken] = await Promise.all([
+          GetFFmpegStatus(),
+          GetPythonReadyStatus(),
+          GetToken()
+        ]);
 
-          const isFfmpegReady = await GetFFmpegStatus();
-          setFFmpegReady(isFfmpegReady);
-          console.log("is ffmpeg ready: ", isFfmpegReady)
+        setToken(goToken);
+        setFFmpegReady(isFfmpegReady);
+        setPythonReady(pyReady);
 
-          if (isFfmpegReady) {
-            console.log("FFmpeg is initially ready, calling handleSync.");
-            handleSyncRef.current();
-          } else {
-            console.log("no ffmpeg!");
-            EventsEmit("showAlert", {
-              title: "FFmpeg Download Needed",
-              message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
-              actions: [
-                {
-                  label: "Download",
-                  onClick: async () => {
-                    toast.info("Downloading FFmpeg...");
-                    try {
-                      await DownloadFFmpeg();
-                      toast.success("FFmpeg downloaded successfully!");
-                      setFFmpegReady(true);
-                    } catch (err) {
-                      toast.error("Failed to download FFmpeg: " + err);
-                      setFFmpegReady(false);
-                    }
-                  },
-                },
-              ],
-            });
-          }
-          const pyReady = await GetPythonReadyStatus();
-          console.log("App.tsx: Python ready status:", pyReady);
+        console.log("App.tsx: Initial FFmpeg status:", isFfmpegReady);
+        console.log("App.tsx: Initial Python status:", pyReady);
 
-        } else {
-          console.error(
-            "App.tsx: GetGoServerPort() returned an invalid or zero port:",
-            port
-          );
-          setHttpPort(null);
-          setCurrentClipId(null);
+        if (isFfmpegReady) {
+          handleSyncRef.current();
         }
 
       } catch (err) {
-        console.error("App.tsx: Error during initial server info fetch:", err);
+        console.error("App.tsx: Error during app initialization:", err);
         setHttpPort(null);
-        setCurrentClipId(null);
       }
     };
-    getInitialServerInfo();
-    return () => {
-      initialInitDone.current = true;
+
+    // 1. Set up the event listener for the future
+    const unsubscribeGoListener = EventsOn("go:ready", initializeApp);
+
+    // 2. Immediately check if the backend is ALREADY ready (in case we missed the event)
+    const checkIsAlreadyReady = async () => {
+      const port = await GetGoServerPort();
+      if (port > 0) {
+        // The server is already up. We missed the event, so run initialization manually.
+        console.log("App.tsx: Go backend was already ready. Initializing...");
+        initializeApp();
+      }
     };
-  }, []);
+
+    checkIsAlreadyReady();
+
+    // Cleanup the listener when the component unmounts
+    return () => {
+      unsubscribeGoListener();
+    };
+  }, []); // Empty array ensures this setup runs only once
 
   // check if the license is valid
   useEffect(() => {
@@ -671,6 +709,42 @@ function AppContent() {
   };
 
   const titleBarHeight = "2.25rem";
+
+  const getStatusText = () => {
+    if (syncing) {
+      return (
+        <div className="flex-1 flex top-40 h-min pointer-events-none absolute inset-0 z-50 opacity-0 animate-sync-box">
+          <div className="bg-[#101012de] p-6 border-1 border-zinc-100/20 rounded-sm items-center mx-auto text-center text-sm text-zinc-400">
+            <LoaderCircleIcon size={32} className="text-teal-500/40 animate-spin mx-auto mb-3" />
+            <p>Syncing with DaVinci.</p>
+            <p> Please wait...</p>
+          </div>
+        </div>
+      )
+    }
+    else if (projectData && currentClipId && httpPort) {
+      return
+    }
+    else if (!projectData) {
+      return (
+        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+          <p className="text-gray-500">No active timeline.</p>
+        </div>
+      )
+    }
+    else if (!httpPort) {
+      return (
+        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+          <p className="text-gray-500">There was a problem setting up the local http server.</p>
+        </div>
+      )
+    }
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+        <p className="text-gray-500">No audio clips in timeline.</p>
+      </div>
+    )
+  };
   return (
     <>
       <div
@@ -710,18 +784,9 @@ function AppContent() {
                 )}
 
               <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
-                {!projectData || !currentClipId || !httpPort ? (
-                  <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-                    {!projectData ? (
-                      <p className="text-gray-500">No active timeline.</p>
-                    ) : (
-                      <p className="text-gray-500">No audio clips in timeline.</p>
-                    )}
-
-                  </div>
-                ) : (
-                  currentActiveClip &&
-                  projectData?.timeline && (
+                {getStatusText()}
+                {currentActiveClip &&
+                  projectData?.timeline && httpPort && (
                     <ErrorBoundary
                       fallback={
                         <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
@@ -738,7 +803,7 @@ function AppContent() {
                       />
                     </ErrorBoundary>
                   )
-                )}
+                }
               </div>
             </div>
             <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 shadow-xl h-min flex flex-col mx-auto">

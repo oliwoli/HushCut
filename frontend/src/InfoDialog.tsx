@@ -58,6 +58,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
     }, []);
 
     const discordLink = "https://discord.gg/uFa8ExK7b8"
+    const githubRepoLink = "https://github.com/oliwoli/hushcut-releases/releases"
 
     // Only render the Dialog if internalOpen is true
     if (!internalOpen) return null;
@@ -91,6 +92,9 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                             <h1 className="font-extralight text-foreground mt-8 mb-1 text-2xl">Found a bug, want to share feedback, or just chat?</h1>
                             <p>Join our <b className="font-[350] text-zinc-200">discord server</b></p>
                             <a href="#" onClick={() => discordLink && BrowserOpenURL(discordLink)} className="text-orange-400 flex gap-1 underline">{discordLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
+                            <h3 className="font-extralight text-foreground mt-8 mb-1 text-2xl">All Releases</h3>
+                            <p>Compiled binaries for windows, mac and linux can be found on:</p>
+                            <a href="#" onClick={() => githubRepoLink && BrowserOpenURL(githubRepoLink)} className="text-orange-400 flex gap-1 underline">{githubRepoLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
 
 
                             <div className="prose prose-sm dark:prose-invert max-w-none pt-3 max-h-2xl">

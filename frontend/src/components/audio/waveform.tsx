@@ -20,8 +20,6 @@ import { ZoomSlider } from "@/components/ui/zoomSlider";
 import { useWaveformData } from "@/hooks/useWaveformData";
 import { useWaveformStore } from "@/stores/waveformStore";
 
-import hcLogo512 from "@/assets/images/hc-512.png?inline";
-
 function usePlaybackControls({
   wavesurfer,
   onPlayPause,

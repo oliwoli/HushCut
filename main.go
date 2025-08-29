@@ -304,6 +304,7 @@ func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *st
 }
 
 func main() {
+	testApi := os.Getenv("TEST_API") == "1"
 	luaMode := flag.Bool("lua-helper", false, "start headless in lua-helper mode")
 	port := flag.Int("port", 8080, "port to listen on")
 	findPort := flag.Bool("find-port", false, "find a free port and exit")
@@ -330,6 +331,8 @@ func main() {
 	if *pythonPort != 0 {
 		app.pythonCommandPort = *pythonPort
 	}
+	app.testApi = testApi
+	fmt.Println("test api is: ", testApi)
 
 	stat, stdErr := os.Stdin.Stat()
 	if stdErr != nil {

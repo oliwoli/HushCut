@@ -1,5 +1,4 @@
-import { CloseApp, SetWindowAlwaysOnTop } from "@wails/go/main/App";
-import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart, CircleIcon, Settings2Icon } from "lucide-react";
+import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart, CircleIcon, Settings2Icon, RefreshCwIcon } from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
   DropdownMenu,
@@ -12,14 +11,43 @@ import {
 
 
 import { memo, useState, useEffect } from "react";
-import { BrowserOpenURL } from "@wails/runtime/runtime";
 
 import { useUiStore } from "@/stores/uiStore";
 import { useAppState } from "./stores/appSync";
 import clsx from "clsx";
 
+import { BrowserOpenURL, EventsEmit } from "@wails/runtime/runtime";
+import { CloseApp, SetWindowAlwaysOnTop, GetUpdateInfo } from "@wails/go/main/App";
+import { main } from "@wails/go/models";
+
+
 const _TitleBar = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(true);
+  const [updateInfo, setUpdateInfo] = useState<main.UpdateResponseV1 | null>(null);
+
+  useEffect(() => {
+    // Fetch update info once when the app starts
+    GetUpdateInfo().then((info) => {
+      if (info) {
+        setUpdateInfo(info);
+
+        if (info.show_alert) {
+          EventsEmit("showAlert", {
+            severity: info.alert_severity,
+            title: info.alert_content.title,
+            message: info.alert_content.message,
+            actions: [
+              {
+                label: info.alert_content.button_label,
+                onClick: () => BrowserOpenURL(info.alert_content.button_url),
+              },
+            ],
+          });
+        }
+      }
+    });
+  }, []);
+
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [dropdownVisible, setDropdownVisible] = useState(false);
   const [dropdownOpacity, setDropdownOpacity] = useState(1);
@@ -54,6 +82,23 @@ const _TitleBar = () => {
   const handleDonateClick = () => {
     BrowserOpenURL("https://buymeacoffee.com/hushcut");
   };
+
+  const handleUpdateClick = () => {
+    if (!updateInfo) return;
+
+    EventsEmit("showAlert", {
+      severity: updateInfo.alert_severity,
+      title: updateInfo.alert_content.title,
+      message: updateInfo.alert_content.message,
+      actions: [
+        {
+          label: updateInfo.alert_content.button_label ?? "Download",
+          onClick: () => BrowserOpenURL(updateInfo.url),
+        },
+      ],
+    });
+  };
+
 
 
   return (
@@ -103,7 +148,15 @@ const _TitleBar = () => {
             )}
 
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center gap-2">
+            {updateInfo && (
+              <Button onClick={handleUpdateClick} variant={"ghost"}>
+                <span className="text-sm flex gap-2 items-center text-teal-500 hover:text-teal-100">
+                  <RefreshCwIcon className="pt-[1px] pb-[1px]" strokeWidth={2.5} />
+                  {updateInfo.update_label}
+                </span>
+              </Button>
+            )}
             <DropdownMenu onOpenChange={setDropdownOpen}>
               <DropdownMenuTrigger asChild>
                 <Button

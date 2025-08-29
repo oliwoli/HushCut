@@ -157,9 +157,9 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 	}
 	// 1. Perform online verification.
 	verifyURL := "https://api.hushcut.app/verify_license"
-	// if a.isDev {
-	// 	verifyURL = "http://localhost:8080/verify_license"
-	// }
+	if a.testApi {
+		verifyURL = "http://localhost:8080/verify_license"
+	}
 
 	reqBody, err := json.Marshal(map[string]string{"license_key": licenseKey})
 	if err != nil {
@@ -175,7 +175,7 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 	if resp.StatusCode != http.StatusOK {
 		// read the http error header
 		body, _ := io.ReadAll(resp.Body)
-		fmt.Println("Body:", string(body))
+		log.Println("Body:", string(body))
 		returnMessage := string(body)
 		if returnMessage == "" {
 			returnMessage = fmt.Sprintf("license key is invalid or server returned an error (status: %s)", resp.Status)

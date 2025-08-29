@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { useAppState } from "@/stores/appSync";
-import { AlertTriangle, ChevronRightIcon, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
+import { AlertTriangle, ChevronRightIcon, CircleAlert, Info, SirenIcon, XCircle } from "lucide-react"; // or whichever icons you prefer
 import { buttonVariants } from "../ui/button";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +20,8 @@ const getAlertIcon = (type: AlertData["severity"]) => {
   switch (type) {
     case "error":
       return <XCircle className="w-6 h-6 ml-[2px] text-red-700 mb-[1px]" />;
+    case "important":
+      return <CircleAlert className="w-6 h-6 ml-[2px] text-red-700 mb-[1px]" />;
     case "warning":
       return <AlertTriangle className="w-6 h-6 ml-[2px] text-yellow-700 mb-[1px]" />;
     case "info":
@@ -31,19 +33,19 @@ const getAlertIcon = (type: AlertData["severity"]) => {
 
 const davinciNotConnectedMessage = (msg: AlertData["message"]) => {
   if (!msg.includes("Is it running?")) return ""
-  
 
-  return ( 
-  <div className="mt-8 space-y-2 text-gray-400 text-xs">
-    <div>Own the free version of DaVinci?</div>
-    Make sure to open HushCut from DaVinci by navigating to
-    <div className="flex gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
-      Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
-      Scripts <ChevronRightIcon size={16}  className="text-zinc-700" />
-      Edit <ChevronRightIcon size={16} className="text-zinc-700" />
-      HushCut
-</div>
-  </div>
+
+  return (
+    <div className="mt-8 space-y-2 text-gray-400 text-xs">
+      <div>Own the free version of DaVinci?</div>
+      Make sure to open HushCut from DaVinci by navigating to
+      <div className="flex gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
+        Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
+        Scripts <ChevronRightIcon size={16} className="text-zinc-700" />
+        Edit <ChevronRightIcon size={16} className="text-zinc-700" />
+        HushCut
+      </div>
+    </div>
   )
 }
 
@@ -58,7 +60,7 @@ interface AlertData {
   title: string;
   message: string;
   actions?: AlertAction[]; // Add actions array to the interface
-  severity?: "error" | "warning" | "info";
+  severity?: "error" | "warning" | "info" | "important";
 }
 
 const GlobalAlertDialog = () => {
@@ -139,6 +141,7 @@ const GlobalAlertDialog = () => {
         <div
           className={`absolute top-0 w-full h-[4px] ${{
             error: "bg-red-700",
+            important: "bg-red-700",
             warning: "bg-amber-700",
             info: "bg-teal-800",
           }[alertData.severity ?? "info"]
