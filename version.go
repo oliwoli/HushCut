@@ -10,10 +10,12 @@ import (
 var content embed.FS
 
 type PackageJSON struct {
-	Version string `json:"version"`
+	Version       string `json:"version"`
+	FfmpegVersion string `json:"ffmpegVersion"`
 }
 
 var AppVersion string
+var FfmpegVersion string
 
 func init() {
 	file, err := content.ReadFile("package.json")
@@ -28,4 +30,5 @@ func init() {
 	}
 
 	AppVersion = pkg.Version
+	FfmpegVersion = pkg.FfmpegVersion
 }

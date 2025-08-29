@@ -30,8 +30,9 @@ type App struct {
 	isDev   bool
 	testApi bool
 
-	appVersion string
-	updateInfo *UpdateResponseV1
+	appVersion    string
+	ffmpegVersion string
+	updateInfo    *UpdateResponseV1
 
 	licenseMutex     sync.Mutex // Mutex to protect license operations
 	licenseVerifyKey []byte     // Public key for verifying license file signatures
@@ -88,8 +89,9 @@ func NewApp() *App {
 		},
 		ffmpegReadyChan: make(chan struct{}),
 
-		appVersion: AppVersion,
-		fileUsage:  make(map[string]time.Time),
+		appVersion:    AppVersion,
+		ffmpegVersion: FfmpegVersion,
+		fileUsage:     make(map[string]time.Time),
 	}
 }
 
@@ -413,16 +415,16 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 
 		// TODO: enable this code when in production
-		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
-			a.ffmpegBinaryPath = pathInSystem
-			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
-			a.hasFfmpeg = true
-		} else {
-			//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
-			a.hasFfmpeg = false
-			log.Print("no ffmpeg installation")
-			runtime.EventsEmit(a.ctx, "ffmpeg:missing", nil)
-		}
+		// if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+		// 	a.ffmpegBinaryPath = pathInSystem
+		// 	log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
+		// 	a.hasFfmpeg = true
+		// } else {
+		// 	//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
+		// 	a.hasFfmpeg = false
+		// 	log.Print("no ffmpeg installation")
+		// 	runtime.EventsEmit(a.ctx, "ffmpeg:missing", nil)
+		// }
 	} else {
 		a.hasFfmpeg = true
 	}
@@ -517,13 +519,87 @@ func (a *App) waitForFfmpeg() error {
 	}
 }
 
-func (a *App) DownloadFFmpeg() error {
-	platform := runtime.Environment(a.ctx).Platform
-	var url string
-	var finalBinaryName string
-	var extractCmd *exec.Cmd
-	var tempDir string
+type FFBinariesResponse struct {
+	Version string `json:"version"`
+	Bin     map[string]struct {
+		FFmpeg string `json:"ffmpeg"`
+	} `json:"bin"`
+}
 
+func (a *App) DownloadFFmpeg() error {
+	if a.ffmpegVersion == "" {
+		return fmt.Errorf("a.ffmpegVersion must be set before calling DownloadFFmpeg")
+	}
+
+	// 1. Determine the platform and architecture to select the correct binary
+	// Use wails runtime for platform and standard go runtime for architecture
+	// to ensure compatibility with different wails versions.
+	platform := runtime.Environment(a.ctx).Platform // "darwin", "windows", "linux"
+	arch := runtime.Environment(a.ctx).Arch         // "amd64", "arm64", etc.
+
+	var platformKey string
+	switch platform {
+	case "darwin":
+		// The API uses "osx-64" for Intel-based Macs.
+		// Note: The ffbinaries API does not currently provide native arm64 (Apple Silicon) builds.
+		if arch == "amd64" {
+			platformKey = "osx-64"
+		} else {
+			return fmt.Errorf("unsupported macOS architecture: %s. ffbinaries only supports amd64", arch)
+		}
+	case "windows":
+		if arch == "amd64" {
+			platformKey = "windows-64"
+		} else {
+			return fmt.Errorf("unsupported Windows architecture: %s. ffbinaries only supports amd64", arch)
+		}
+	case "linux":
+		switch arch {
+		case "amd64":
+			platformKey = "linux-64"
+		case "arm64":
+			platformKey = "linux-arm64"
+		case "arm":
+			// NOTE: ffbinaries offers 'linux-armhf' and 'linux-armel'.
+			// We are defaulting to 'linux-armhf' which is common for devices like Raspberry Pi.
+			platformKey = "linux-armhf"
+		case "386":
+			platformKey = "linux-32"
+		default:
+			return fmt.Errorf("unsupported Linux architecture: %s", arch)
+		}
+	default:
+		return fmt.Errorf("unsupported platform for ffmpeg download: %s", platform)
+	}
+	log.Printf("Resolved platform key for ffbinaries API: %s", platformKey)
+
+	// 2. Fetch the download URL from the ffbinaries API
+	apiURL := fmt.Sprintf("https://ffbinaries.com/api/v1/version/%s", a.ffmpegVersion)
+	log.Printf("Fetching FFmpeg download info from: %s", apiURL)
+
+	apiResp, err := http.Get(apiURL)
+	if err != nil {
+		return fmt.Errorf("failed to call ffbinaries API: %w", err)
+	}
+	defer apiResp.Body.Close()
+
+	if apiResp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(apiResp.Body)
+		return fmt.Errorf("ffbinaries API returned non-OK status: %s - %s", apiResp.Status, string(bodyBytes))
+	}
+
+	var ffbinariesData FFBinariesResponse
+	if err := json.NewDecoder(apiResp.Body).Decode(&ffbinariesData); err != nil {
+		return fmt.Errorf("failed to parse ffbinaries API response: %w", err)
+	}
+
+	platformInfo, ok := ffbinariesData.Bin[platformKey]
+	if !ok || platformInfo.FFmpeg == "" {
+		return fmt.Errorf("could not find ffmpeg download URL for platform %s in API response", platformKey)
+	}
+	downloadURL := platformInfo.FFmpeg
+
+	// 3. Set up installation paths
 	goExecutablePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("could not get executable path: %w", err)
@@ -531,105 +607,62 @@ func (a *App) DownloadFFmpeg() error {
 	goExecutableDir := filepath.Dir(goExecutablePath)
 
 	var installDir string
+	finalBinaryName := "ffmpeg"
 	switch platform {
 	case "darwin":
-		url = "https://evermeet.cx/ffmpeg/getrelease/zip"
-		finalBinaryName = "ffmpeg"
 		installDir = filepath.Join(goExecutableDir, "..", "Resources")
 	case "windows":
-		url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
+		installDir = goExecutableDir
 		finalBinaryName = "ffmpeg.exe"
-		installDir = goExecutableDir
 	case "linux":
-		url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-		finalBinaryName = "ffmpeg"
 		installDir = goExecutableDir
-	default:
-		return fmt.Errorf("unsupported platform for ffmpeg download: %s", platform)
 	}
+	a.ffmpegBinaryPath = filepath.Join(installDir, finalBinaryName)
 
-	// Create install directory if it doesn't exist
 	if err := os.MkdirAll(installDir, 0755); err != nil {
-		return fmt.Errorf("could not create install directory: %w", err)
+		return fmt.Errorf("could not create install directory at %s: %w", installDir, err)
 	}
 
-	// Create a temporary directory for download and extraction
-	tempDir, err = os.MkdirTemp("", "ffmpeg-download-")
+	// 4. Download and extract in a temporary directory
+	tempDir, err := os.MkdirTemp("", "ffmpeg-download-*")
 	if err != nil {
 		return fmt.Errorf("could not create temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir) // Clean up temp directory
+	defer os.RemoveAll(tempDir) // Clean up temp directory on exit
 
-	downloadPath := filepath.Join(tempDir, filepath.Base(url))
+	downloadPath := filepath.Join(tempDir, "ffmpeg.zip")
 
-	// Download the file
-	log.Printf("Downloading FFmpeg from %s to %s", url, downloadPath)
-	resp, err := http.Get(url)
+	log.Printf("Downloading FFmpeg from %s to %s", downloadURL, downloadPath)
+	downloadResp, err := http.Get(downloadURL)
 	if err != nil {
-		return fmt.Errorf("could not download ffmpeg: %w", err)
+		return fmt.Errorf("could not download ffmpeg zip: %w", err)
 	}
-	defer resp.Body.Close()
+	defer downloadResp.Body.Close()
 
 	out, err := os.Create(downloadPath)
 	if err != nil {
 		return fmt.Errorf("could not create download file: %w", err)
 	}
 
-	_, err = io.Copy(out, resp.Body)
+	_, err = io.Copy(out, downloadResp.Body)
+	out.Close()
 	if err != nil {
-		out.Close()
 		return fmt.Errorf("could not write download to file: %w", err)
 	}
-	out.Close() // Close the file before extraction
 
-	// Extract the archive
-	switch platform {
-	case "darwin":
-		extractCmd = exec.Command("unzip", downloadPath, "-d", tempDir)
-	case "windows":
-		extractCmd = exec.Command("7z", "x", downloadPath, "-o"+tempDir)
-	case "linux":
-		extractCmd = exec.Command("tar", "-xf", downloadPath, "-C", tempDir)
-	}
-
-	log.Printf("Extracting FFmpeg with command: %v", extractCmd.Args)
-	extractCmd.Stdout = os.Stdout
-	extractCmd.Stderr = os.Stderr
-	if err := extractCmd.Run(); err != nil {
+	// 5. Extract the archive (all binaries from this API are in .zip format)
+	// The '-o' flag overwrites files without prompting.
+	extractCmd := exec.Command("unzip", "-o", downloadPath, "-d", tempDir)
+	log.Printf("Extracting FFmpeg with command: unzip -o %s -d %s", downloadPath, tempDir)
+	if output, err := extractCmd.CombinedOutput(); err != nil {
+		log.Printf("Unzip failed. Output:\n%s", string(output))
 		return fmt.Errorf("failed to extract ffmpeg archive: %w", err)
 	}
 
-	// Find the extracted ffmpeg binary
-	var extractedFfmpegPath string
-	switch platform {
-	case "darwin":
-		extractedFfmpegPath = filepath.Join(tempDir, finalBinaryName)
-	case "windows":
-		entries, err := os.ReadDir(tempDir)
-		if err != nil {
-			return fmt.Errorf("failed to read temp directory after 7z extraction: %w", err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() && strings.HasPrefix(entry.Name(), "ffmpeg-") {
-				extractedFfmpegPath = filepath.Join(tempDir, entry.Name(), "bin", finalBinaryName)
-				break
-			}
-		}
-	case "linux":
-		entries, err := os.ReadDir(tempDir)
-		if err != nil {
-			return fmt.Errorf("failed to read temp directory after tar extraction: %w", err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() && strings.HasPrefix(entry.Name(), "ffmpeg-") {
-				extractedFfmpegPath = filepath.Join(tempDir, entry.Name(), finalBinaryName)
-				break
-			}
-		}
-	}
-
-	if extractedFfmpegPath == "" || extractedFfmpegPath == tempDir {
-		return fmt.Errorf("could not find ffmpeg binary in extracted archive")
+	// 6. Locate, move, and set permissions for the binary
+	extractedFfmpegPath := filepath.Join(tempDir, finalBinaryName)
+	if _, err := os.Stat(extractedFfmpegPath); os.IsNotExist(err) {
+		return fmt.Errorf("could not find '%s' in the extracted archive", finalBinaryName)
 	}
 
 	log.Printf("Moving FFmpeg from %s to %s", extractedFfmpegPath, a.ffmpegBinaryPath)
@@ -643,9 +676,9 @@ func (a *App) DownloadFFmpeg() error {
 		}
 	}
 
-	// Update the app state
+	// 7. Update the app state
 	a.hasFfmpeg = true
-	a.signalFfmpegReady()
+	a.signalFfmpegReady() // Uncomment if you have this method
 	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
 
 	log.Println("FFmpeg download and installation complete.")
