@@ -34,6 +34,10 @@ export function GetFFmpegStatus() {
   return window['go']['main']['App']['GetFFmpegStatus']();
 }
 
+export function GetFfmpegVersion() {
+  return window['go']['main']['App']['GetFfmpegVersion']();
+}
+
 export function GetGoServerPort() {
   return window['go']['main']['App']['GetGoServerPort']();
 }

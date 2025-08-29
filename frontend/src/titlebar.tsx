@@ -150,11 +150,13 @@ const _TitleBar = () => {
           </div>
           <div className="flex items-center gap-2">
             {updateInfo && (
-              <Button onClick={handleUpdateClick} variant={"ghost"}>
-                <span className="text-sm flex gap-2 items-center text-teal-500 hover:text-teal-100">
-                  <RefreshCwIcon className="pt-[1px] pb-[1px]" strokeWidth={2.5} />
-                  {updateInfo.update_label}
-                </span>
+              <Button onClick={handleUpdateClick} variant={"ghost"} className="px-0 overflow-hidden">
+                <div className="relative w-full h-max animate-update-label overflow-hidden opacity-0">
+                  <span className="text-xs flex gap-2 items-center text-teal-500 hover:text-teal-100">
+                    <RefreshCwIcon className="relative pt-[1px] pb-[1px]" strokeWidth={2.5} />
+                    {updateInfo.update_label}
+                  </span>
+                </div>
               </Button>
             )}
             <DropdownMenu onOpenChange={setDropdownOpen}>

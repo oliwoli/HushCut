@@ -18,6 +18,8 @@ export function GetCurrentConversionProgress():Promise<Record<string, number>>;
 
 export function GetFFmpegStatus():Promise<boolean>;
 
+export function GetFfmpegVersion():Promise<string>;
+
 export function GetGoServerPort():Promise<number>;
 
 export function GetOrDetectSilencesWithCache(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number):Promise<Array<main.SilencePeriod>>;

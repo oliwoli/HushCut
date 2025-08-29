@@ -316,13 +316,20 @@ div[part="minimap-overlay"] {
     100% { transform: rotate(-359deg) scale(0.95); }
   }
 
-   --animate-sync-box: 125ms linear-fade-in 500ms cubic-bezier(0, 0.99, 0.99, 1) forwards;
+  --animate-sync-box: 125ms fade-in-and-fly-up 500ms cubic-bezier(0, 0.99, 0.99, 1) forwards;
 
-  @keyframes linear-fade-in {
+  
+  @keyframes fade-in-and-fly-up {
     0% { opacity: 0; top: 25%}
     100% { opacity: 100; top: 20%}
   }
-
+  
+  --animate-update-label: 500ms update-label-anim 350ms cubic-bezier(0.0, 0.95, 0.5, 1) forwards;
+  @keyframes update-label-anim {
+    0% {top: 25px; opacity: 0%;}
+    95% {opacity: 90%}
+    100% {top: 0px; opacity: 100%;}
+  }
 }
 
 @layer utilities {
