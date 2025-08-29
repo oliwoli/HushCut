@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -526,6 +527,66 @@ type FFBinariesResponse struct {
 	} `json:"bin"`
 }
 
+func unzip(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	// Ensure the destination directory exists
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return err
+	}
+
+	// Iterate through the files in the archive
+	for _, f := range r.File {
+		fpath := filepath.Join(dest, f.Name)
+
+		// Check for Zip Slip. This is a security vulnerability where a malicious
+		// zip file could write files outside of the destination directory.
+		if !strings.HasPrefix(fpath, filepath.Clean(dest)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", fpath)
+		}
+
+		// Create directory if it's a directory
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(fpath, os.ModePerm)
+			continue
+		}
+
+		// Create the file's parent directory if it doesn't exist
+		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
+			return err
+		}
+
+		// Create the destination file
+		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		// Open the source file from the zip archive
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close() // Clean up the created file
+			return err
+		}
+
+		// Copy the file content
+		_, err = io.Copy(outFile, rc)
+
+		// Close the files, important to do this before checking the copy error
+		outFile.Close()
+		rc.Close()
+
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) DownloadFFmpeg() error {
 	if a.ffmpegVersion == "" {
 		return fmt.Errorf("a.ffmpegVersion must be set before calling DownloadFFmpeg")
@@ -652,11 +713,8 @@ func (a *App) DownloadFFmpeg() error {
 
 	// 5. Extract the archive (all binaries from this API are in .zip format)
 	// The '-o' flag overwrites files without prompting.
-	extractCmd := exec.Command("unzip", "-o", downloadPath, "-d", tempDir)
-	log.Printf("Extracting FFmpeg with command: unzip -o %s -d %s", downloadPath, tempDir)
-	if output, err := extractCmd.CombinedOutput(); err != nil {
-		log.Printf("Unzip failed. Output:\n%s", string(output))
-		return fmt.Errorf("failed to extract ffmpeg archive: %w", err)
+	if err := unzip(downloadPath, tempDir); err != nil {
+		log.Printf("Unzip failed. Output:\n%s", err)
 	}
 
 	// 6. Locate, move, and set permissions for the binary
