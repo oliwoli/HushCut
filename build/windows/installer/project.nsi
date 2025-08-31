@@ -56,6 +56,8 @@ ManifestDPIAware true
 !define MUI_FINISHPAGE_NOAUTOCLOSE # Wait on the INSTFILES page so the user can take a look into the details of the installation steps
 !define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
+!define REG_KEY "SOFTWARE\${INFO_COMPANY_NAME}\${INFO_PRODUCTNAME}"
+
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
 !insertmacro MUI_PAGE_DIRECTORY # In which folder install page.
@@ -89,12 +91,17 @@ Section
     !insertmacro wails.files
 
     File "..\..\bin\python_backend.exe"
+    File "..\..\bin\davinci_lua_helper.exe"
+    File "..\..\bin\HushCut.lua"
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
+
+    WriteRegStr HKLM "${REG_KEY}" "InstallPath" "$INSTDIR"
+
 
     !insertmacro wails.writeUninstaller
 SectionEnd

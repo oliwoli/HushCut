@@ -13,6 +13,7 @@
   },
   "info": {
       "productName": "HushCut",
+      "companyName": "oliwoli",
       "productVersion": "",
       "copyright": "Copyright Oliver Weiss",
       "comments": "A Silence Remover Plugin for DaVinci Resolve."

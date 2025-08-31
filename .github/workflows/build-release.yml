@@ -106,12 +106,20 @@ jobs:
           mkdir -p secrets
           echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
 
+      - name: Build lua helper for windows
+        if: matrix.label == 'windows'
+        run: |
+          cd lua-helper
+          go build .
+          mv .\lua-helper.exe ..\build\bin\davinci_lua_helper.exe
+
       - name: Build Wails App
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
         with:
           build-name: HushCut${{ matrix.ext }}
           build-platform: ${{ matrix.platform }}
           package: false
+          nsis: true
 
       - name: Add macOS Resources folder and cleanup
         if: matrix.label == 'macos'
