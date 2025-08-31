@@ -709,6 +709,43 @@ local function get_script_dir()
 end
 
 local script_dir = get_script_dir()
+
+--- Reads the HushCut installation path from the Windows Registry.
+-- @return string The installation path, or a dynamically determined fallback if not found.
+function GetWinInstallPath()
+  -- Get the Program Files directory from the environment and create a robust fallback path.
+  local program_files = os.getenv("ProgramFiles")
+  -- Note the double backslash is needed here because it's a string literal.
+  local fallback_path = program_files .. "\\HushCut"
+
+  -- The registry key where the path is stored.
+  local reg_key = "HKLM\\SOFTWARE\\oliwoli\\HushCut"
+  
+  -- The command to query the "InstallPath" value from the specified key.
+  local command = 'reg query "' .. reg_key .. '" /v InstallPath'
+  
+  -- Execute the command and open a pipe to read its output.
+  local pipe = io.popen(command)
+  -- If the command fails to run, return the fallback path immediately.
+  if not pipe then return fallback_path end
+  
+  -- Read all output from the command.
+  local output = pipe:read("*a")
+  pipe:close()
+  
+  -- We use a string pattern to find the line with "InstallPath"
+  -- and capture the path that follows "REG_SZ".
+  local path = output:match("InstallPath%s+REG_SZ%s+(.*)")
+  
+  if path then
+    -- If found, trim and return the path from the registry.
+    return path:match("^%s*(.-)%s*$")
+  end
+  
+  -- If the registry key wasn't found, return the fallback path.
+  return fallback_path
+end
+
 local go_server_port = nil
 local TEMP_DIR = script_dir .. "/.hushcut_res" .. "/tmp"
 local AUTH_TOKEN = ""
@@ -833,7 +870,6 @@ local function send_result_with_alert(alertTitle, alertMessage, task_id, alertSe
   return send_message_to_go("taskResult", payload, task_id)
 end
 
-
 -- =============================================================================
 -- Progress Tracker
 -- =============================================================================
@@ -937,9 +973,20 @@ local TASKS = { prepare = 10, append = 40, verify = 10, link = 40 }
 local os_type = jit.os
 local potential_paths
 
+local win_install_path = GetWinInstallPath()
 
 if os_type == "OSX" then
-  TEMP_DIR = script_dir .. "HushCut.app/Contents/Resources/tmp"
+  local home = os.getenv("HOME")
+  if not home then
+    -- This is very rare, but good to handle.
+    return nil, "HOME environment variable not set."
+  end
+  
+  -- Construct the standard path for Application Support.
+  local config_path = home .. "/Library/Application Support/" .. "HushCut"
+  
+  os.execute("mkdir -p '" .. config_path .. "'")
+  TEMP_DIR = config_path .. "tmp"
   potential_paths = {
     "/Applications/HushCut.app/Contents/MacOS/HushCut",
     script_dir .. "HushCut.app/Contents/MacOS/HushCut",
@@ -948,6 +995,7 @@ if os_type == "OSX" then
   }
 elseif os_type == "Windows" then
   potential_paths = {
+    win_install_path .. "HushCut.exe",
     script_dir .. "HushCut.exe",
     script_dir .. "../../build/bin/HushCut.exe",
   }
@@ -957,11 +1005,6 @@ else
     script_dir .. "../../build/bin/HushCut",
   }
 end
-
--- make sure the TEMP_DIR exists
--- if not os.path.exists(TEMP_DIR) then
---   os.makedirs(TEMP_DIR)
--- end
 
 
 local go_app_path = nil
@@ -974,6 +1017,10 @@ for _, path in ipairs(potential_paths) do
   end
 end
 
+local lua_helper_path = go_app_path
+if os_type == "Windows" then
+  lua_helper_path = win_install_path .. "davinci_lua_helper.exe"
+end
 
 
 local function find_free_port()
@@ -987,9 +1034,6 @@ local function find_free_port()
   end
   return nil
 end
-
-
-
 
 
 local function get_resolve()
@@ -1008,10 +1052,7 @@ local function get_resolve()
   end
 end
 
-
-
 local free_port = find_free_port()
-
 
 
 ---@diagnostic disable-next-line: undefined-global
@@ -1027,7 +1068,6 @@ local timeline = nil
 local created_timelines = {}
 
 
-
 if resolve_obj then
   pm = resolve_obj:GetProjectManager()
   if pm then
@@ -1038,7 +1078,6 @@ if resolve_obj then
     end
   end
 end
-
 
 
 local function make_dir(path)

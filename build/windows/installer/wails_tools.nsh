@@ -8,7 +8,7 @@
     !define INFO_PROJECTNAME "HushCut"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "HushCut"
+    !define INFO_COMPANYNAME "oliwoli"
 !endif
 !ifndef INFO_PRODUCTNAME
     !define INFO_PRODUCTNAME "HushCut"
