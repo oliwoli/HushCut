@@ -4,6 +4,8 @@ build/windows/installer/tmp
 node_modules
 frontend/dist
 
+lua-helper/lua-helper
+
 __pycache__
 venv
 typings
