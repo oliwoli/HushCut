@@ -1,4 +1,6 @@
-build
+build/*
+!build/windows
+build/windows/installer/tmp
 node_modules
 frontend/dist
 
