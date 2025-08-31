@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -303,7 +304,30 @@ func startInLuaHelperMode(port *int, findPort *bool, uuidCount *int, uuidStr *st
 	// The main function will now exit, terminating the app.
 }
 
+func writeCrashLog(message string) {
+	now := time.Now().Format("2006-01-02_15-04-05")
+	filename := fmt.Sprintf("crash_%s.txt", now)
+
+	base := filepath.Join(os.Getenv("LOCALAPPDATA"), "HushCut")
+	_ = os.MkdirAll(base, 0755)
+
+	f, err := os.Create(filepath.Join(base, filename))
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	f.WriteString(message + "\n")
+}
+
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			writeCrashLog(fmt.Sprintf("panic: %v", r))
+			panic(r)
+		}
+	}()
+
 	testApi := os.Getenv("TEST_API") == "1"
 
 	luaMode := flag.Bool("lua-helper", false, "start headless in lua-helper mode")

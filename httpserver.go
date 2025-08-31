@@ -109,12 +109,9 @@ func (a *App) sendRequestToPython(ctx context.Context, method, path string, payl
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	// *** FUTURE AUTHORIZATION TOKEN GOES HERE ***
-	// When you're ready, you'll add the logic here, in one place.
 	if a.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+a.authToken)
 	}
-	// ---
 
 	// Use the single, shared httpClient from the App struct
 	resp, err := a.httpClient.Do(req)
