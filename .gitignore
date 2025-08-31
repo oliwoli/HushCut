@@ -5,6 +5,7 @@ node_modules
 frontend/dist
 
 lua-helper/lua-helper
+lua-helper/lua-helper.exe
 
 __pycache__
 venv
