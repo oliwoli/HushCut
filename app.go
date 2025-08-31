@@ -752,7 +752,23 @@ func (a *App) shutdown(ctx context.Context) {
 
 		var terminateErr error
 		if runtime.Environment(a.ctx).Platform == "windows" {
-			terminateErr = a.pythonCmd.Process.Kill() // Immediate kill on Windows
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			a.sendRequestToPython(ctx, "POST", "/shutdown", map[string]interface{}{})
+			// log.Printf("Attempting to kill Python process tree PID %d...", a.pythonCmd.Process.Pid)
+			// killCmd := exec.Command("taskkill", "/PID", strconv.Itoa(a.pythonCmd.Process.Pid), "/T", "/F")
+			// if err := killCmd.Run(); err != nil {
+			// 	log.Printf("taskkill failed: %v", err)
+			// }
+			// // Wait for Go to reap process handle
+			// done := make(chan error)
+			// go func() { done <- a.pythonCmd.Wait() }()
+			// select {
+			// case err := <-done:
+			// 	log.Printf("Python process exited: %v", err)
+			// case <-time.After(5 * time.Second):
+			// 	log.Println("Process still alive after taskkill.")
+			// }
 		} else {
 			terminateErr = a.pythonCmd.Process.Signal(syscall.SIGTERM) // Graceful shutdown on Unix
 		}
