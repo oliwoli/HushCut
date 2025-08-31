@@ -335,7 +335,12 @@ func (a *App) startup(ctx context.Context) {
 		if err := os.MkdirAll(a.tmpPath, 0755); err != nil {
 			log.Fatalf("failed to create tmp dir: %v", err)
 		}
-	case "windows", "linux":
+	case "windows":
+		a.resourcesPath = goExecutableDir
+		a.userResourcesPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "HushCut")
+		a.tmpPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "tmp")
+
+	case "linux":
 		a.resourcesPath = goExecutableDir
 		a.userResourcesPath = filepath.Join(goExecutableDir, ".hushcut_res")
 		a.tmpPath = filepath.Join(a.userResourcesPath, "tmp")

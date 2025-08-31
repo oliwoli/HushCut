@@ -30,7 +30,18 @@ from subprocess import CompletedProcess
 
 # GLOBALS
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-TEMP_DIR: str = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "tmp")
+TEMP_DIR: str = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "tmp") # default (linux), next to executable
+
+if sys.platform.startswith("win"):
+    TEMP_DIR: str = os.path.join(os.environ.get("LOCALAPPDATA"), "tmp")
+
+elif sys.platform.startswith("darwin"):
+    TEMP_DIR = os.path.join(
+        os.path.expanduser("~/Library/Application Support"),
+        "HushCut",
+        "tmp"
+    )
+
 TEMP_DIR = os.path.abspath(TEMP_DIR)
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
