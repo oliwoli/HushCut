@@ -10,5 +10,12 @@
   "author": {
     "name": "oliwoli",
     "email": "oliverweiss97@gmail.com"
+  },
+  "info": {
+      "companyName": "Oliver Weiss",
+      "productName": "HushCut",
+      "productVersion": "",
+      "copyright": "Oliver Weiss",
+      "comments": "A Silence Remover Plugin for DaVinci Resolve."
   }
 }
