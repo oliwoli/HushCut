@@ -132,12 +132,42 @@ function supportsRealBackdrop() {
 //   alert("missing ffmpeg bljiad");
 // });
 
+const Status = {
+    Unknown: 0,
+    Ready: 1,
+    Missing: 2,
+};
+
 function AppContent() {
-  const [ffmpegReady, setFFmpegReady] = useState<boolean | null>(null)
-  const prevFfmpegReady = usePrevious(ffmpegReady);
+  const [ffmpegStatus, setFFmpegReady] = useState(Status.Unknown)
+  const prevFfmpegStatus = usePrevious(ffmpegStatus);
   const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
   const [pythonReady, setPythonReady] = useState<boolean | null>(null)
   const prevPythonReady = usePrevious(pythonReady);
+
+
+  useEffect(() => {
+    // Listen for the "ffmpeg:status" event from the Go backend.
+    // The 'status' variable will be the boolean payload (true or false).
+    EventsOn("ffmpeg:status", (status) => {
+        console.log("Received ffmpeg status from backend:", status);
+        setFFmpegReady(status);
+    });
+
+    // It's good practice to have a fallback in case the event is missed,
+    // though the event is the primary mechanism.
+    const checkInitialStatus = async () => {
+        const isFfmpegReady = await GetFFmpegStatus();
+        // Only set if status is still unknown
+        if (ffmpegStatus === Status.Unknown) {
+            setFFmpegReady(isFfmpegReady);
+        }
+    };
+
+    // We can still call this, but the event will likely arrive first
+    // and provide the definitive answer.
+    checkInitialStatus();
+  }, []);
 
   useEffect(() => {
     // This ensures we only run when the status changes from false to true
@@ -168,23 +198,23 @@ function AppContent() {
 
   useEffect(() => {
     // Don't do anything until the initial status check is complete.
-    if (ffmpegReady === null) {
+    if (ffmpegStatus === Status.Unknown) {
       return;
     }
 
     // This condition elegantly handles two scenarios:
     // 1. The initial check finds FFmpeg is ready (null -> true).
     // 2. The user downloads FFmpeg (false -> true).
-    if (ffmpegReady === true && prevFfmpegReady !== true) {
+    if (ffmpegStatus === Status.Ready && prevFfmpegStatus !== Status.Ready) {
       console.log("FFmpeg is ready, calling handleSync.");
       handleSync();
     }
     // This handles the case where the initial check finds FFmpeg is NOT ready.
-    else if (ffmpegReady === false && prevFfmpegReady === null) {
+    else if (ffmpegStatus === Status.Missing && prevFfmpegStatus === Status.Unknown) {
       console.log("Initial FFmpeg check failed, calling handleSync to show alert.");
       handleSync();
     }
-  }, [ffmpegReady, prevFfmpegReady]);
+  }, [ffmpegStatus, prevFfmpegStatus]);
 
   const isBusy = useAppState(s => s.isBusy);
   const setBusy = useAppState(s => s.setBusy);
@@ -276,15 +306,14 @@ function AppContent() {
       return;
     }
     console.log("syncing...")
-    if (ffmpegReady == null) {
-      const isFfmpegReady = await GetFFmpegStatus();
-      setFFmpegReady(isFfmpegReady);
+    if (ffmpegStatus == Status.Unknown) {
+      //const isFfmpegReady = await GetFFmpegStatus();
+      //setFFmpegReady(isFfmpegReady);
       return
     }
 
-    if (!ffmpegReady && hasValidLicense) {
+    if (ffmpegStatus == Status.Missing && hasValidLicense) {
       console.log("no ffmpeg! (handle sync");
-
       EventsEmit("showAlert", {
         title: "FFmpeg Download Needed",
         message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
@@ -295,13 +324,14 @@ function AppContent() {
               // This logic is moved from the old toast action.
               // We can still use toast for in-progress/success feedback.
               toast.info("Downloading FFmpeg...");
+              ffmpegStatus == Status.Unknown
               try {
                 await DownloadFFmpeg();
                 toast.success("FFmpeg downloaded successfully!");
-                setFFmpegReady(true);
+                setFFmpegReady(Status.Ready);
               } catch (err) {
                 toast.error("Failed to download FFmpeg: " + err);
-                setFFmpegReady(false);
+                setFFmpegReady(Status.Missing);
               }
             },
           },
@@ -431,23 +461,23 @@ function AppContent() {
   useEffect(() => {
     console.count("ffmpegReady useEffect ran");
     // Don't do anything until the initial status check is complete.
-    if (ffmpegReady === null) {
+    if (ffmpegStatus === Status.Unknown) {
       return;
     }
 
     // This condition elegantly handles two scenarios:
     // 1. The initial check finds FFmpeg is ready (null -> true).
     // 2. The user downloads FFmpeg (false -> true).
-    if (ffmpegReady === true && prevFfmpegReady !== true) {
+    if (ffmpegStatus === Status.Ready && prevFfmpegStatus !== Status.Ready) {
       console.log("FFmpeg is ready, calling handleSync (via ref).");
       handleSyncRef.current();
     }
     // This handles the case where the initial check finds FFmpeg is NOT ready.
-    else if (ffmpegReady === false && prevFfmpegReady === null) {
+    else if (ffmpegStatus === Status.Missing && prevFfmpegStatus === Status.Unknown) {
       console.log("Initial FFmpeg check failed, calling handleSync (via ref) to show alert.");
       handleSyncRef.current();
     }
-  }, [ffmpegReady, prevFfmpegReady]);
+  }, [ffmpegStatus, prevFfmpegStatus]);
 
   const initialInitDone = useRef(false); // Ref to track if the effect has run
 

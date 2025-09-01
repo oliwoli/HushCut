@@ -56,7 +56,11 @@ type FileLoader struct {
 }
 
 func NewFileLoader() *FileLoader {
-	return &FileLoader{}
+	return &FileLoader{
+		// CORRECT: Initialize the embedded handler with the default
+		// file server, telling it to serve your embedded assets.
+		Handler: http.FileServer(http.FS(assets)),
+	}
 }
 
 //go:embed build/appicon.png

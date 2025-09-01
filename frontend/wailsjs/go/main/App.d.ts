@@ -16,7 +16,7 @@ export function GetAppVersion():Promise<string>;
 
 export function GetCurrentConversionProgress():Promise<Record<string, number>>;
 
-export function GetFFmpegStatus():Promise<boolean>;
+export function GetFFmpegStatus():Promise<main.FfmpegStatus>;
 
 export function GetFfmpegVersion():Promise<string>;
 

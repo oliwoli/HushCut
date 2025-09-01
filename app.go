@@ -25,6 +25,16 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+type FfmpegStatus int
+
+// Define the possible values using iota to auto-increment them
+const (
+	// StatusUnknown will be 0, which is the default zero value for our new type.
+	StatusUnknown FfmpegStatus = iota // 0
+	StatusReady                       // 1
+	StatusMissing                     // 2
+)
+
 // App struct
 type App struct {
 	ctx     context.Context
@@ -53,7 +63,7 @@ type App struct {
 	pendingMu         sync.Mutex
 	pendingTasks      map[string]chan PythonCommandResponse
 	ffmpegBinaryPath  string
-	hasFfmpeg         bool
+	ffmpegStatus      FfmpegStatus
 	ffmpegSemaphore   chan struct{}
 	waveformSemaphore chan struct{}
 	conversionTracker sync.Map
@@ -88,6 +98,7 @@ func NewApp() *App {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		ffmpegStatus:    StatusUnknown,
 		ffmpegReadyChan: make(chan struct{}),
 
 		appVersion:    AppVersion,
@@ -213,16 +224,6 @@ func (a *App) GetGoServerPort() int {
 	return actualPort // Accesses the global from httpserver.go
 }
 
-func binaryExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	cmd := exec.Command(path, "-version")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run() == nil
-}
-
 //go:embed python-backend/src/HushCut.lua
 var luaScriptData []byte
 
@@ -293,6 +294,20 @@ func (a *App) installLuaScript() {
 	}
 
 	log.Println("✅ Successfully installed DaVinci Resolve script.")
+}
+
+func binaryExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	cmd := exec.Command(path, "-version")
+
+	// Correctly discard stdout and stderr
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+
+	// cmd.Run() will return nil if the command runs and exits with a zero status code.
+	return cmd.Run() == nil
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -415,16 +430,17 @@ func (a *App) startup(ctx context.Context) {
 	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
-	var err error
+	//var err error
 	ffmpegBinName := "ffmpeg"
 	if runtime.Environment(a.ctx).Platform == "windows" {
 		ffmpegBinName = "ffmpeg.exe"
 	}
 	a.ffmpegBinaryPath = filepath.Join(a.userResourcesPath, ffmpegBinName)
-	if a.ffmpegBinaryPath == "" || !binaryExists(a.ffmpegBinaryPath) {
-		log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
-
-		// TODO: enable this code when in production
+	if !binaryExists(a.ffmpegBinaryPath) {
+		// log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
+		log.Printf("ffmpeg not found at %s", a.ffmpegBinaryPath)
+		a.ffmpegStatus = StatusMissing
+		// TODO: enable this if figured out how to handle versions (accept locally installed ffmpeg if same minor version?)
 		// if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
 		// 	a.ffmpegBinaryPath = pathInSystem
 		// 	log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
@@ -436,8 +452,11 @@ func (a *App) startup(ctx context.Context) {
 		// 	runtime.EventsEmit(a.ctx, "ffmpeg:missing", nil)
 		// }
 	} else {
-		a.hasFfmpeg = true
+		log.Printf("ffmpeg found at %s", a.ffmpegBinaryPath)
+		a.ffmpegStatus = StatusReady
 	}
+
+	runtime.EventsEmit(a.ctx, "ffmpeg:status", a.ffmpegStatus)
 
 	// set window always on top
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
@@ -510,10 +529,10 @@ func (a *App) waitForValidLicense() error {
 
 func (a *App) waitForFfmpeg() error {
 	a.ffmpegMutex.RLock()
-	isReady := a.hasFfmpeg
+	isReady := a.ffmpegStatus
 	a.ffmpegMutex.RUnlock()
 
-	if isReady {
+	if isReady == StatusReady {
 		return nil // FFmpeg already available, proceed.
 	}
 
@@ -730,8 +749,8 @@ func (a *App) DownloadFFmpeg() error {
 	}
 
 	// 7. Update the app state
-	a.hasFfmpeg = true
-	a.signalFfmpegReady() // Uncomment if you have this method
+	a.ffmpegStatus = StatusReady
+	a.signalFfmpegReady()
 	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
 
 	log.Println("FFmpeg download and installation complete.")
@@ -1277,8 +1296,8 @@ func (a *App) GetPythonReadyStatus() bool {
 	return a.pythonReady
 }
 
-func (a *App) GetFFmpegStatus() bool {
-	return a.hasFfmpeg
+func (a *App) GetFFmpegStatus() FfmpegStatus {
+	return a.ffmpegStatus
 }
 
 const fileUsageFileName = "file_usage.json"

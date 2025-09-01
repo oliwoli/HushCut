@@ -12,10 +12,15 @@
     "email": "oliverweiss97@gmail.com"
   },
   "info": {
-      "productName": "HushCut",
-      "companyName": "oliwoli",
-      "productVersion": "",
-      "copyright": "Copyright Oliver Weiss",
-      "comments": "A Silence Remover Plugin for DaVinci Resolve."
+    "productName": "HushCut",
+    "companyName": "oliwoli",
+    "productVersion": "0.2.22",
+    "copyright": "© Oliver Weiss 2025",
+    "comments": "A Silence Remover Plugin for DaVinci Resolve."
+  },
+  "preBuildHooks": {
+    "windows/*": "node ../scripts/syncVersion.js",
+    "linux/*": "node ../scripts/syncVersion.js",
+    "darwin/*": "node ../scripts/syncVersion.js"
   }
 }

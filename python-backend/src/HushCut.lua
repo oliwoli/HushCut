@@ -721,8 +721,8 @@ function GetWinInstallPath()
   -- The registry key where the path is stored.
   local reg_key = "HKLM\\SOFTWARE\\oliwoli\\HushCut"
   
-  -- The command to query the "InstallPath" value from the specified key.
-  local command = 'reg query "' .. reg_key .. '" /v InstallPath'
+  -- The command to query the "InstallDirectory" value from the specified key.
+  local command = 'reg query "' .. reg_key .. '" /v InstallDirectory'
   
   -- Execute the command and open a pipe to read its output.
   local pipe = io.popen(command)
@@ -733,9 +733,9 @@ function GetWinInstallPath()
   local output = pipe:read("*a")
   pipe:close()
   
-  -- We use a string pattern to find the line with "InstallPath"
+  -- We use a string pattern to find the line with "InstallDirectory"
   -- and capture the path that follows "REG_SZ".
-  local path = output:match("InstallPath%s+REG_SZ%s+(.*)")
+  local path = output:match("InstallDirectory%s+REG_SZ%s+(.*)")
   
   if path then
     -- If found, trim and return the path from the registry.

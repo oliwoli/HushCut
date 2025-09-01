@@ -1283,12 +1283,12 @@ def get_resolve(task_id: str = "") -> None:
         # Attempt to import after modifying sys.path
         import DaVinciResolveScript as bmd  # type: ignore
     except ImportError as e:
-        resolve_import_error_msg(e, task_id)
+        #resolve_import_error_msg(e, task_id)
         return None
     except Exception as e:
-        resolve_import_error_msg(e, task_id)
+        #resolve_import_error_msg(e, task_id)
         return None
-    print("was able to import DaVinciResolveScript")
+    print("Imported DaVinciResolveScript successfully")
 
     resolve_obj = bmd.scriptapp("Resolve")
     if not resolve_obj:
@@ -1296,9 +1296,6 @@ def get_resolve(task_id: str = "") -> None:
             resolve_obj = resolve  # type: ignore  # noqa: F821
         except Exception as e:
             print(f"could not get resolve_obj by calling resolve var directly. {e}")
-            resolve_import_error_msg(
-                e=Exception("Failed to import DaVinci Resolve Python API.", task_id)
-            )
             return None
 
     RESOLVE = resolve_obj
