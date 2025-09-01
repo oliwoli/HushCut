@@ -634,7 +634,9 @@ func (a *App) DownloadFFmpeg() error {
 		if arch == "amd64" {
 			platformKey = "osx-64"
 		} else {
-			return fmt.Errorf("unsupported macOS architecture: %s. ffbinaries only supports amd64", arch)
+			// still just use amd64, should still run on arm systems
+			platformKey = "osx-64" // TODO: find another api
+			//return fmt.Errorf("unsupported macOS architecture: %s. ffbinaries only supports amd64", arch)
 		}
 	case "windows":
 		if arch == "amd64" {

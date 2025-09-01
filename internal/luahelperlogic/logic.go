@@ -61,7 +61,7 @@ func startHttpServer(port int) {
 
 	mux := http.NewServeMux()
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
+		Addr:    fmt.Sprintf("localhost:%d", port),
 		Handler: mux,
 	}
 

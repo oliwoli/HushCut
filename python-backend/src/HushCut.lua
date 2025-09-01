@@ -719,12 +719,12 @@ function GetWinInstallPath()
   end
 
   -- Get the Program Files directory from the environment and create a robust fallback path.
-  local program_files = os.getenv("ProgramFiles")
+  local local_app_data = os.getenv("LOCALAPPDATA")
   -- Note the double backslash is needed here because it's a string literal.
-  local fallback_path = program_files .. "\\HushCut"
+  local fallback_path = local_app_data .. "\\Programs" .. "\\HushCut"
 
   -- The registry key where the path is stored.
-  local reg_key = "HKLM\\SOFTWARE\\oliwoli\\HushCut"
+  local reg_key = "HKCU\\SOFTWARE\\oliwoli\\HushCut"
 
   -- The command to query the "InstallDirectory" value from the specified key.
   local command = 'reg query "' .. reg_key .. '" /v InstallDirectory'
@@ -991,7 +991,7 @@ if os_type == "OSX" then
   local config_path = home .. "/Library/Application Support/" .. "HushCut"
 
   os.execute("mkdir -p '" .. config_path .. "'")
-  TEMP_DIR = config_path .. "tmp"
+  TEMP_DIR = config_path .. "/tmp"
   potential_paths = {
     "/Applications/HushCut.app/Contents/MacOS/HushCut",
     script_dir .. "HushCut.app/Contents/MacOS/HushCut",
@@ -1000,8 +1000,8 @@ if os_type == "OSX" then
   }
 elseif os_type == "Windows" then
   potential_paths = {
-    win_install_path .. "HushCut.exe",
-    script_dir .. "HushCut.exe",
+    win_install_path .. "\\HushCut.exe",
+    script_dir .. "\\HushCut.exe",
     script_dir .. "../../build/bin/HushCut.exe",
   }
 else
@@ -2684,7 +2684,7 @@ if go_app_path and free_port then
   print("Starting HushCut app with command: " .. hushcut_command)
   os.execute(hushcut_command)
 
-  local server_command = quote(go_app_path) .. " --lua-helper" .. " --port=" .. free_port .. " 2>&1"
+  local server_command = quote(lua_helper_path) .. " --lua-helper" .. " --port=" .. free_port .. " 2>&1"
   print("Starting http server with command: " .. server_command)
   local handle = io.popen(server_command)
   if not handle then
