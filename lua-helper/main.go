@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 
-	// ⬇️ Use your project's module path here
 	"github.com/oliwoli/hushcut/internal/luahelperlogic"
 )
 
