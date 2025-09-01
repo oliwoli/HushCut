@@ -696,6 +696,16 @@ local function quote(str)
   return '"' .. str:gsub('"', '\\"') .. '"'
 end
 
+-- helper function to join paths correctly
+local function path_join(...)
+  local parts = { ... }
+  local sep = package.config:sub(1, 1) -- '/' or '\'
+  local path = table.concat(parts, sep)
+  -- Tidy up the path by replacing multiple separators with a single one
+  path = path:gsub(sep .. sep .. "+", sep)
+  return path
+end
+
 local function get_script_dir()
   local source = debug.getinfo(1, "S").source
   if source:sub(1, 1) == "@" then
@@ -721,7 +731,7 @@ function GetWinInstallPath()
   -- Get the Program Files directory from the environment and create a robust fallback path.
   local program_files = os.getenv("ProgramFiles")
   -- Note the double backslash is needed here because it's a string literal.
-  local fallback_path = program_files .. "\\HushCut"
+  local fallback_path = path_join(program_files, "HushCut")
 
   -- The registry key where the path is stored.
   local reg_key = "HKLM\\SOFTWARE\\oliwoli\\HushCut"
@@ -752,7 +762,7 @@ function GetWinInstallPath()
 end
 
 local go_server_port = nil
-local TEMP_DIR = script_dir .. "/.hushcut_res" .. "/tmp"
+local TEMP_DIR = path_join(script_dir, ".hushcut_res", "tmp")
 local AUTH_TOKEN = ""
 
 ---
@@ -988,26 +998,30 @@ if os_type == "OSX" then
   end
 
   -- Construct the standard path for Application Support.
-  local config_path = home .. "/Library/Application Support/" .. "HushCut"
+  local config_path = path_join(home, "Library", "Application Support", "HushCut")
 
   os.execute("mkdir -p '" .. config_path .. "'")
-  TEMP_DIR = config_path .. "tmp"
+  TEMP_DIR = path_join(config_path, "tmp")
   potential_paths = {
-    "/Applications/HushCut.app/Contents/MacOS/HushCut",
-    script_dir .. "HushCut.app/Contents/MacOS/HushCut",
-    script_dir .. "../../build/bin/HushCut.app/Contents/MacOS/HushCut",
-    script_dir .. "../../build/bin/HushCut",
+    path_join("/Applications", "HushCut.app", "Contents", "MacOS", "HushCut"),
+    path_join(script_dir, "HushCut.app", "Contents", "MacOS", "HushCut"),
+    path_join(script_dir, "..", "..", "build", "bin", "HushCut.app", "Contents", "MacOS", "HushCut"),
+    path_join(script_dir, "..", "..", "build", "bin", "HushCut"),
+
+    -- "/Applications/HushCut.app/Contents/MacOS/HushCut",
+    -- script_dir .. "HushCut.app/Contents/MacOS/HushCut",
+    -- script_dir .. "../../build/bin/HushCut.app/Contents/MacOS/HushCut",
+    -- script_dir .. "../../build/bin/HushCut",
   }
 elseif os_type == "Windows" then
   potential_paths = {
-    win_install_path .. "HushCut.exe",
-    script_dir .. "HushCut.exe",
-    script_dir .. "../../build/bin/HushCut.exe",
+    path_join(win_install_path, "HushCut.exe"),
+    path_join(script_dir, "HushCut.exe"),
   }
 else
   potential_paths = {
-    script_dir .. "HushCut",
-    script_dir .. "../../build/bin/HushCut",
+    path_join(script_dir, "HushCut"),
+    path_join(script_dir, "..", "..", "build", "bin", "HushCut"),
   }
 end
 
@@ -1024,7 +1038,7 @@ end
 
 local lua_helper_path = go_app_path
 if os_type == "Windows" then
-  lua_helper_path = win_install_path .. "davinci_lua_helper.exe"
+  lua_helper_path = path_join(win_install_path, "davinci_lua_helper.exe")
 end
 
 
@@ -1123,7 +1137,7 @@ local bit = require("bit") -- assumes LuaBitOp or LuaJIT's bit library
 -- UUID generator with optional deterministic seed
 local function uuid()
   -- call the script with --uuid-from-str <path>
-  local command = string.format("%s --lua-helper --uuid 1", quote(go_app_path))
+  local command = string.format("%s --lua-helper --uuid 1", quote(lua_helper_path))
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID")
@@ -1144,7 +1158,7 @@ end
 -- Placeholder for a function that creates a UUID from a file path.
 local function uuid_from_path(path)
   -- call the script with --uuid-from-str <path>
-  local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(go_app_path), path)
+  local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(lua_helper_path), path)
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from path: " .. path)
@@ -1214,7 +1228,7 @@ local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
   seed_string = seed_string .. "nested_clips[" .. table.concat(nested_strings, "||") .. "]"
 
   -- 3. Generate a deterministic UUID from the canonical seed string by calling Go helper.
-  local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(go_app_path), seed_string)
+  local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(lua_helper_path), seed_string)
   local handle = io.popen(command)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from string.")
@@ -1253,7 +1267,7 @@ local function mixdown_compound_clips(audio_timeline_items, curr_processed_file_
   for content_uuid, items_in_group in pairs(content_map) do
     local representative_item = items_in_group[1]
     local output_filename = content_uuid .. ".wav"
-    local output_wav_path = TEMP_DIR .. "/" .. output_filename
+    local output_wav_path = path_join(TEMP_DIR, output_filename)
 
     local needs_render = true
     for _, name in ipairs(curr_processed_file_names) do
@@ -1662,7 +1676,7 @@ local function get_project_data(bmd_project, bmd_timeline)
 
   if has_complex_clips then
     print("Complex clips found. Analyzing timeline structure with OTIO...")
-    local input_otio_path = TEMP_DIR .. "/temp-timeline.otio"
+    local input_otio_path = path_join(TEMP_DIR, "temp-timeline.otio")
     export_timeline_to_otio(bmd_timeline, input_otio_path)
     populate_nested_clips(input_otio_path) -- This should populate project_data
   end
@@ -2567,8 +2581,7 @@ local function main(sync, task_id)
     return
   end
 
-  local input_otio_path = TEMP_DIR .. "/temp-timeline.otio"
-
+  local input_otio_path = path_join(TEMP_DIR, "temp-timeline.otio")
   if sync or not project_data then
     print("syncing project data...")
     local success, err = get_project_data(project, timeline)
