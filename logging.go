@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,17 +28,19 @@ func init() {
 		}
 		base = filepath.Join(home, "Library", "Application Support", "HushCut")
 	case "linux":
-		configDir, err := os.UserConfigDir()
+		home, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("failed to get user config dir: %v", err)
+			log.Fatalf("failed to get home dir: %v", err)
 		}
+		configDir := filepath.Join(home, ".local")
 		base = filepath.Join(configDir, "HushCut")
 	}
 
 	_ = os.MkdirAll(base, 0755)
 
-	f, err := os.Create(filepath.Join(base, "log.txt"))
+	logFile, err := os.Create(filepath.Join(base, "log.txt"))
 	if err == nil {
-		log.SetOutput(f)
+		mw := io.MultiWriter(os.Stdout, logFile)
+		log.SetOutput(mw)
 	}
 }

@@ -713,6 +713,11 @@ local script_dir = get_script_dir()
 --- Reads the HushCut installation path from the Windows Registry.
 -- @return string The installation path, or a dynamically determined fallback if not found.
 function GetWinInstallPath()
+  local os_type = jit.os
+  if os_type ~= "windows" then
+    return nil
+  end
+
   -- Get the Program Files directory from the environment and create a robust fallback path.
   local program_files = os.getenv("ProgramFiles")
   -- Note the double backslash is needed here because it's a string literal.
@@ -720,28 +725,28 @@ function GetWinInstallPath()
 
   -- The registry key where the path is stored.
   local reg_key = "HKLM\\SOFTWARE\\oliwoli\\HushCut"
-  
+
   -- The command to query the "InstallDirectory" value from the specified key.
   local command = 'reg query "' .. reg_key .. '" /v InstallDirectory'
-  
+
   -- Execute the command and open a pipe to read its output.
   local pipe = io.popen(command)
   -- If the command fails to run, return the fallback path immediately.
   if not pipe then return fallback_path end
-  
+
   -- Read all output from the command.
   local output = pipe:read("*a")
   pipe:close()
-  
+
   -- We use a string pattern to find the line with "InstallDirectory"
   -- and capture the path that follows "REG_SZ".
   local path = output:match("InstallDirectory%s+REG_SZ%s+(.*)")
-  
+
   if path then
     -- If found, trim and return the path from the registry.
     return path:match("^%s*(.-)%s*$")
   end
-  
+
   -- If the registry key wasn't found, return the fallback path.
   return fallback_path
 end
@@ -981,10 +986,10 @@ if os_type == "OSX" then
     -- This is very rare, but good to handle.
     return nil, "HOME environment variable not set."
   end
-  
+
   -- Construct the standard path for Application Support.
   local config_path = home .. "/Library/Application Support/" .. "HushCut"
-  
+
   os.execute("mkdir -p '" .. config_path .. "'")
   TEMP_DIR = config_path .. "tmp"
   potential_paths = {
