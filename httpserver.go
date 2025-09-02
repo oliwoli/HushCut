@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -471,7 +470,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 	log.Printf("RenderClip: BUFFERING request for %s, segment %f to %f", originalFilePath, startSeconds, endSeconds)
 
 	// --- FFMPEG Command Setup ---
-	cmd := exec.Command(a.ffmpegBinaryPath,
+	cmd := ExecCommand(a.ffmpegBinaryPath,
 		"-i", originalFilePath,
 		"-af", fmt.Sprintf("atrim=start=%.6f:end=%.6f", startSeconds, endSeconds),
 		"-f", "wav",
