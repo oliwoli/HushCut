@@ -724,7 +724,7 @@ local script_dir = get_script_dir()
 -- @return string The installation path, or a dynamically determined fallback if not found.
 function GetWinInstallPath()
   local os_type = jit.os
-  if os_type ~= "windows" then
+  if os_type ~= "Windows" then
     return nil
   end
 
@@ -2669,7 +2669,7 @@ if go_app_path and free_port then
     hushcut_command = string.format(
       "env %s=%s GDK_BACKEND=x11 %s --python-port=%s &",
       token_env_var,
-      quote(AUTH_TOKEN),
+      AUTH_TOKEN,
       quote(go_app_path),
       free_port
     )
@@ -2678,7 +2678,7 @@ if go_app_path and free_port then
     hushcut_command = string.format(
       "%s=%s %s --python-port=%s &",
       token_env_var,
-      quote(AUTH_TOKEN),
+      AUTH_TOKEN,
       quote(go_app_path),
       free_port
     )
@@ -2688,7 +2688,7 @@ if go_app_path and free_port then
     hushcut_command = string.format(
       'start /B cmd /c "set %s=%s && %s --python-port=%s"',
       token_env_var,
-      quote(AUTH_TOKEN),
+      AUTH_TOKEN,
       quote(go_app_path),
       free_port
     )
