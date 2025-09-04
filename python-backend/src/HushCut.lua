@@ -691,6 +691,278 @@ local json = (function()
   return internal_json_module
 end)()
 
+local ffi = require("ffi")
+
+ffi.cdef[[
+typedef void* HANDLE;
+typedef unsigned long DWORD;
+typedef int BOOL;
+typedef const wchar_t* LPCWSTR;
+typedef unsigned short WORD;
+typedef unsigned char BYTE;
+typedef struct _SECURITY_ATTRIBUTES {
+  DWORD nLength;
+  void* lpSecurityDescriptor;
+  BOOL  bInheritHandle;
+} SECURITY_ATTRIBUTES;
+
+typedef struct _STARTUPINFOW {
+  DWORD cb;
+  LPCWSTR lpReserved;
+  LPCWSTR lpDesktop;
+  LPCWSTR lpTitle;
+  DWORD dwX;
+  DWORD dwY;
+  DWORD dwXSize;
+  DWORD dwYSize;
+  DWORD dwXCountChars;
+  DWORD dwYCountChars;
+  DWORD dwFillAttribute;
+  DWORD dwFlags;
+  WORD  wShowWindow;
+  WORD  cbReserved2;
+  BYTE* lpReserved2;
+  HANDLE hStdInput;
+  HANDLE hStdOutput;
+  HANDLE hStdError;
+} STARTUPINFOW;
+
+typedef struct _PROCESS_INFORMATION {
+  HANDLE hProcess;
+  HANDLE hThread;
+  DWORD dwProcessId;
+  DWORD dwThreadId;
+} PROCESS_INFORMATION;
+
+BOOL CreatePipe(HANDLE* hReadPipe, HANDLE* hWritePipe,
+                SECURITY_ATTRIBUTES* lpPipeAttributes, DWORD nSize);
+
+BOOL SetHandleInformation(HANDLE hObject, DWORD dwMask, DWORD dwFlags);
+
+BOOL CreateProcessW(
+  LPCWSTR lpApplicationName,
+  wchar_t* lpCommandLine,
+  void* lpProcessAttributes,
+  void* lpThreadAttributes,
+  BOOL bInheritHandles,
+  DWORD dwCreationFlags,
+  void* lpEnvironment,
+  LPCWSTR lpCurrentDirectory,
+  STARTUPINFOW* lpStartupInfo,
+  PROCESS_INFORMATION* lpProcessInformation
+);
+
+BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead,
+              DWORD* lpNumberOfBytesRead, void* lpOverlapped);
+
+BOOL CloseHandle(HANDLE hObject);
+]]
+
+local CREATE_NO_WINDOW = 0x08000000
+local STARTF_USESTDHANDLES = 0x00000100
+local HANDLE_FLAG_INHERIT = 0x00000001
+
+-- UTF-16 helper
+local function to_utf16(str)
+  local buf = ffi.new("wchar_t[?]", #str + 1)
+  for i = 1, #str do
+    buf[i-1] = string.byte(str, i)
+  end
+  buf[#str] = 0
+  return buf
+end
+
+-- popen_hidden: returns an object with :read("*a") and :close()
+local function popen_hidden_windows(cmdline)
+  local sa = ffi.new("SECURITY_ATTRIBUTES")
+  sa.nLength = ffi.sizeof(sa)
+  sa.bInheritHandle = 1
+
+  local hRead = ffi.new("HANDLE[1]")
+  local hWrite = ffi.new("HANDLE[1]")
+
+  if ffi.C.CreatePipe(hRead, hWrite, sa, 0) == 0 then
+    -- Make sure to close handles on failure
+    if hRead[0] then ffi.C.CloseHandle(hRead[0]) end
+    if hWrite[0] then ffi.C.CloseHandle(hWrite[0]) end
+    error("CreatePipe failed")
+  end
+
+  -- Prevent the read end from being inherited by other processes
+  ffi.C.SetHandleInformation(hRead[0], HANDLE_FLAG_INHERIT, 0)
+
+  local si = ffi.new("STARTUPINFOW")
+  si.cb = ffi.sizeof(si)
+  si.dwFlags = STARTF_USESTDHANDLES
+  si.hStdOutput = hWrite[0]
+  si.hStdError  = hWrite[0]
+
+  local pi = ffi.new("PROCESS_INFORMATION")
+
+  local ok = ffi.C.CreateProcessW(
+    nil,
+    to_utf16(cmdline),
+    nil, nil,
+    true, -- inherit handles
+    CREATE_NO_WINDOW,
+    nil,
+    nil,
+    si,
+    pi
+  )
+
+  -- The parent process no longer needs the write handle,
+  -- the child process has its own copy.
+  ffi.C.CloseHandle(hWrite[0])
+
+  if ok == 0 then
+    ffi.C.CloseHandle(hRead[0])
+    error("CreateProcessW failed")
+  end
+
+  -- We don't need handles to the child process itself
+  ffi.C.CloseHandle(pi.hProcess)
+  ffi.C.CloseHandle(pi.hThread)
+
+  local handle = {}
+  local read_pipe = hRead[0]
+  local is_closed = false
+
+  -- Internal function to read one chunk from the pipe
+  local function read_chunk()
+    local bufsize = 4096
+    local buf = ffi.new("char[?]", bufsize)
+    local bytesRead = ffi.new("DWORD[1]")
+    
+    local success = ffi.C.ReadFile(read_pipe, buf, bufsize, bytesRead, nil)
+    if success ~= 0 and bytesRead[0] > 0 then
+      return ffi.string(buf, bytesRead[0])
+    else
+      -- End of file or error
+      return nil
+    end
+  end
+
+  -- The new :lines() iterator method
+  function handle:lines()
+    local buffer = ""
+    return function()
+      while true do
+        local pos = buffer:find("\n", 1, true)
+        if pos then
+          local line = buffer:sub(1, pos - 1)
+          buffer = buffer:sub(pos + 1)
+          -- Remove trailing carriage return for Windows compatibility
+          return line:gsub("\r$", "")
+        else
+          -- Buffer has no newline, try to read more data
+          local chunk = read_chunk()
+          if chunk then
+            buffer = buffer .. chunk
+          else
+            -- No more data to read from the pipe
+            if #buffer > 0 then
+              local last_line = buffer
+              buffer = "" -- Clear buffer so we return nil next time
+              return last_line:gsub("\r$", "")
+            else
+              -- Buffer is empty and pipe is closed, we are done
+              return nil
+            end
+          end
+        end
+      end
+    end
+  end
+
+  function handle:read(mode)
+    mode = mode or "*a"
+    if mode ~= "*a" then
+        error("popen_hidden only supports read('*a')")
+    end
+    local chunks = {}
+    while true do
+        local chunk = read_chunk()
+        if chunk then
+            table.insert(chunks, chunk)
+        else
+            break
+        end
+    end
+    return table.concat(chunks)
+  end
+
+  function handle:close()
+    if not is_closed then
+      ffi.C.CloseHandle(read_pipe)
+      is_closed = true
+    end
+  end
+
+  return handle
+end
+
+
+local function popen_hidden(cmd, os_type)  
+  if os_type == "Windows" then
+    -- use the FFI-based implementation we built
+    return popen_hidden_windows(cmd)  -- the CreateProcessW + pipe version
+  else
+    -- just use normal io.popen on Linux/macOS
+    return io.popen(cmd)
+  end
+end
+
+local function execute_hidden_with_env(cmdline, env_vars)
+  -- 1. Prepare the environment block
+  -- The format must be "VAR1=VALUE1\0VAR2=VALUE2\0\0"
+  local env_strings = {}
+  for k, v in pairs(env_vars) do
+    table.insert(env_strings, k .. "=" .. v)
+  end
+  -- Join with null terminators and add the final double-null
+  local env_block_str = table.concat(env_strings, "\0") .. "\0\0"
+
+  -- Convert the string to a wchar_t buffer for the API call
+  local env_block = ffi.new("wchar_t[?]", #env_block_str)
+  for i = 1, #env_block_str do
+    env_block[i - 1] = string.byte(env_block_str, i)
+  end
+
+  -- 2. Prepare structures for CreateProcessW
+  local si = ffi.new("STARTUPINFOW")
+  si.cb = ffi.sizeof(si)
+  -- No dwFlags are set because we are not redirecting std handles
+
+  local pi = ffi.new("PROCESS_INFORMATION")
+
+  -- 3. Call CreateProcessW
+  local ok = ffi.C.CreateProcessW(
+    nil,
+    to_utf16(cmdline),
+    nil,
+    nil,
+    false, -- bInheritHandles
+    CREATE_NO_WINDOW,
+    env_block, -- The custom environment block
+    nil,
+    si,
+    pi
+  )
+
+  if ok == 0 then
+    -- You can add more detailed error handling here if needed
+    print("execute_hidden_with_env failed to start process.")
+    return false
+  end
+
+  -- 4. Clean up handles immediately, as we're not waiting for the process
+  ffi.C.CloseHandle(pi.hProcess)
+  ffi.C.CloseHandle(pi.hThread)
+
+  return true
+end
+
 -- helper function to quote app paths
 local function quote(str)
   return '"' .. str:gsub('"', '\\"') .. '"'
@@ -740,7 +1012,7 @@ function GetWinInstallPath()
   local command = 'reg query "' .. reg_key .. '" /v InstallDirectory'
 
   -- Execute the command and open a pipe to read its output.
-  local pipe = io.popen(command)
+  local pipe = popen_hidden(command, os_type)
   -- If the command fails to run, return the fallback path immediately.
   if not pipe then return fallback_path end
 
@@ -826,8 +1098,7 @@ local function send_message_to_go(message_type, payload, task_id)
     url,
     AUTH_TOKEN
   )
-
-  local handle = io.popen(command)
+  local handle = popen_hidden(command, jit.os_type)
   if not handle then
     print("Lua (to Go): Failed to execute curl command.")
     return false
@@ -1044,7 +1315,7 @@ end
 
 
 local function find_free_port()
-  local handle = io.popen(quote(go_app_path) .. " --lua-helper" .. " --find-port")
+  local handle = popen_hidden(quote(go_app_path) .. " --lua-helper" .. " --find-port", jit.os_type)
   if handle then
     local port = handle:read("*a")
     handle:close()
@@ -1139,7 +1410,7 @@ local bit = require("bit") -- assumes LuaBitOp or LuaJIT's bit library
 local function uuid()
   -- call the script with --uuid-from-str <path>
   local command = string.format("%s --lua-helper --uuid 1", quote(lua_helper_path))
-  local handle = io.popen(command)
+  local handle = popen_hidden(command, os_type)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID")
     return nil
@@ -1160,7 +1431,7 @@ end
 local function uuid_from_path(path)
   -- call the script with --uuid-from-str <path>
   local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(lua_helper_path), path)
-  local handle = io.popen(command)
+  local handle = popen_hidden(command, os_type)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from path: " .. path)
     return nil
@@ -1230,7 +1501,7 @@ local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
 
   -- 3. Generate a deterministic UUID from the canonical seed string by calling Go helper.
   local command = string.format("%s --lua-helper --uuid-from-str '%s'", quote(lua_helper_path), seed_string)
-  local handle = io.popen(command)
+  local handle = popen_hidden(command, os_type)
   if not handle then
     print("Lua Error: Failed to execute command to get UUID from string.")
     return uuid() -- fallback to random
@@ -2662,36 +2933,33 @@ if go_app_path and free_port then
   print("Found free port: " .. free_port)
 
   local hushcut_command
-  local token_env_var = "HUSHCUT_AUTH_TOKEN" -- Define the environment variable name
+  local token_env_var = "HUSHCUT_AUTH_TOKEN"
 
-  if os_type == "Linux" then
-    -- Linux: Use `env` to set the environment variable for the command.
-    hushcut_command = string.format(
-      "env %s=%s GDK_BACKEND=x11 %s --python-port=%s &",
-      token_env_var,
-      AUTH_TOKEN,
+  if os_type == "Windows" then
+    local command_line = string.format(
+      "%s --python-port=%s",
       quote(go_app_path),
       free_port
     )
-  elseif os_type == "OSX" then
-    -- macOS: Set the environment variable directly before the command.
-    hushcut_command = string.format(
-      "%s=%s %s --python-port=%s &",
-      token_env_var,
-      AUTH_TOKEN,
-      quote(go_app_path),
-      free_port
-    )
-  elseif os_type == "Windows" then
-    -- Windows: Use `set` within `cmd /c` to create a local environment variable
-    -- for the process. The `&&` ensures the app runs after the variable is set.
-    hushcut_command = string.format(
-      'start /B cmd /c "set %s=%s && %s --python-port=%s"',
-      token_env_var,
-      AUTH_TOKEN,
-      quote(go_app_path),
-      free_port
-    )
+    local env = { [token_env_var] = AUTH_TOKEN }
+
+    print("Starting HushCut app with command: " .. command_line)
+    execute_hidden_with_env(command_line, env)
+
+  else
+    if os_type == "Linux" then
+      hushcut_command = string.format(
+        "env %s=%s GDK_BACKEND=x11 %s --python-port=%s &",
+        token_env_var, AUTH_TOKEN, quote(go_app_path), free_port
+      )
+    else -- OSX
+      hushcut_command = string.format(
+        "%s=%s %s --python-port=%s &",
+        token_env_var, AUTH_TOKEN, quote(go_app_path), free_port
+      )
+    end
+    print("Starting HushCut app with command: " .. hushcut_command)
+    os.execute(hushcut_command)
   end
 
 
@@ -2700,7 +2968,7 @@ if go_app_path and free_port then
 
   local server_command = quote(lua_helper_path) .. " --lua-helper" .. " --port=" .. free_port .. " 2>&1"
   print("Starting http server with command: " .. server_command)
-  local handle = io.popen(server_command)
+  local handle = popen_hidden(server_command, os_type)
   if not handle then
     print("Failed to start http server.")
     return
@@ -2708,6 +2976,7 @@ if go_app_path and free_port then
 
   local req_auth = ""
   for line in handle:lines() do
+    print("---- LUA: RECEIVED LINE: '" .. line .. "' ----")
     print("server output: " .. line)
 
     if line:find("---- Incoming Request ----") then
@@ -2737,8 +3006,9 @@ if go_app_path and free_port then
       else
         print("No JSON found in line: " .. line)
       end
+      print("---- LUA: FINISHED PROCESSING LINE ----")
     end
-
+    
     if json_data then
       params = json_data.params
       -- if not params then
@@ -2808,6 +3078,7 @@ if go_app_path and free_port then
         end
       end
     end
+    print("---- LUA: SERVER LOOP EXITED! SCRIPT IS FINISHING. ----")
   end
 
   -- This code will be executed *after* the Go process has shut down.

@@ -52,6 +52,7 @@ func Start(port int, findPort bool, uuidCount int, uuidStr string) {
 
 // startHttpServer is now an unexported helper function within this package.
 func startHttpServer(port int) {
+	log.Println("starting local http server as IPC between lua and go")
 	// Channel for listening to OS signals (like Ctrl+C)
 	osSignalChan := make(chan os.Signal, 1)
 	signal.Notify(osSignalChan, syscall.SIGINT, syscall.SIGTERM)

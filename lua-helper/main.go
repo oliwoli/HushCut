@@ -2,12 +2,12 @@ package main
 
 import (
 	"flag"
-	"log"
 
 	"github.com/oliwoli/hushcut/internal/luahelperlogic"
 )
 
 func main() {
+	//detachConsole() // because Windows quirk
 	// Define the flags
 	port := flag.Int("port", 8080, "port to listen on")
 	findPort := flag.Bool("find-port", false, "find a free port and exit")
@@ -17,7 +17,7 @@ func main() {
 	flag.Parse()
 
 	if *luaHelper {
-		log.Println("starting lua helper") //useless print just to use the variable
+		// nothing
 	}
 
 	// Call the shared logic
