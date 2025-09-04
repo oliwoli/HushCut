@@ -48,6 +48,7 @@ type App struct {
 	licenseVerifyKey []byte     // Public key for verifying license file signatures
 	licenseValid     bool
 	licenseOkChan    chan bool // Channel to signal license validity
+	machineID        string
 
 	silenceCache      map[CacheKey][]SilencePeriod
 	waveformCache     map[WaveformCacheKey]*PrecomputedWaveformData
@@ -355,6 +356,18 @@ func (a *App) startup(ctx context.Context) {
 	if err := os.MkdirAll(a.tmpPath, 0755); err != nil {
 		log.Fatalf("Failed to create tmp folder: %v", err)
 	}
+
+	machineID, err := GetMachineID()
+	if err != nil {
+		alertData := AlertPayload{
+			Title:    "Internal Error (no machine ID)",
+			Message:  "Could not retrieve the machine ID",
+			Severity: "Error",
+		}
+		runtime.EventsEmit(a.ctx, "showAlert", alertData)
+	}
+
+	a.machineID = machineID
 
 	a.licenseValid = a.HasAValidLicense()
 	if !a.licenseValid {

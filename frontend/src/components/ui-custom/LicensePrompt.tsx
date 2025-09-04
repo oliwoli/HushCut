@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { useAppState } from "@/stores/appSync";
-import { AlertTriangle, Info, XCircle } from "lucide-react"; // or whichever icons you prefer
+import { AlertTriangle, Info, KeyRoundIcon, XCircle } from "lucide-react"; // or whichever icons you prefer
 import { Button, buttonVariants } from "../ui/button";
 import { Input } from "../ui/input";
 import { VerifyLicense } from "@wails/go/main/App";
@@ -134,7 +134,7 @@ const LicensePrompt = () => {
   if (!internalOpen) return null;
 
   return (
-    <AlertDialog open={internalOpen} onOpenChange={handleOpenChange}>
+    <AlertDialog open={internalOpen} onOpenChange={handleOpenChange} >
       <AlertDialogContent
         style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
         disableRadixAnimations={dialogOpacity === 0
@@ -151,7 +151,7 @@ const LicensePrompt = () => {
           }[alertData.status ?? "info"]
             }`}
         />
-        <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5">{getAlertIcon(alertData.status)}</div>
+        <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5"><KeyRoundIcon /></div>
         <AlertDialogHeader className="pl-11 gap-1 mt-2">
           <AlertDialogTitle className="mb-0">
             <div className="flex gap-2 items-center text-center">
@@ -165,6 +165,10 @@ const LicensePrompt = () => {
             value={licenseKey}
             onChange={(e) => setLicenseKey(e.target.value.replace(/\s+/g, ""))}
           />
+          <div className="text-gray-500 text-xs mt-5 text-balance">
+          <p><strong>Privacy Notice</strong></p>
+          By pressing Continue you agree to send your license key and machine identifier to a secure endpoint on https://api.hushcut.app.
+          </div>
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">
           <Button

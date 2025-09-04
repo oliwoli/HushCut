@@ -15,7 +15,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -76,6 +79,13 @@ func (a *App) loadAndVerifyLocalLicense() (*SignedLicenseData, error) {
 
 	if err := a.verifySignature(license.Data, license.Signature); err != nil {
 		return nil, fmt.Errorf("local license signature is invalid: %w", err)
+	}
+	jsonMachineID := license.Data["machine_id"]
+	if jsonMachineID == nil {
+		return nil, fmt.Errorf("no machine ID in license file %w", err)
+	}
+	if jsonMachineID != a.machineID {
+		return nil, fmt.Errorf("machine ID does not match %w", err)
 	}
 
 	return &license, nil
@@ -161,7 +171,17 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 		verifyURL = "http://localhost:8080/verify_license"
 	}
 
-	reqBody, err := json.Marshal(map[string]string{"license_key": licenseKey})
+	machineID, err := GetMachineID()
+	if err != nil {
+		return nil, fmt.Errorf("could not retrieve Device ID")
+	}
+
+	log.Printf("Device ID: %s", machineID)
+
+	reqBody, err := json.Marshal(map[string]string{
+		"license_key": licenseKey,
+		"machine_id":  machineID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("internal error creating request: %w", err)
 	}
@@ -207,4 +227,62 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 	log.Println("Successfully verified and saved license online.")
 	a.signalLicenseOk() // Signal that the license is now valid.
 	return newLicense.Data, nil
+}
+
+// GetMachineID retrieves a platform-specific unique machine identifier.
+// Works on Windows, macOS, and Linux.
+func GetMachineID() (string, error) {
+	switch runtime.GOOS {
+	case "windows":
+		return getWindowsUUID()
+	case "darwin":
+		return getMacUUID()
+	case "linux":
+		return getLinuxMachineID()
+	default:
+		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+}
+
+func getWindowsUUID() (string, error) {
+	out, err := ExecCommand("wmic", "csproduct", "get", "uuid").Output()
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(out), "\n")
+	if len(lines) >= 2 {
+		return strings.TrimSpace(lines[1]), nil
+	}
+	return "", fmt.Errorf("could not parse Windows UUID")
+}
+
+func getMacUUID() (string, error) {
+	cmd := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "IOPlatformUUID") {
+			parts := strings.Split(line, "\"")
+			if len(parts) > 3 {
+				return parts[3], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("could not find IOPlatformUUID")
+}
+
+func getLinuxMachineID() (string, error) {
+	paths := []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			id := strings.TrimSpace(string(data))
+			if id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("could not read machine-id")
 }
