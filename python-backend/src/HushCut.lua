@@ -1379,11 +1379,13 @@ local function uuid_from_paths(paths)
 
   local command
   if os_type == "Windows" then
-    command = string.format("%s --lua-helper %s", quote(lua_helper_path), quote(tmp_path))
+    -- write JSON to temp file
+    command = string.format("%s --lua-helper --input-file %s", quote(lua_helper_path), quote(tmp_path))
   else
-    command = string.format("%s --lua-helper %s", quote(lua_helper_path), quote(tmp_path))
+    -- pipe via stdin
+    command = string.format("echo %s | %s --lua-helper", quote(json_input), quote(lua_helper_path))
   end
-
+  print("starting uid batch process with command: " .. command)
   local handle = popen_hidden(command, os_type)
   if not handle then
     print("Lua Error: Failed to execute command for UUID batch")
@@ -1397,6 +1399,7 @@ local function uuid_from_paths(paths)
   handle:close()
   return uuids
 end
+
 
 
 
