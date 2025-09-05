@@ -108,18 +108,28 @@ jobs:
 
       - name: Build lua helper for windows
         if: matrix.label == 'windows'
+        shell: bash
         run: |
           cd lua-helper
           go build .
-          mv .\lua-helper.exe ..\build\bin\davinci_lua_helper.exe
+          mv lua-helper.exe ../build/bin/davinci_lua_helper.exe
 
-      - name: Build Wails App
+      - name: Build Wails App (Windows)
+        if: matrix.label == 'windows'
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
         with:
           build-name: HushCut${{ matrix.ext }}
           build-platform: ${{ matrix.platform }}
           package: false
           nsis: true
+
+      - name: Build Wails App (Unix)
+        if: matrix.label != 'windows'
+        uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
+        with:
+          build-name: HushCut${{ matrix.ext }}
+          build-platform: ${{ matrix.platform }}
+          package: false
 
       - name: Add macOS Resources folder and cleanup
         if: matrix.label == 'macos'
