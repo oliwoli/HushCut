@@ -691,182 +691,136 @@ local json = (function()
   return internal_json_module
 end)()
 
+
 local ffi = require("ffi")
+local bit = require("bit")
 
-ffi.cdef[[
-typedef void* HANDLE;
-typedef unsigned long DWORD;
-typedef int BOOL;
-typedef const wchar_t* LPCWSTR;
-typedef unsigned short WORD;
-typedef unsigned char BYTE;
-typedef struct _SECURITY_ATTRIBUTES {
-  DWORD nLength;
-  void* lpSecurityDescriptor;
-  BOOL  bInheritHandle;
-} SECURITY_ATTRIBUTES;
+ffi.cdef [[
+    unsigned long GetLastError();
+    int MultiByteToWideChar(
+        unsigned int CodePage,
+        unsigned long dwFlags,
+        const char* lpMultiByteStr,
+        int cbMultiByte,
+        wchar_t* lpWideCharStr,
+        int cchWideChar
+    );
+    typedef void* HANDLE;
+    typedef unsigned long DWORD;
+    typedef int BOOL;
+    typedef const wchar_t* LPCWSTR;
 
-typedef struct _STARTUPINFOW {
-  DWORD cb;
-  LPCWSTR lpReserved;
-  LPCWSTR lpDesktop;
-  LPCWSTR lpTitle;
-  DWORD dwX;
-  DWORD dwY;
-  DWORD dwXSize;
-  DWORD dwYSize;
-  DWORD dwXCountChars;
-  DWORD dwYCountChars;
-  DWORD dwFillAttribute;
-  DWORD dwFlags;
-  WORD  wShowWindow;
-  WORD  cbReserved2;
-  BYTE* lpReserved2;
-  HANDLE hStdInput;
-  HANDLE hStdOutput;
-  HANDLE hStdError;
-} STARTUPINFOW;
+    typedef struct _SECURITY_ATTRIBUTES {
+        DWORD nLength;
+        void* lpSecurityDescriptor;
+        BOOL  bInheritHandle;
+    } SECURITY_ATTRIBUTES;
 
-typedef struct _PROCESS_INFORMATION {
-  HANDLE hProcess;
-  HANDLE hThread;
-  DWORD dwProcessId;
-  DWORD dwThreadId;
-} PROCESS_INFORMATION;
+    typedef struct _STARTUPINFOW {
+        DWORD cb;
+        LPCWSTR lpReserved;
+        LPCWSTR lpDesktop;
+        LPCWSTR lpTitle;
+        DWORD dwX;
+        DWORD dwY;
+        DWORD dwXSize;
+        DWORD dwYSize;
+        DWORD dwXCountChars;
+        DWORD dwYCountChars;
+        DWORD dwFillAttribute;
+        DWORD dwFlags;
+        unsigned short wShowWindow;
+        unsigned short cbReserved2;
+        unsigned char* lpReserved2;
+        HANDLE hStdInput;
+        HANDLE hStdOutput;
+        HANDLE hStdError;
+    } STARTUPINFOW;
 
-BOOL CreatePipe(HANDLE* hReadPipe, HANDLE* hWritePipe,
-                SECURITY_ATTRIBUTES* lpPipeAttributes, DWORD nSize);
+    typedef struct _PROCESS_INFORMATION {
+        HANDLE hProcess;
+        HANDLE hThread;
+        DWORD dwProcessId;
+        DWORD dwThreadId;
+    } PROCESS_INFORMATION;
 
-BOOL SetHandleInformation(HANDLE hObject, DWORD dwMask, DWORD dwFlags);
-
-BOOL CreateProcessW(
-  LPCWSTR lpApplicationName,
-  wchar_t* lpCommandLine,
-  void* lpProcessAttributes,
-  void* lpThreadAttributes,
-  BOOL bInheritHandles,
-  DWORD dwCreationFlags,
-  void* lpEnvironment,
-  LPCWSTR lpCurrentDirectory,
-  STARTUPINFOW* lpStartupInfo,
-  PROCESS_INFORMATION* lpProcessInformation
-);
-
-BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead,
-              DWORD* lpNumberOfBytesRead, void* lpOverlapped);
-
-BOOL CloseHandle(HANDLE hObject);
+    void Sleep(DWORD dwMilliseconds);
+    BOOL CreatePipe(HANDLE* hReadPipe, HANDLE* hWritePipe,
+                    SECURITY_ATTRIBUTES* lpPipeAttributes, DWORD nSize);
+    BOOL SetHandleInformation(HANDLE hObject, DWORD dwMask, DWORD dwFlags);
+    BOOL CloseHandle(HANDLE hObject);
+    BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead, DWORD* lpNumberOfBytesRead, void* lpOverlapped);
+    BOOL CreateProcessW(LPCWSTR, wchar_t*, void*, void*, BOOL, DWORD, void*, LPCWSTR, STARTUPINFOW*, PROCESS_INFORMATION*);
+    HANDLE CreateFileW(LPCWSTR, DWORD, DWORD, SECURITY_ATTRIBUTES*, DWORD, DWORD, HANDLE);
 ]]
 
-local CREATE_NO_WINDOW = 0x08000000
+local CP_UTF8              = 65001
+local GENERIC_READ         = 0x80000000
+local FILE_SHARE_READ      = 0x00000001
+local OPEN_EXISTING        = 3
+local CREATE_NO_WINDOW     = 0x08000000
+local DETACHED_PROCESS     = 0x00000008
 local STARTF_USESTDHANDLES = 0x00000100
-local HANDLE_FLAG_INHERIT = 0x00000001
+local HANDLE_FLAG_INHERIT  = 0x00000001
 
 -- UTF-16 helper
-local function to_utf16(str)
-  local buf = ffi.new("wchar_t[?]", #str + 1)
-  for i = 1, #str do
-    buf[i-1] = string.byte(str, i)
-  end
-  buf[#str] = 0
+local function utf8_to_utf16(str)
+  if not str then return nil end
+  -- Determine buffer size needed
+  local size = ffi.C.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
+  if size == 0 then error("MultiByteToWideChar size calculation failed. Error: " .. ffi.C.GetLastError()) end
+
+  local buf = ffi.new("wchar_t[?]", size)
+  -- Perform the conversion
+  local result = ffi.C.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, size)
+  if result == 0 then error("MultiByteToWideChar conversion failed. Error: " .. ffi.C.GetLastError()) end
+
   return buf
 end
 
 -- popen_hidden: returns an object with :read("*a") and :close()
 local function popen_hidden_windows(cmdline)
-  local sa = ffi.new("SECURITY_ATTRIBUTES")
-  sa.nLength = ffi.sizeof(sa)
-  sa.bInheritHandle = 1
-
-  local hRead = ffi.new("HANDLE[1]")
-  local hWrite = ffi.new("HANDLE[1]")
-
-  if ffi.C.CreatePipe(hRead, hWrite, sa, 0) == 0 then
-    -- Make sure to close handles on failure
-    if hRead[0] then ffi.C.CloseHandle(hRead[0]) end
-    if hWrite[0] then ffi.C.CloseHandle(hWrite[0]) end
-    error("CreatePipe failed")
-  end
-
-  -- Prevent the read end from being inherited by other processes
+  local sa = ffi.new("SECURITY_ATTRIBUTES"); sa.nLength = ffi.sizeof(sa); sa.bInheritHandle = 1
+  local hRead, hWrite = ffi.new("HANDLE[1]"), ffi.new("HANDLE[1]")
+  if ffi.C.CreatePipe(hRead, hWrite, sa, 0) == 0 then error("CreatePipe failed") end
   ffi.C.SetHandleInformation(hRead[0], HANDLE_FLAG_INHERIT, 0)
+  local hReadNul = ffi.C.CreateFileW(utf8_to_utf16("NUL"), GENERIC_READ, FILE_SHARE_READ, sa, OPEN_EXISTING, 0, nil)
+  if hReadNul == ffi.cast("HANDLE", -1) then error("CreateFileW for NUL failed") end
 
-  local si = ffi.new("STARTUPINFOW")
-  si.cb = ffi.sizeof(si)
+  local si = ffi.new("STARTUPINFOW"); si.cb = ffi.sizeof(si)
   si.dwFlags = STARTF_USESTDHANDLES
-  si.hStdOutput = hWrite[0]
-  si.hStdError  = hWrite[0]
+  si.hStdInput, si.hStdOutput, si.hStdError = hReadNul, hWrite[0], hWrite[0]
 
   local pi = ffi.new("PROCESS_INFORMATION")
+  local creation_flags = bit.bor(CREATE_NO_WINDOW, DETACHED_PROCESS)
+  local ok = ffi.C.CreateProcessW(nil, utf8_to_utf16(cmdline), nil, nil, true, creation_flags, nil, nil, si, pi)
 
-  local ok = ffi.C.CreateProcessW(
-    nil,
-    to_utf16(cmdline),
-    nil, nil,
-    true, -- inherit handles
-    CREATE_NO_WINDOW,
-    nil,
-    nil,
-    si,
-    pi
-  )
-
-  -- The parent process no longer needs the write handle,
-  -- the child process has its own copy.
-  ffi.C.CloseHandle(hWrite[0])
-
+  ffi.C.SetHandleInformation(hWrite[0], HANDLE_FLAG_INHERIT, 0)
+  ffi.C.CloseHandle(hReadNul); ffi.C.CloseHandle(hWrite[0])
   if ok == 0 then
-    ffi.C.CloseHandle(hRead[0])
-    error("CreateProcessW failed")
+    ffi.C.CloseHandle(hRead[0]); error("CreateProcessW failed")
   end
+  ffi.C.CloseHandle(pi.hProcess); ffi.C.CloseHandle(pi.hThread)
 
-  -- We don't need handles to the child process itself
-  ffi.C.CloseHandle(pi.hProcess)
-  ffi.C.CloseHandle(pi.hThread)
-
-  local handle = {}
-  local read_pipe = hRead[0]
-  local is_closed = false
-
-  -- Internal function to read one chunk from the pipe
-  local function read_chunk()
-    local bufsize = 4096
-    local buf = ffi.new("char[?]", bufsize)
-    local bytesRead = ffi.new("DWORD[1]")
-    
-    local success = ffi.C.ReadFile(read_pipe, buf, bufsize, bytesRead, nil)
-    if success ~= 0 and bytesRead[0] > 0 then
-      return ffi.string(buf, bytesRead[0])
-    else
-      -- End of file or error
-      return nil
-    end
-  end
-
-  -- The new :lines() iterator method
-  function handle:lines()
+  local handle_obj = {}; local read_pipe = hRead[0]
+  function handle_obj:lines()
     local buffer = ""
     return function()
       while true do
         local pos = buffer:find("\n", 1, true)
         if pos then
-          local line = buffer:sub(1, pos - 1)
-          buffer = buffer:sub(pos + 1)
-          -- Remove trailing carriage return for Windows compatibility
+          local line = buffer:sub(1, pos - 1); buffer = buffer:sub(pos + 1)
           return line:gsub("\r$", "")
         else
-          -- Buffer has no newline, try to read more data
-          local chunk = read_chunk()
+          local buf, bytesRead = ffi.new("char[4096]"), ffi.new("DWORD[1]")
+          local success = ffi.C.ReadFile(read_pipe, buf, 4096, bytesRead, nil)
+          local chunk = (success ~= 0 and bytesRead[0] > 0) and ffi.string(buf, bytesRead[0]) or nil
           if chunk then
             buffer = buffer .. chunk
           else
-            -- No more data to read from the pipe
             if #buffer > 0 then
-              local last_line = buffer
-              buffer = "" -- Clear buffer so we return nil next time
-              return last_line:gsub("\r$", "")
+              local last = buffer; buffer = ""; return last:gsub("\r$", "")
             else
-              -- Buffer is empty and pipe is closed, we are done
               return nil
             end
           end
@@ -875,38 +829,15 @@ local function popen_hidden_windows(cmdline)
     end
   end
 
-  function handle:read(mode)
-    mode = mode or "*a"
-    if mode ~= "*a" then
-        error("popen_hidden only supports read('*a')")
-    end
-    local chunks = {}
-    while true do
-        local chunk = read_chunk()
-        if chunk then
-            table.insert(chunks, chunk)
-        else
-            break
-        end
-    end
-    return table.concat(chunks)
-  end
+  function handle_obj:close() ffi.C.CloseHandle(read_pipe) end
 
-  function handle:close()
-    if not is_closed then
-      ffi.C.CloseHandle(read_pipe)
-      is_closed = true
-    end
-  end
-
-  return handle
+  return handle_obj
 end
 
-
-local function popen_hidden(cmd, os_type)  
+local function popen_hidden(cmd, os_type)
   if os_type == "Windows" then
     -- use the FFI-based implementation we built
-    return popen_hidden_windows(cmd)  -- the CreateProcessW + pipe version
+    return popen_hidden_windows(cmd) -- the CreateProcessW + pipe version
   else
     -- just use normal io.popen on Linux/macOS
     return io.popen(cmd)
@@ -914,52 +845,38 @@ local function popen_hidden(cmd, os_type)
 end
 
 local function execute_hidden_with_env(cmdline, env_vars)
-  -- 1. Prepare the environment block
-  -- The format must be "VAR1=VALUE1\0VAR2=VALUE2\0\0"
-  local env_strings = {}
-  for k, v in pairs(env_vars) do
-    table.insert(env_strings, k .. "=" .. v)
-  end
-  -- Join with null terminators and add the final double-null
-  local env_block_str = table.concat(env_strings, "\0") .. "\0\0"
+  local final_cmdline = cmdline
 
-  -- Convert the string to a wchar_t buffer for the API call
-  local env_block = ffi.new("wchar_t[?]", #env_block_str)
-  for i = 1, #env_block_str do
-    env_block[i - 1] = string.byte(env_block_str, i)
+  -- If environment variables are provided, construct a new command line.
+  -- This will look like: cmd /c "set VAR1=VAL1 && set VAR2=VAL2 && original_command"
+  if env_vars then
+    local set_commands = {}
+    for k, v in pairs(env_vars) do
+      -- Note: This quoting is basic. It will fail if the value contains quotes.
+      -- Per your request, this is simplified for values without special characters.
+      table.insert(set_commands, "set " .. k .. "=" .. v)
+    end
+    final_cmdline = 'cmd /c "' .. table.concat(set_commands, " && ") .. " && " .. cmdline .. '"'
   end
 
-  -- 2. Prepare structures for CreateProcessW
   local si = ffi.new("STARTUPINFOW")
   si.cb = ffi.sizeof(si)
-  -- No dwFlags are set because we are not redirecting std handles
-
   local pi = ffi.new("PROCESS_INFORMATION")
 
-  -- 3. Call CreateProcessW
-  local ok = ffi.C.CreateProcessW(
-    nil,
-    to_utf16(cmdline),
-    nil,
-    nil,
-    false, -- bInheritHandles
-    CREATE_NO_WINDOW,
-    env_block, -- The custom environment block
-    nil,
-    si,
-    pi
-  )
+  local creation_flags = bit.bor(CREATE_NO_WINDOW, DETACHED_PROCESS)
+
+  print("Launching process with final command: " .. final_cmdline)
+
+  -- The environment block parameter is now `nil` as it's handled by the command line.
+  local ok = ffi.C.CreateProcessW(nil, utf8_to_utf16(final_cmdline), nil, nil, false, creation_flags, nil, nil, si, pi)
 
   if ok == 0 then
-    -- You can add more detailed error handling here if needed
-    print("execute_hidden_with_env failed to start process.")
+    print("CreateProcessW failed. Error code: ", ffi.C.GetLastError())
     return false
   end
 
-  -- 4. Clean up handles immediately, as we're not waiting for the process
   ffi.C.CloseHandle(pi.hProcess)
   ffi.C.CloseHandle(pi.hThread)
-
   return true
 end
 
@@ -995,37 +912,34 @@ local script_dir = get_script_dir()
 --- Reads the HushCut installation path from the Windows Registry.
 -- @return string The installation path, or a dynamically determined fallback if not found.
 function GetWinInstallPath()
-  local os_type = jit.os
-  if os_type ~= "Windows" then
+  if jit.os ~= "Windows" then
     return nil
   end
 
-  -- Get the Program Files directory from the environment and create a robust fallback path.
+  -- Create a robust fallback path.
   local local_app_data = os.getenv("LOCALAPPDATA")
-  -- Note the double backslash is needed here because it's a string literal.
   local fallback_path = path_join(local_app_data, "HushCut")
 
   -- The registry key where the path is stored.
   local reg_key = "HKCU\\SOFTWARE\\oliwoli\\HushCut"
-
-  -- The command to query the "InstallDirectory" value from the specified key.
   local command = 'reg query "' .. reg_key .. '" /v InstallDirectory'
 
-  -- Execute the command and open a pipe to read its output.
-  local pipe = popen_hidden(command, os_type)
-  -- If the command fails to run, return the fallback path immediately.
+  local pipe = popen_hidden_windows(command)
   if not pipe then return fallback_path end
 
-  -- Read all output from the command.
-  local output = pipe:read("*a")
+  local output_lines = {}
+  for line in pipe:lines() do
+    table.insert(output_lines, line)
+  end
   pipe:close()
+  local output = table.concat(output_lines, "\n")
 
   -- We use a string pattern to find the line with "InstallDirectory"
   -- and capture the path that follows "REG_SZ".
   local path = output:match("InstallDirectory%s+REG_SZ%s+(.*)")
 
   if path then
-    -- If found, trim and return the path from the registry.
+    -- If found, trim whitespace and return the path from the registry.
     return path:match("^%s*(.-)%s*$")
   end
 
@@ -1098,7 +1012,7 @@ local function send_message_to_go(message_type, payload, task_id)
     url,
     AUTH_TOKEN
   )
-  local handle = popen_hidden(command, jit.os_type)
+  local handle = popen_hidden(command, jit.os)
   if not handle then
     print("Lua (to Go): Failed to execute curl command.")
     return false
@@ -1278,11 +1192,6 @@ if os_type == "OSX" then
     path_join(script_dir, "HushCut.app", "Contents", "MacOS", "HushCut"),
     path_join(script_dir, "..", "..", "build", "bin", "HushCut.app", "Contents", "MacOS", "HushCut"),
     path_join(script_dir, "..", "..", "build", "bin", "HushCut"),
-
-    -- "/Applications/HushCut.app/Contents/MacOS/HushCut",
-    -- script_dir .. "HushCut.app/Contents/MacOS/HushCut",
-    -- script_dir .. "../../build/bin/HushCut.app/Contents/MacOS/HushCut",
-    -- script_dir .. "../../build/bin/HushCut",
   }
 elseif os_type == "Windows" then
   potential_paths = {
@@ -1315,10 +1224,15 @@ end
 
 
 local function find_free_port()
-  local handle = popen_hidden(quote(go_app_path) .. " --lua-helper" .. " --find-port", jit.os_type)
+  local command = quote(go_app_path) .. " --lua-helper --find-port"
+  local handle = popen_hidden(command, os_type)
   if handle then
-    local port = handle:read("*a")
+    local output_lines = {}
+    for line in handle:lines() do
+      table.insert(output_lines, line)
+    end
     handle:close()
+    local port = table.concat(output_lines)
     if port then
       return port:gsub("%s+", "")
     end
@@ -1328,6 +1242,9 @@ end
 
 
 local function get_resolve()
+  if resolve then
+    return resolve
+  end
   local success, result = pcall(function()
     ---@diagnostic disable-next-line: undefined-global
     return Resolve()
@@ -1372,22 +1289,19 @@ end
 
 
 local function make_dir(path)
-  local is_windows = package.config:sub(1, 1) == '\\'
-
+  local is_windows = (os_type == "Windows")
   local command
   if is_windows then
-    -- Enclose in quotes to handle spaces in path
     command = 'mkdir "' .. path .. '"'
+    execute_hidden_with_env(command, nil)
   else
     command = 'mkdir -p "' .. path .. '"'
+    -- os.execute is fine on macOS/Linux and does not cause popups.
+    os.execute(command)
   end
-
-  os.execute(command)
-
   return true
 end
 
--- Usage
 if not make_dir(TEMP_DIR) then
   print("Error. Could not make temp directory")
   return
@@ -1397,14 +1311,6 @@ local make_new_timeline = true
 local MAX_RETRIES = 100
 local project_data = nil
 
-if not resolve_obj then
-  print("Resolve not found. Make sure this script is run inside DaVinci Resolve.")
-  return
-end
-
-
-
-local bit = require("bit") -- assumes LuaBitOp or LuaJIT's bit library
 
 -- UUID generator with optional deterministic seed
 local function uuid()
@@ -1415,17 +1321,21 @@ local function uuid()
     print("Lua Error: Failed to execute command to get UUID")
     return nil
   else
-    local uuid_str = handle:read("*a")
+    local output_lines = {}
+    for line in handle:lines() do
+      table.insert(output_lines, line)
+    end
     handle:close()
+    local uuid_str = table.concat(output_lines)
+
     if uuid_str and #uuid_str > 0 then
       return uuid_str:gsub("%s+", "") -- Remove any whitespace
     else
-      print("Lua Error: No UUID returned")
+      print("Lua Error: No UUID returned from command.")
       return nil
     end
   end
 end
-
 
 -- Placeholder for a function that creates a UUID from a file path.
 local function uuid_from_path(path)
@@ -1436,8 +1346,13 @@ local function uuid_from_path(path)
     print("Lua Error: Failed to execute command to get UUID from path: " .. path)
     return nil
   else
-    local uuid_str = handle:read("*a")
+    local output_lines = {}
+    for line in handle:lines() do
+      table.insert(output_lines, line)
+    end
     handle:close()
+
+    local uuid_str = table.concat(output_lines)
     if uuid_str and #uuid_str > 0 then
       return uuid_str:gsub("%s+", "") -- Remove any whitespace
     else
@@ -1448,16 +1363,6 @@ local function uuid_from_path(path)
 end
 
 
-
----
--- Creates a unique identifier for a timeline item based on the Python implementation.
--- @param bmd_item (bmd.TimelineItem) The timeline item object from Resolve (unused).
--- @param item_name (string) The name of the item.
--- @param start_frame (number) The starting frame of the item on the timeline.
--- @param track_type (string) The type of track ("video" or "audio").
--- @param track_index (number) The index of the track.
--- @return (string) A unique identifier string.
---
 local function get_item_id(bmd_item, item_name, start_frame, track_type, track_index)
   -- This creates an ID like: "MyClip-video-1--120"
   return string.format("%s-%s-%d--%d", item_name, track_type, track_index, start_frame)
@@ -1506,8 +1411,12 @@ local function generate_uuid_from_nested_clips(top_level_item, nested_clips)
     print("Lua Error: Failed to execute command to get UUID from string.")
     return uuid() -- fallback to random
   else
-    local uuid_str = handle:read("*a")
+    local output_lines = {}
+    for line in handle:lines() do
+      table.insert(output_lines, line)
+    end
     handle:close()
+    local uuid_str = table.concat(output_lines)
     if uuid_str and #uuid_str > 0 then
       return uuid_str:gsub("%s+", "") -- Remove any whitespace
     else
@@ -1607,14 +1516,7 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           processed_file_name = source_uuid .. ".wav"
         end
 
-        --   local source_fps: float = (
-        --     (media_pool_item.GetClipProperty("FPS") if media_pool_item else 30.0)
-        --     or PROJECT_DATA.get("timeline", {}).get("project_fps", 30.0)
-        --     if PROJECT_DATA
-        --     else 30.0
-        -- )
         local source_fps = 30.0
-
         if media_pool_item then
           local clip_fps_str = media_pool_item:GetClipProperty("FPS")
           local clip_fps_num = tonumber(clip_fps_str)
@@ -1724,10 +1626,6 @@ local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_cont
   local normalized_start_sec = clip_start_sec - media_start_sec
   local normalized_source_start_frame = normalized_start_sec * timeline_fps
   local duration_frames = duration_sec * timeline_fps
-
-  -- if max_duration and duration_frames > max_duration then
-  --   duration_frames = max_duration
-  -- end
 
   local source_channel = 0
   local processed_file_name = source_uuid .. ".wav"
@@ -1959,9 +1857,6 @@ local function get_project_data(bmd_project, bmd_timeline)
   print("Analyzing timeline items and audio channel mappings...")
   for _, item in ipairs(audio_track_items) do
     if item.source_file_path and item.source_file_path ~= "" and item.type == json.null then
-      -- This is the crucial step to correctly classify normal clips
-      -- item.type = nil
-
       local source_uuid = uuid_from_path(item.source_file_path)
       item.source_channel = 0 -- Default
       item.processed_file_name = source_uuid .. ".wav"
@@ -2696,12 +2591,9 @@ local function append_and_link_timeline_items(create_new, task_id)
       local index = created_timelines[og_tl_name]
       local timeline_name = string.format("%s-hc-%02d", og_tl_name, index)
 
-      -- **CRITICAL FIX STARTS HERE**
-      -- First, attempt to create an empty timeline. This serves as a test to see if the name is available.
       local valid_empty_timeline = media_pool:CreateEmptyTimeline(timeline_name)
 
       if valid_empty_timeline and fps_mismatch then
-        -- CASE 1: Name was available, but FPS is wrong. We can't use this empty timeline.
         print("Mismatched FPS detected. Deleting temporary timeline and using duplicate/rename strategy...")
         media_pool:DeleteTimelines({ valid_empty_timeline }) -- Clean up the one we just made.
 
@@ -2733,11 +2625,9 @@ local function append_and_link_timeline_items(create_new, task_id)
         created_timelines[og_tl_name] = index + 1
         retries = retries + 1
       end
-      -- **CRITICAL FIX ENDS HERE**
     end
 
     if not target_timeline then
-      -- This condition catches if the loop finished without successfully creating and setting a new timeline
       send_result_with_alert("DaVinci Error", "Could not create a new timeline after " .. MAX_RETRIES .. " attempts.",
         task_id)
       return
@@ -2745,7 +2635,6 @@ local function append_and_link_timeline_items(create_new, task_id)
     timeline = target_timeline -- Update global reference
   end
 
-  -- The rest of the function (clearing, appending, linking) remains the same as the previous correct version.
   if tl_needs_clearing then
     print("Clearing edited clips from existing timeline...")
     local all_clips_to_delete = {}
@@ -2799,7 +2688,12 @@ local function append_and_link_timeline_items(create_new, task_id)
       print("Attempt " .. attempt .. " failed. Rolling back changes...")
       if #bmd_items_from_api > 0 then target_timeline:DeleteClips(bmd_items_from_api, false) end
       if attempt < num_retries then
-        os.execute("sleep " .. sleep_time); sleep_time = sleep_time + 1.5
+        if os_type == "Windows" then
+          ffi.C.Sleep(sleep_time * 1000)     -- FFI call is silent and takes milliseconds
+        else
+          os.execute("sleep " .. sleep_time) -- Standard on Unix-like systems
+        end
+        sleep_time = sleep_time + 1.5
       end
     end
   end
@@ -2945,7 +2839,6 @@ if go_app_path and free_port then
 
     print("Starting HushCut app with command: " .. command_line)
     execute_hidden_with_env(command_line, env)
-
   else
     if os_type == "Linux" then
       hushcut_command = string.format(
@@ -2962,10 +2855,6 @@ if go_app_path and free_port then
     os.execute(hushcut_command)
   end
 
-
-  print("Starting HushCut app with command: " .. hushcut_command)
-  os.execute(hushcut_command)
-
   local server_command = quote(lua_helper_path) .. " --lua-helper" .. " --port=" .. free_port .. " 2>&1"
   print("Starting http server with command: " .. server_command)
   local handle = popen_hidden(server_command, os_type)
@@ -2976,7 +2865,6 @@ if go_app_path and free_port then
 
   local req_auth = ""
   for line in handle:lines() do
-    print("---- LUA: RECEIVED LINE: '" .. line .. "' ----")
     print("server output: " .. line)
 
     if line:find("---- Incoming Request ----") then
@@ -3006,14 +2894,10 @@ if go_app_path and free_port then
       else
         print("No JSON found in line: " .. line)
       end
-      print("---- LUA: FINISHED PROCESSING LINE ----")
     end
-    
+
     if json_data then
       params = json_data.params
-      -- if not params then
-      --   break
-      -- end
     end
 
     if params and params.taskId then
@@ -3078,7 +2962,6 @@ if go_app_path and free_port then
         end
       end
     end
-    print("---- LUA: SERVER LOOP EXITED! SCRIPT IS FINISHING. ----")
   end
 
   -- This code will be executed *after* the Go process has shut down.
@@ -3087,8 +2970,6 @@ if go_app_path and free_port then
   -- Closing the handle is good practice. It also returns the process status.
   handle:close()
 
-  -- os.exit() is now redundant, as the script is at its end.
-  -- However, you can call it explicitly if you have more logic below.
   os.exit(0)
 elseif not go_app_path then
   print("HushCut executable not found.")
