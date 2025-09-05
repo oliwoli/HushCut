@@ -28,6 +28,10 @@ body {
   pointer-events: all !important;
 }
 
+::selection {
+  background: var(--color-hushcut-teal); /* A light red background */
+  color: #000000;      /* Black text */
+}
 
 .prose .dark {
   color: var(--muted-foreground);
@@ -365,6 +369,7 @@ div[part="minimap-overlay"] {
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-hushcut-teal: var(--hushcut-teal);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -382,6 +387,7 @@ div[part="minimap-overlay"] {
 
 :root {
   --neonidas: #fff;
+  --hushcut-teal: oklch(70.4% 0.14 182.503);
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.13 0.028 261.692);
@@ -420,6 +426,7 @@ div[part="minimap-overlay"] {
   --neonidas: #7fecff;
   --neon-hot: #ccffff;
   --davinci-green: #448f64;
+  --hushcut-teal: oklch(70.4% 0.14 182.503);
   --background: oklch(0.141 0.005 285.823);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.21 0.034 264.665);

@@ -10,11 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useEffect, useState } from "react";
 import { GetSettings, SaveSettings, SelectDirectory } from "@wails/go/main/App";
-import { Description } from "@radix-ui/react-dialog";
 import { Switch } from "./components/ui/switch";
 import { Separator } from "@radix-ui/react-context-menu";
 import SliderZag from "./components/ui/sliderZag";
 import { cn } from "./lib/utils";
+import { toast } from "sonner";
 
 // This component is now "controlled" by its parent via these props.
 interface SettingsDialogProps {
@@ -59,6 +59,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
         SaveSettings({ davinciFolderPath, cleanupThresholdDays: cleanupThreshold, enableCleanup }).then(() => {
             onOpenChange(false);
         });
+        toast.success("Your settings have been saved.")
     };
 
     if (!internalOpen) return null;
@@ -73,7 +74,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 disableOutsideClick={true}
             >
                 <DialogHeader className="">
-                    <DialogTitle className="text-gray-200">Settings</DialogTitle>
+                    <DialogTitle className="text-gray-200 pointer-events-none select-none">Settings</DialogTitle>
                     <DialogDescription>
                     </DialogDescription>
                 </DialogHeader>

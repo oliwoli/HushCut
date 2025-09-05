@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -114,7 +115,7 @@ func main() {
 			panic(err)
 		}
 		pipeContent = string(data)
-	} else {
+	} else if runtime.GOOS != "windows" {
 		// fallback to stdin
 		stat, _ := os.Stdin.Stat()
 		if (stat.Mode() & os.ModeCharDevice) == 0 {

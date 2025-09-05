@@ -75,7 +75,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                 disableRadixAnimations={dialogOpacity === 0}
                 disableOutsideClick={true}
             >
-                <div className="flex gap-4 items-center h-10 overflow-visible">
+                <div className="flex gap-4 items-center h-10 overflow-visible select-none pointer-events-none">
                     <div className="w-20 h-20 ml-[-15px] mr-[-18px] mt-[-10px]">
                         <img src={logo} alt="HushCut Logo" className="w-22 h-22" />
                     </div>
@@ -97,7 +97,7 @@ export const InfoDialog = ({ open, onOpenChange }: InfoDialogProps) => {
                             <p>Join our <b className="font-[350] text-zinc-200">discord server</b></p>
                             <a href="#" onClick={() => discordLink && BrowserOpenURL(discordLink)} className="text-orange-400 flex gap-1 underline">{discordLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
                             <h3 className="font-extralight text-foreground mt-8 mb-1 text-2xl">All Releases</h3>
-                            <p>Compiled binaries for windows, mac and linux can be found on:</p>
+                            <p>Compiled binaries for Windows, MacOS and Linux can be found on:</p>
                             <a href="#" onClick={() => githubRepoLink && BrowserOpenURL(githubRepoLink)} className="text-orange-400 flex gap-1 underline">{githubRepoLink}<ExternalLinkIcon className='h-4 text-gray-400' strokeWidth={1.5} /></a>
 
                             <p className="font-extralight mt-12 mb-1"><span className="text-foreground font-[350]">FFmpeg version</span> v{ffmpegVersion}</p>
