@@ -4,6 +4,7 @@ build/*
 build/windows/installer/tmp
 node_modules
 frontend/dist
+frontend/wailsjs
 
 lua-helper/lua-helper
 lua-helper/lua-helper.exe
