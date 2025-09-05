@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"io"
+	"os"
 
 	"github.com/oliwoli/hushcut/internal/luahelperlogic"
 )
@@ -16,10 +18,21 @@ func main() {
 	luaHelper := flag.Bool("lua-helper", true, "set mode")
 	flag.Parse()
 
+	var pipeContent string
+	// Check if there’s data coming in via stdin
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		// stdin is not from a terminal, so read it
+		data, err := io.ReadAll(os.Stdin)
+		if err == nil {
+			pipeContent = string(data)
+		}
+	}
+
 	if *luaHelper {
 		// nothing
 	}
 
-	// Call the shared logic
-	luahelperlogic.Start(*port, *findPort, *uuidCount, *uuidStr)
+	// Call the shared logic with pipeContent
+	luahelperlogic.Start(*port, *findPort, *uuidCount, *uuidStr, pipeContent)
 }

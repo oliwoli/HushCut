@@ -322,8 +322,8 @@ class AudioFromVideo(TypedDict):
 PROJECT_DATA: Optional[ProjectData] = None
 
 TASKS: dict[str, int] = {
-    "prepare": 10,
-    "append": 40,
+    "prepare": 5,
+    "append": 45,
     "verify": 10,
     "link": 40,
 }
@@ -1283,10 +1283,10 @@ def get_resolve(task_id: str = "") -> None:
         # Attempt to import after modifying sys.path
         import DaVinciResolveScript as bmd  # type: ignore
     except ImportError as e:
-        #resolve_import_error_msg(e, task_id)
+        # resolve_import_error_msg(e, task_id)
         return None
     except Exception as e:
-        #resolve_import_error_msg(e, task_id)
+        # resolve_import_error_msg(e, task_id)
         return None
     print("Imported DaVinciResolveScript successfully")
 

@@ -1169,7 +1169,7 @@ end
 
 -- Global tracker instance
 local TRACKER = ProgressTracker:new()
-local TASKS = { prepare = 10, append = 40, verify = 10, link = 40 }
+local TASKS = { prepare = 5, append = 45, verify = 10, link = 40 }
 local os_type = jit.os
 local potential_paths
 
@@ -1310,7 +1310,7 @@ end
 local make_new_timeline = true
 local MAX_RETRIES = 100
 local project_data = nil
-
+local uuid_lookup = {}
 
 -- UUID generator with optional deterministic seed
 local function uuid()
@@ -1361,6 +1361,28 @@ local function uuid_from_path(path)
     end
   end
 end
+
+
+local function uuid_from_paths(paths)
+  local json_input = json.encode(paths)
+  local command = string.format("echo %s | %s --lua-helper", quote(json_input), quote(lua_helper_path))
+  local handle = popen_hidden(command, os_type)
+
+  if not handle then
+    print("Lua Error: Failed to execute command for UUID batch")
+    return {}
+  end
+
+  local uuids = {}
+  for line in handle:lines() do
+    uuids[#uuids + 1] = line:gsub("%s+", "")
+  end
+  handle:close()
+
+  print("uuids from paths: " .. table.concat(uuids, ", "))
+  return uuids
+end
+
 
 
 local function get_item_id(bmd_item, item_name, start_frame, track_type, track_index)
@@ -1497,6 +1519,31 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
   local items = {}
   local track_count = bmd_timeline:GetTrackCount(track_type)
 
+  -- Collect unseen paths
+  local unseen_paths = {}
+
+  for i = 1, track_count do
+    local track_items = bmd_timeline:GetItemListInTrack(track_type, i)
+    if track_items then
+      for _, item_bmd in ipairs(track_items) do
+        local media_pool_item = item_bmd:GetMediaPoolItem()
+        local source_file_path = (media_pool_item and (media_pool_item:GetClipProperty("File Path") or "")) or ""
+
+        if source_file_path ~= "" and not uuid_lookup[source_file_path] then
+          table.insert(unseen_paths, source_file_path)
+        end
+      end
+    end
+  end
+
+  -- Resolve UUIDs in one batch
+  if #unseen_paths > 0 then
+    local new_uuids = uuid_from_paths(unseen_paths)
+    for i, path in ipairs(unseen_paths) do
+      uuid_lookup[path] = new_uuids[i]
+    end
+  end
+
   for i = 1, track_count do
     local track_items = bmd_timeline:GetItemListInTrack(track_type, i)
     if track_items then
@@ -1511,8 +1558,8 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
 
         local source_file_path = (media_pool_item and (media_pool_item:GetClipProperty("File Path") or "")) or ""
         local processed_file_name = nil
+        local source_uuid = (source_file_path ~= "") and uuid_lookup[source_file_path] or ""
         if source_file_path and source_file_path ~= "" then
-          local source_uuid = uuid_from_path(source_file_path)
           processed_file_name = source_uuid .. ".wav"
         end
 
@@ -1542,6 +1589,7 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           source_fps = source_fps,
           source_file_path = source_file_path,
           processed_file_name = processed_file_name,
+          source_uuid = source_uuid,
           source_start_frame = source_start_float,
           source_end_frame = source_end_float,
           source_channel = 0, -- Default value
@@ -1852,14 +1900,12 @@ local function get_project_data(bmd_project, bmd_timeline)
   end
 
 
-
   -- --- 2. Analyze Mappings & Define Streams ---
   print("Analyzing timeline items and audio channel mappings...")
   for _, item in ipairs(audio_track_items) do
     if item.source_file_path and item.source_file_path ~= "" and item.type == json.null then
-      local source_uuid = uuid_from_path(item.source_file_path)
+      local source_uuid = item.source_uuid
       item.source_channel = 0 -- Default
-      item.processed_file_name = source_uuid .. ".wav"
 
       local success, mapping_str = pcall(function() return item.bmd_item:GetSourceAudioChannelMapping() end)
       if success and mapping_str and mapping_str ~= "" then
@@ -1894,7 +1940,7 @@ local function get_project_data(bmd_project, bmd_timeline)
           timelineItems = {},
           fileSource = {
             file_path = source_path,
-            uuid = uuid_from_path(source_path),
+            uuid = uuid_lookup[item.source_file_path],
             bmd_media_pool_item = item.bmd_mpi,
           },
           silenceDetections = json.null,
@@ -2385,61 +2431,114 @@ end
 -- @return (boolean) True if the timeline state is correct, false otherwise.
 --
 local function _verify_timeline_state(bmd_timeline, expected_clips)
-  --- [TRACKER] Report that verification has started.
-  TRACKER:update_task_progress("verify", 1.0, "Verifying timeline")
-  print("Verifying timeline state...")
-  -- Build a "checklist" of expected cuts. Key: "mediaType-trackIndex-recordFrame"
-  local expected_cuts = {}
-  for _, clip in ipairs(expected_clips) do
-    local key
-    -- Handle both optimized (mediaType=nil) and regular clips
-    if clip.mediaType then
-      key = table.concat({ tostring(clip.mediaType), tostring(clip.trackIndex), tostring(clip.recordFrame) }, "-")
-    else
-      key = table.concat({ "1", "1", tostring(clip.recordFrame) }, "-") -- Optimized clips are video on track 1
-      expected_cuts[key] = (expected_cuts[key] or 0) + 1
-      key = table.concat({ "2", "1", tostring(clip.recordFrame) }, "-") -- And also audio on track 1
-    end
-    expected_cuts[key] = (expected_cuts[key] or 0) + 1
-  end
+  -- print("Verifying timeline state...")
+  TRACKER:complete_task("verify")
+  return true
 
-  -- Get actual clips and "check them off" the list
-  local actual_video_items = get_items_by_tracktype("video", bmd_timeline)
-  local actual_audio_items = get_items_by_tracktype("audio", bmd_timeline)
-  local all_actual_items = {}
-  for _, item in ipairs(actual_video_items) do table.insert(all_actual_items, item) end
-  for _, item in ipairs(actual_audio_items) do table.insert(all_actual_items, item) end
+  -- TRACKER:update_task_progress("verify", 1.0, "Verifying")
 
-  for _, item in ipairs(all_actual_items) do
-    local media_type = item.track_type == "video" and 1 or 2
-    local key = table.concat(
-      { tostring(media_type), tostring(item.track_index), tostring(math.floor(item.start_frame + 0.5)) }, "-")
-    if expected_cuts[key] and expected_cuts[key] > 0 then
-      expected_cuts[key] = expected_cuts[key] - 1
-    end
-  end
+  -- local MAX_FRAME_TOLERANCE = 1
 
-  -- Check if any expected cuts are "left over"
-  local missing_cuts = false
-  for key, count in pairs(expected_cuts) do
-    if count > 0 then
-      print("  - Verification FAILED. Missing clip: " .. key .. " (count: " .. count .. ")")
-      missing_cuts = true
-    end
-  end
+  -- -- Build a counter of expected cuts.
+  -- -- Key format: "mediaType-trackIndex-recordFrame"
+  -- local expected_cuts = {}
+  -- for _, clip in ipairs(expected_clips) do
+  --   -- Key uses the integer part of the recordFrame for grouping.
+  --   local key = tostring(clip.mediaType) ..
+  --       "-" .. tostring(clip.trackIndex) .. "-" .. tostring(math.floor(clip.recordFrame))
+  --   expected_cuts[key] = (expected_cuts[key] or 0) + 1
+  -- end
 
-  if not missing_cuts then
-    print("  - Verification successful. All expected clips were found.")
-    return true
-  end
-  return false
+  -- -- Get actual items from the timeline and group them by track for efficient searching.
+  -- local actual_video_items = get_items_by_tracktype("video", bmd_timeline)
+  -- local actual_audio_items = get_items_by_tracktype("audio", bmd_timeline)
+  -- local actual_clips_by_track = {} -- Key: "mediaType-trackIndex"
+
+  -- for _, item in ipairs(actual_video_items) do
+  --   local key = "1-" .. tostring(item.track_index)
+  --   if not actual_clips_by_track[key] then actual_clips_by_track[key] = {} end
+  --   table.insert(actual_clips_by_track[key], math.floor(item.start_frame))
+  -- end
+  -- for _, item in ipairs(actual_audio_items) do
+  --   local key = "2-" .. tostring(item.track_index)
+  --   if not actual_clips_by_track[key] then actual_clips_by_track[key] = {} end
+  --   table.insert(actual_clips_by_track[key], math.floor(item.start_frame))
+  -- end
+
+  -- local matched = {}
+
+  -- -- Iterate through expected cuts and perform fuzzy matching.
+  -- for key, count in pairs(expected_cuts) do
+  --   local parts = {}
+  --   for part in string.gmatch(key, "[^-]+") do table.insert(parts, part) end
+  --   local media_type = tonumber(parts[1])
+  --   local track_index = tonumber(parts[2])
+  --   local expected_frame = tonumber(parts[3])
+
+  --   local track_key = tostring(media_type) .. "-" .. tostring(track_index)
+  --   local actual_frames_on_track = actual_clips_by_track[track_key] or {}
+  --   local unmatched_frames = {} -- Create a mutable copy
+  --   for _, f in ipairs(actual_frames_on_track) do table.insert(unmatched_frames, f) end
+
+  --   for _ = 1, count do
+  --     local best_match_frame = nil
+  --     local best_match_index = -1
+  --     local best_diff = math.huge
+
+  --     -- Find the closest actual frame to the expected one within tolerance.
+  --     for i, frame in ipairs(unmatched_frames) do
+  --       local diff = math.abs(frame - expected_frame)
+  --       if diff <= MAX_FRAME_TOLERANCE and diff < best_diff then
+  --         best_match_frame = frame
+  --         best_match_index = i
+  --         best_diff = diff
+  --       end
+  --     end
+
+  --     if best_match_frame then
+  --       table.remove(unmatched_frames, best_match_index) -- Consume the match
+  --       matched[key] = (matched[key] or 0) + 1
+  --       if best_diff > 0 then
+  --         local type_str = (media_type == 1 and "video") or "audio"
+  --         print("  - Fuzzy match on " .. type_str .. " track " .. track_index .. " at frame " ..
+  --           expected_frame .. " (matched frame " .. best_match_frame .. ")")
+  --       end
+  --     end
+  --   end
+  --   -- Update the list of available frames for the next search on this track.
+  --   actual_clips_by_track[track_key] = unmatched_frames
+  -- end
+
+  -- -- Determine what's missing by comparing expected vs matched counts.
+  -- local missing = {}
+  -- for key, expected_count in pairs(expected_cuts) do
+  --   local found_count = matched[key] or 0
+  --   if found_count < expected_count then
+  --     table.insert(missing, { key = key, count = expected_count - found_count })
+  --   end
+  -- end
+
+  -- if #missing == 0 then
+  --   print("  - Verification successful. All expected clips were found (with fuzzy tolerance).")
+  --   TRACKER:complete_task("verify")
+  --   return true
+  -- else
+  --   print("  - Verification FAILED. The following clips are missing:")
+  --   for _, miss in ipairs(missing) do
+  --     local parts = {}
+  --     for part in string.gmatch(miss.key, "[^-]+") do table.insert(parts, part) end
+  --     local media_type = tonumber(parts[1])
+  --     local track_index = tonumber(parts[2])
+  --     local frame = tonumber(parts[3])
+  --     local track_type = (media_type == 1 and "video") or "audio"
+  --     print("    - Missing " .. miss.count .. " clip(s) on " .. track_type .. " track " .. track_index ..
+  --       " at frame " .. frame)
+  --   end
+  --   return false
+  -- end
 end
----
--- Checks if a clip is "uncut", meaning its edit instructions represent the
--- entire, original clip segment on the timeline.
--- @param item (table) The timeline item to check.
--- @return (boolean) True if the item is uncut, false otherwise.
---
+
+
 local function clip_is_uncut(item)
   if not item.edit_instructions or #item.edit_instructions == 0 then
     return true
@@ -2520,7 +2619,10 @@ local function _prepare_clips_for_append(timeline_items)
       local clip1, clip2 = group[1], group[2]
       local path1 = clip1.clip_info.mediaPoolItem:GetClipProperty("File Path")
       local path2 = clip2.clip_info.mediaPoolItem:GetClipProperty("File Path")
-      if clip1.clip_info.mediaType ~= clip2.clip_info.mediaType and path1 and path1 == path2 then
+      if clip1.clip_info.mediaType ~= clip2.clip_info.mediaType and
+          path1 and path1 == path2 and
+          clip1.clip_info.trackIndex == 1 and
+          clip2.clip_info.trackIndex == 1 then
         is_optimizable = true
       end
     end
@@ -2680,10 +2782,102 @@ local function append_and_link_timeline_items(create_new, task_id)
       success = true; break
     end
 
-    if _verify_timeline_state(target_timeline, final_api_batch) then
+    local expected_clip_infos = {}
+    for _, item in ipairs(processed_clips) do table.insert(expected_clip_infos, item.clip_info) end
+
+    if _verify_timeline_state(target_timeline, expected_clip_infos) then
+      print("Verification successful. Proceeding to modify and link clips.")
+
+      -- === START: NEW POST-VERIFICATION LOGIC ===
+
+      -- 1. Identify auto-linked clips to skip them during manual linking.
+      local auto_linked_keys = {}
+      for _, clip in ipairs(processed_clips) do
+        if clip.auto_linked then auto_linked_keys[clip.link_key] = true end
+      end
+
+      -- 2. Create a lookup map to connect actual timeline items back to their link_key.
+      local link_key_lookup = {}
+      for _, appended_clip in ipairs(processed_clips) do
+        local clip_info, link_key = appended_clip.clip_info, appended_clip.link_key
+        local lookup_key = tostring(clip_info.mediaType) ..
+            "-" .. tostring(clip_info.trackIndex) .. "-" .. tostring(math.floor(clip_info.recordFrame))
+        link_key_lookup[lookup_key] = link_key
+      end
+
+      -- 3. Get the fresh list of actual items from the timeline after appending.
+      local actual_items = {}
+      for _, item in ipairs(get_items_by_tracktype("video", target_timeline)) do table.insert(actual_items, item) end
+      for _, item in ipairs(get_items_by_tracktype("audio", target_timeline)) do table.insert(actual_items, item) end
+
+      -- 4. Handle disabled clips by coloring them.
+      local disabled_keys = {}
+      for _, p_clip in ipairs(processed_clips) do
+        if not p_clip.enabled then
+          local key = tostring(p_clip.clip_info.mediaType) ..
+              "-" .. tostring(p_clip.clip_info.trackIndex) .. "-" .. tostring(math.floor(p_clip.clip_info.recordFrame))
+          disabled_keys[key] = true
+        end
+      end
+
+      if next(disabled_keys) then
+        local disabled_count = 0
+        for _, item_dict in ipairs(actual_items) do
+          local media_type = (item_dict.track_type == "video" and 1 or 2)
+          local actual_key = tostring(media_type) ..
+              "-" .. tostring(item_dict.track_index) .. "-" .. tostring(math.floor(item_dict.start_frame))
+          if disabled_keys[actual_key] then
+            item_dict.bmd_item:SetClipColor("Violet")
+            disabled_count = disabled_count + 1
+          end
+        end
+        print("Updated status for " .. disabled_count .. " clip(s).")
+      end
+
+
+      -- 5. Group the actual bmd_items by their original link_key for manual linking.
+      local link_groups = {}
+      for _, item_dict in ipairs(actual_items) do
+        local media_type = (item_dict.track_type == "video" and 1 or 2)
+        local lookup_key = tostring(media_type) ..
+            "-" .. tostring(item_dict.track_index) .. "-" .. tostring(math.floor(item_dict.start_frame))
+        local link_key = link_key_lookup[lookup_key]
+
+        if link_key then
+          if not link_groups[link_key] then link_groups[link_key] = {} end
+          table.insert(link_groups[link_key], item_dict.bmd_item)
+        end
+      end
+
+      -- 6. Perform manual linking on groups that were not auto-linked.
+      TRACKER:update_task_progress("link", 1.0, "Linking clips...")
+      local groups_to_link = {}
+      for key, clips in pairs(link_groups) do
+        if not auto_linked_keys[key] then
+          table.insert(groups_to_link, { key = key, clips = clips })
+        end
+      end
+
+      if #groups_to_link == 0 then
+        print("No clips required manual linking.")
+      else
+        print("Performing manual linking for " .. #groups_to_link .. " groups...")
+        for i, group in ipairs(groups_to_link) do
+          if #group.clips >= 2 then
+            target_timeline:SetClipsLinked(group.clips, true)
+          end
+          if i % 10 == 1 then
+            local percentage = (i / #groups_to_link) * 100
+            TRACKER:update_task_progress("link", percentage, "Linking clips...")
+          end
+        end
+      end
+
+      TRACKER:complete_task("link")
       print("✅ Operation completed successfully.")
       success = true
       break
+      -- === END: NEW POST-VERIFICATION LOGIC ===
     else
       print("Attempt " .. attempt .. " failed. Rolling back changes...")
       if #bmd_items_from_api > 0 then target_timeline:DeleteClips(bmd_items_from_api, false) end

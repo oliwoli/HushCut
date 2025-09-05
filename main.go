@@ -4,6 +4,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -105,8 +106,20 @@ func main() {
 	pythonPort := flag.Int("python-port", 0, "port python should listen on")
 
 	flag.Parse()
+
+	var pipeContent string
+	// Check if there’s data coming in via stdin
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) == 0 {
+		// stdin is not from a terminal, so read it
+		data, err := io.ReadAll(os.Stdin)
+		if err == nil {
+			pipeContent = string(data)
+		}
+	}
+
 	if *luaMode {
-		luahelperlogic.Start(*port, *findPort, *uuidCount, *uuidStr)
+		luahelperlogic.Start(*port, *findPort, *uuidCount, *uuidStr, pipeContent)
 		return // Exit after running in helper mode
 	}
 

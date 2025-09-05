@@ -18,14 +18,29 @@ import (
 
 // Start runs the helper logic based on the provided parameters.
 // This is the single, shared entry point for the logic.
-func Start(port int, findPort bool, uuidCount int, uuidStr string) {
+func Start(port int, findPort bool, uuidCount int, uuidStr string, pipeContent string) {
 	// --- UUID logic ---
 	if uuidCount > 0 {
-		for i := 0; i < uuidCount; i++ {
+		for range uuidCount {
 			fmt.Println(uuid.New())
 		}
 		return
 	}
+
+	// If we have pipeContent, prefer it over uuidStr
+	if pipeContent != "" {
+		var items []string
+		if err := json.Unmarshal([]byte(pipeContent), &items); err != nil {
+			log.Fatalf("invalid JSON input from stdin: %v", err)
+		}
+		for _, s := range items {
+			u := uuid.NewMD5(uuid.Nil, []byte(s))
+			fmt.Println(u.String())
+		}
+		return
+	}
+
+	// Fallback: deterministic UUID from --uuid-from-str
 	if uuidStr != "" {
 		u := uuid.NewMD5(uuid.Nil, []byte(uuidStr))
 		fmt.Println(u.String())
