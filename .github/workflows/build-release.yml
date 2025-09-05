@@ -122,6 +122,15 @@ jobs:
           build-platform: ${{ matrix.platform }}
           package: false
           nsis: true
+        
+      - name: Clean Windows bin directory
+        if: matrix.label == 'windows'
+        shell: bash
+        run: |
+          rm -f build/bin/python_backend.exe
+          rm -f build/bin/HushCut.exe
+          rm -f build/bin/davinci_lua_helper.exe
+          rm -f build/bin/HushCut.lua
 
       - name: Build Wails App (Unix)
         if: matrix.label != 'windows'
@@ -177,24 +186,24 @@ jobs:
       - name: Package Release Asset
         # This step will only run when you push a tag
         if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         run: |
           # For macOS, the DMG is already created. We just need to define its path for the upload.
           if [[ "${{ matrix.label }}" == "macos" ]]; then
             ARTIFACT_PATH="build/bin/HushCut-macOS.dmg"
-            echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
           
-          # For Windows and Linux, we create a zip file.
+          elif [[ "${{ matrix.label }}" == "windows" ]]; then
+            # Windows: use installer directly
+            ARTIFACT_PATH="build/bin/HushCut-amd64-installer.exe"
+
           else
+            # Linux: make a zip
             cd build/bin
             ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
-            if [[ "${{ matrix.label }}" == "windows" ]]; then
-              powershell -Command "Compress-Archive -Path ./* -DestinationPath ../../${ARTIFACT_FILENAME}"
-            else # Linux
-              zip -r "../../${ARTIFACT_FILENAME}" .
-            fi
+            zip -r "../../${ARTIFACT_FILENAME}" .
             ARTIFACT_PATH="${ARTIFACT_FILENAME}"
-            echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
           fi
+          echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
 
       - name: Upload Release Artifact
         if: startsWith(github.ref, 'refs/tags/')
