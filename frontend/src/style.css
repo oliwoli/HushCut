@@ -59,7 +59,7 @@ body {
 
 .has-blur .maybe-glass {
   backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  /* -webkit-backdrop-filter: blur(14px);  causes issues on windows */
   background-color: rgba(25, 25, 26, 0.125);
   background: rgba(15, 15, 15, 0.125);
 }
