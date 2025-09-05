@@ -156,6 +156,7 @@ Section "uninstall"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
     RMDir /r "$LOCALAPPDATA\HushCut" # Remove HushCut working dir
+    RMDir /r "$APPDATA\HushCut" # Remove HushCut working dir
     
     Delete "$APPDATA\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Edit\HushCut.lua"
 
