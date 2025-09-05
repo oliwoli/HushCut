@@ -296,6 +296,17 @@ func (a *App) installLuaScript() {
 	log.Println("✅ Successfully installed DaVinci Resolve script.")
 }
 
+func getMacCacheTmpDir() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		// Fallback to os.TempDir() if we can't get home directory
+		return filepath.Join(os.TempDir(), "HushCut")
+	}
+
+	// ~/Library/Caches/HushCut/tmp
+	return filepath.Join(homeDir, "Library", "Caches", "HushCut", "tmp")
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
@@ -328,7 +339,7 @@ func (a *App) startup(ctx context.Context) {
 		a.resourcesPath = filepath.Join(filepath.Dir(goExecutableDir), "Resources")
 
 		// Temp folder in system tmp
-		a.tmpPath = filepath.Join(os.TempDir(), "HushCut")
+		a.tmpPath = getMacCacheTmpDir()
 
 		if err := os.MkdirAll(a.userResourcesPath, 0755); err != nil {
 			log.Fatalf("failed to create resources dir: %v", err)
@@ -338,13 +349,27 @@ func (a *App) startup(ctx context.Context) {
 		}
 	case "windows":
 		a.resourcesPath = goExecutableDir
-		a.userResourcesPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "HushCut")
-		a.tmpPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "tmp")
+		a.userResourcesPath = filepath.Join(os.Getenv("APPDATA"), "HushCut")
+		a.tmpPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "HushCut", "tmp")
 
 	case "linux":
 		a.resourcesPath = goExecutableDir
-		a.userResourcesPath = filepath.Join(goExecutableDir, ".hushcut_res")
-		a.tmpPath = filepath.Join(a.userResourcesPath, "tmp")
+
+		// User settings
+		configHome := os.Getenv("XDG_CONFIG_HOME")
+		if configHome == "" {
+			home, _ := os.UserHomeDir()
+			configHome = filepath.Join(home, ".config")
+		}
+		a.userResourcesPath = filepath.Join(configHome, "HushCut")
+
+		// Temp / cache files
+		cacheHome := os.Getenv("XDG_CACHE_HOME")
+		if cacheHome == "" {
+			home, _ := os.UserHomeDir()
+			cacheHome = filepath.Join(home, ".cache")
+		}
+		a.tmpPath = filepath.Join(cacheHome, "HushCut", "tmp")
 	default:
 		log.Fatalf("Unsupported platform found during path init: %s", platform)
 	}
@@ -438,17 +463,15 @@ func (a *App) startup(ctx context.Context) {
 		// log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 		log.Printf("ffmpeg not found at %s", a.ffmpegBinaryPath)
 		a.ffmpegStatus = StatusMissing
-		// TODO: enable this if figured out how to handle versions (accept locally installed ffmpeg if same minor version?)
-		// if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
-		// 	a.ffmpegBinaryPath = pathInSystem
-		// 	log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
-		// 	a.hasFfmpeg = true
-		// } else {
-		// 	//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
-		// 	a.hasFfmpeg = false
-		// 	log.Print("no ffmpeg installation")
-		// 	runtime.EventsEmit(a.ctx, "ffmpeg:missing", nil)
-		// }
+		// TODO: figure out how to handle versions (accept locally installed ffmpeg if same minor version?)
+		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+			a.ffmpegBinaryPath = pathInSystem
+			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
+			a.ffmpegStatus = StatusReady
+		} else {
+			//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
+			log.Print("no ffmpeg installation in system PATH")
+		}
 	} else {
 		log.Printf("ffmpeg found at %s", a.ffmpegBinaryPath)
 		a.ffmpegStatus = StatusReady
