@@ -18,6 +18,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
@@ -155,6 +157,12 @@ func main() {
 		LogLevel:    logger.INFO,
 		AlwaysOnTop: true,
 		Frameless:   true,
+		Mac: &mac.Options{
+			WebviewIsTransparent: true,
+		},
+		Windows: &windows.Options{
+			WebviewIsTransparent: true,
+		},
 		Linux: &linux.Options{
 			Icon:                icon,
 			WindowIsTranslucent: false,
