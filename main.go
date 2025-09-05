@@ -101,22 +101,27 @@ func main() {
 	luaMode := flag.Bool("lua-helper", false, "start headless in lua-helper mode")
 	port := flag.Int("port", 8080, "port to listen on")
 	findPort := flag.Bool("find-port", false, "find a free port and exit")
-
 	uuidCount := flag.Int("uuid", 0, "generate N random UUIDs")
 	uuidStr := flag.String("uuid-from-str", "", "comma-separated list of strings to generate deterministic UUIDs")
-
 	pythonPort := flag.Int("python-port", 0, "port python should listen on")
-
+	inputFile := flag.String("input-file", "", "JSON file with array of strings to batch UUID")
 	flag.Parse()
 
 	var pipeContent string
-	// Check if there’s data coming in via stdin
-	stat, _ := os.Stdin.Stat()
-	if (stat.Mode() & os.ModeCharDevice) == 0 {
-		// stdin is not from a terminal, so read it
-		data, err := io.ReadAll(os.Stdin)
-		if err == nil {
-			pipeContent = string(data)
+	if *inputFile != "" {
+		data, err := os.ReadFile(*inputFile)
+		if err != nil {
+			panic(err)
+		}
+		pipeContent = string(data)
+	} else {
+		// fallback to stdin
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err == nil {
+				pipeContent = string(data)
+			}
 		}
 	}
 

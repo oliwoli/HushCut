@@ -1364,10 +1364,27 @@ end
 
 
 local function uuid_from_paths(paths)
-  local json_input = json.encode(paths)
-  local command = string.format("echo %s | %s --lua-helper", quote(json_input), quote(lua_helper_path))
-  local handle = popen_hidden(command, os_type)
+  local json_input, err = json.encode(paths)
+  if not json_input then
+    error("Failed to encode JSON for uuid_from_paths: " .. tostring(err))
+  end
 
+  local tmp_path = path_join(TEMP_DIR, "uuid_input.json")
+  local f, ferr = io.open(tmp_path, "w")
+  if not f then
+    error("Failed to open temp file for writing: " .. tostring(ferr))
+  end
+  f:write(json_input)
+  f:close()
+
+  local command
+  if os_type == "Windows" then
+    command = string.format("%s --lua-helper %s", quote(lua_helper_path), quote(tmp_path))
+  else
+    command = string.format("%s --lua-helper %s", quote(lua_helper_path), quote(tmp_path))
+  end
+
+  local handle = popen_hidden(command, os_type)
   if not handle then
     print("Lua Error: Failed to execute command for UUID batch")
     return {}
@@ -1378,8 +1395,6 @@ local function uuid_from_paths(paths)
     uuids[#uuids + 1] = line:gsub("%s+", "")
   end
   handle:close()
-
-  print("uuids from paths: " .. table.concat(uuids, ", "))
   return uuids
 end
 
