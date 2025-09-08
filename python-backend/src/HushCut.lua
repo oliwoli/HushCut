@@ -1292,7 +1292,7 @@ local function make_dir(path)
   local is_windows = (os_type == "Windows")
   local command
   if is_windows then
-    command = 'mkdir "' .. path .. '"'
+    command = string.format('cmd /c mkdir "%s"', path)
     execute_hidden_with_env(command, nil)
   else
     command = 'mkdir -p "' .. path .. '"'
