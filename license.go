@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/denisbrodbeck/machineid"
 )
 
 // verifySignature checks if the data was signed by your private key.
@@ -232,6 +234,16 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 // GetMachineID retrieves a platform-specific unique machine identifier.
 // Works on Windows, macOS, and Linux.
 func GetMachineID() (string, error) {
+	machineID, err := machineid.ID()
+	if err != nil {
+		log.Println("Error getting machine ID:\n", err)
+	} else {
+		log.Println("detected machine ID: ", machineID)
+		return machineID, nil
+	}
+
+	// fallback
+
 	switch runtime.GOOS {
 	case "windows":
 		return getWindowsUUID()
