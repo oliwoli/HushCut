@@ -90,9 +90,17 @@ const LicensePrompt = () => {
       });
       setAlertOpen(true);
     });
+
+    const licenseKeyMismatchEvent = EventsOn("licenseKeyMismatch", (key: string) => {
+      setLicenseKey(key);
+    });
+
     return () => {
       if (licenseInvalidEvent) {
         licenseInvalidEvent();
+      }
+      if (licenseKeyMismatchEvent) {
+        licenseKeyMismatchEvent();
       }
     };
 

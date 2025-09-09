@@ -42,6 +42,10 @@ export function GetGoServerPort() {
   return window['go']['main']['App']['GetGoServerPort']();
 }
 
+export function GetMachineID() {
+  return window['go']['main']['App']['GetMachineID']();
+}
+
 export function GetOrDetectSilencesWithCache(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
   return window['go']['main']['App']['GetOrDetectSilencesWithCache'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
 }

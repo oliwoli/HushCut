@@ -382,7 +382,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Fatalf("Failed to create tmp folder: %v", err)
 	}
 
-	machineID, err := GetMachineID()
+	machineID, err := a.getMachineID()
 	if err != nil {
 		alertData := AlertPayload{
 			Title:    "Internal Error (no machine ID)",

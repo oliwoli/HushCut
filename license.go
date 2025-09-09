@@ -17,11 +17,11 @@ import (
 	"os"
 	"os/exec"
 	"path"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/denisbrodbeck/machineid"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // verifySignature checks if the data was signed by your private key.
@@ -87,6 +87,18 @@ func (a *App) loadAndVerifyLocalLicense() (*SignedLicenseData, error) {
 		return nil, fmt.Errorf("no machine ID in license file %w", err)
 	}
 	if jsonMachineID != a.machineID {
+		// Extract the license key from the local data to perform the check.
+		var licenseKey string
+		if gumroadResponse, ok := license.Data["details"].(map[string]interface{}); ok {
+			if purchase, ok := gumroadResponse["purchase"].(map[string]interface{}); ok {
+				if key, ok := purchase["license_key"].(string); ok {
+					licenseKey = key
+				}
+			}
+		}
+		if licenseKey != "" {
+			runtime.EventsEmit(a.ctx, "licenseKeyMismatch", licenseKey)
+		}
 		return nil, fmt.Errorf("machine ID does not match %w", err)
 	}
 
@@ -173,7 +185,7 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 		verifyURL = "http://localhost:8080/verify_license"
 	}
 
-	machineID, err := GetMachineID()
+	machineID, err := a.getMachineID()
 	if err != nil {
 		return nil, fmt.Errorf("could not retrieve Device ID")
 	}
@@ -231,9 +243,9 @@ func (a *App) VerifyLicense(licenseKey string) (map[string]interface{}, error) {
 	return newLicense.Data, nil
 }
 
-// GetMachineID retrieves a platform-specific unique machine identifier.
+// getMachineID retrieves a platform-specific unique machine identifier.
 // Works on Windows, macOS, and Linux.
-func GetMachineID() (string, error) {
+func (a *App) getMachineID() (string, error) {
 	machineID, err := machineid.ID()
 	if err != nil {
 		log.Println("Error getting machine ID:\n", err)
@@ -243,8 +255,9 @@ func GetMachineID() (string, error) {
 	}
 
 	// fallback
+	env := runtime.Environment(a.ctx)
 
-	switch runtime.GOOS {
+	switch env.Platform {
 	case "windows":
 		return getWindowsUUID()
 	case "darwin":
@@ -252,7 +265,7 @@ func GetMachineID() (string, error) {
 	case "linux":
 		return getLinuxMachineID()
 	default:
-		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+		return "", fmt.Errorf("unsupported platform: %s", env.Platform)
 	}
 }
 
