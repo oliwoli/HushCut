@@ -32,7 +32,7 @@ func init() {
 		if err != nil {
 			log.Fatalf("failed to get home dir: %v", err)
 		}
-		configDir := filepath.Join(home, ".local")
+		configDir := filepath.Join(home, ".local", "state")
 		base = filepath.Join(configDir, "HushCut")
 	}
 
