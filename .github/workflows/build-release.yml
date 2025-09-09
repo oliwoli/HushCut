@@ -258,7 +258,7 @@ jobs:
           # Note: download-artifact creates subdirectories named after the artifact
           echo "Copying artifacts"
           cp artifacts/HushCut-linux/HushCut-linux.zip public-repo/build/linux/
-          cp artifacts/HushCut-windows/HushCut-windows.zip public-repo/build/windows/
+          cp artifacts/HushCut-windows/HushCut-amd64-installer.exe public-repo/build/windows/
           cp artifacts/HushCut-macos/HushCut-macOS.dmg public-repo/build/macos/
 
           # Commit and push changes to the public repo
