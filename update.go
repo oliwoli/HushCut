@@ -5,6 +5,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type AlertContent struct {
@@ -47,9 +50,23 @@ func (a *App) checkForUpdate(currentVersion string) {
 		updateURL = "http://localhost:8080/update?v=" + url.QueryEscape(currentVersion) + "&schemaVersion=" + schemaVersion
 	}
 
-	resp, err := http.Get(updateURL)
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	var resp *http.Response
+	var err error
+
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, err = client.Get(updateURL)
+		if err == nil {
+			break
+		}
+		log.Printf("Update check attempt %d failed: %v", attempt, err)
+		time.Sleep(time.Duration(attempt) * time.Second) // simple backoff
+	}
+
 	if err != nil {
-		log.Printf("Update check failed: %v", err)
+		log.Printf("Update check ultimately failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -72,6 +89,7 @@ func (a *App) checkForUpdate(currentVersion string) {
 
 	a.updateInfo = &updateResp
 	log.Printf("Update available: %+v", updateResp)
+	runtime.EventsEmit(a.ctx, "updateAvailable", updateResp)
 }
 
 func (a *App) GetUpdateInfo() *UpdateResponseV1 {

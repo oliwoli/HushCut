@@ -16,8 +16,8 @@ import { useUiStore } from "@/stores/uiStore";
 import { useAppState } from "./stores/appSync";
 import clsx from "clsx";
 
-import { BrowserOpenURL, EventsEmit } from "@wails/runtime/runtime";
-import { CloseApp, SetWindowAlwaysOnTop, GetUpdateInfo } from "@wails/go/main/App";
+import { BrowserOpenURL, EventsEmit, EventsOn } from "@wails/runtime/runtime";
+import { CloseApp, SetWindowAlwaysOnTop } from "@wails/go/main/App";
 import { main } from "@wails/go/models";
 
 
@@ -25,13 +25,17 @@ const _TitleBar = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(true);
   const [updateInfo, setUpdateInfo] = useState<main.UpdateResponseV1 | null>(null);
 
+
   useEffect(() => {
-    // Fetch update info once when the app starts
-    GetUpdateInfo().then((info) => {
+    // EventsOn returns a function that unsubscribes the listener.
+    // We'll call this in the cleanup phase of useEffect.
+    const unsubscribe = EventsOn("updateAvailable", (info: main.UpdateResponseV1) => {
+      console.log("Received updateAvailable event:", info);
       if (info) {
         setUpdateInfo(info);
 
         if (info.show_alert) {
+          // You can still emit your internal showAlert event here
           EventsEmit("showAlert", {
             severity: info.alert_severity,
             title: info.alert_content.title,
@@ -46,6 +50,11 @@ const _TitleBar = () => {
         }
       }
     });
+
+    // This cleanup function is called when the component unmounts.
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
