@@ -72,7 +72,7 @@ const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some d
 
 
 const waveformCache = new Map<string, number[]>();
-const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, allClipIds }: {
+const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, allClipIds, forwardedRef }: {
   item: main.TimelineItem;
   index: string;
   isSelected: boolean;
@@ -80,6 +80,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
   disabled?: boolean;
   fps?: number;
   allClipIds: string[];
+  forwardedRef: React.Ref<HTMLButtonElement>;
 }) => {
   if (!fps) return null;
 
@@ -242,6 +243,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
         <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
       </div>
       <button
+        ref={forwardedRef} // ✨ Assign the forwarded ref here
         type="button"
         onClick={handleClipClick}
         disabled={disabled}
@@ -362,6 +364,9 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
+  // ✨ Create a map to hold refs for each item's button
+  const itemRefs = useRef(new Map<string, HTMLButtonElement | null>());
+
   if (sortedItems.length === 0) {
     return (
       <div className={cn("flex flex-col items-center justify-center text-center p-8 bg-zinc-800/50 border-2 border-dashed border-zinc-700 rounded-sm", className)}>
@@ -381,6 +386,26 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     useScrollendEvent: false,
     useAnimationFrameWithResizeObserver: true,
   });
+
+
+  // ✨ ADDED: Effect to scroll to and focus the selected clip
+  useEffect(() => {
+    if (!currentFileId) return;
+
+    const selectedIndex = sortedItems.findIndex(item => item.id === currentFileId);
+
+    if (selectedIndex !== -1) {
+      // Scroll the item into the center of the view
+      columnVirtualizer.scrollToIndex(selectedIndex, { align: 'center', behavior: 'smooth' });
+
+      // Focus the button element after a short delay to allow for the scroll
+      setTimeout(() => {
+        const buttonEl = itemRefs.current.get(currentFileId);
+        buttonEl?.focus({ preventScroll: true }); // preventScroll avoids a second jump
+      }, 150); // Delay may need adjustment depending on scroll animation
+    }
+  }, [currentFileId, sortedItems, columnVirtualizer]);
+
 
   // Get the virtual items to render
   const virtualItems = columnVirtualizer.getVirtualItems();
@@ -444,6 +469,8 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
               }}
             >
               <AudioClip
+                // ✨ Pass the ref callback to the child component
+                forwardedRef={(el) => { itemRefs.current.set(item.id, el); }}
                 index={String(virtualItem.index + 1).padStart(String(sortedItems.length).length, '0')}
                 item={item}
                 isSelected={currentFileId === itemUniqueIdentifier}
