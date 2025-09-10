@@ -21,10 +21,6 @@ func (a *App) DetectSilences(
 	clipEndSeconds float64,
 	framerate float64,
 ) ([]SilencePeriod, error) {
-	if err := a.waitForValidLicense(); err != nil {
-		return nil, fmt.Errorf("license validation failed: %w", err)
-	}
-
 	if err := a.waitForFfmpeg(); err != nil {
 		return nil, err
 	}

@@ -271,7 +271,7 @@ function AppContent() {
       return
     }
 
-    if (ffmpegStatus == Status.Missing && hasValidLicense) {
+    if (ffmpegStatus == Status.Missing) {
       EventsEmit("showAlert", {
         title: "FFmpeg Download Needed",
         message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
@@ -488,7 +488,7 @@ function AppContent() {
       console.log("App.tsx: License validity check result:", hasLicense);
       setHasValidLicense(hasLicense);
       if (!hasLicense) {
-        console.log("App.tsx: License is invalid, prompting user for license key.");
+        console.log("App.tsx: License is invalid.");
         EventsEmit("license:invalid", {
           title: "License Invalid",
           message: "Please enter your license key.",
@@ -923,7 +923,7 @@ export default function App() {
   return (
     <>
       <ClientPortal targetId="overlays">
-        <LicensePrompt />
+        {/* <LicensePrompt /> */}
         <GlobalAlertDialog />
         <FinalTimelineProgress
           open={showFinalProgress}

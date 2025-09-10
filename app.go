@@ -307,12 +307,13 @@ func (a *App) startup(ctx context.Context) {
 
 	machineID, err := a.getMachineID()
 	if err != nil {
-		alertData := AlertPayload{
-			Title:    "Internal Error (no machine ID)",
-			Message:  "Could not retrieve the machine ID",
-			Severity: "Error",
-		}
-		runtime.EventsEmit(a.ctx, "showAlert", alertData)
+		log.Println("Could not retrieve machine ID")
+		// alertData := AlertPayload{
+		// 	Title:    "Internal Error (no machine ID)",
+		// 	Message:  "Could not retrieve the machine ID",
+		// 	Severity: "Error",
+		// }
+		// runtime.EventsEmit(a.ctx, "showAlert", alertData)
 	}
 
 	a.machineID = machineID
@@ -320,7 +321,7 @@ func (a *App) startup(ctx context.Context) {
 	a.licenseValid = a.HasAValidLicense()
 	if !a.licenseValid {
 		runtime.EventsEmit(a.ctx, "license:invalid", nil)
-		log.Println("Wails App: License is invalid or not found. (Prompt for license on frontend)")
+		log.Println("Wails App: License is invalid or not found.")
 	}
 
 	a.checkForUpdate("v" + a.appVersion)
@@ -332,7 +333,6 @@ func (a *App) startup(ctx context.Context) {
 
 	var pythonPortArg int
 
-	// First, check for the environment variable (ideal for `wails dev`).
 	portStr := os.Getenv("WAILS_PYTHON_PORT")
 	if portStr != "" {
 		port, err := strconv.Atoi(portStr)
@@ -376,7 +376,6 @@ func (a *App) startup(ctx context.Context) {
 	log.Println("Wails App: OnStartup called. Offloading backend initialization to a goroutine.")
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
-	//var err error
 	ffmpegBinName := "ffmpeg"
 	if runtime.Environment(a.ctx).Platform == "windows" {
 		ffmpegBinName = "ffmpeg.exe"
