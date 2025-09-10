@@ -5,7 +5,7 @@ import (
 	"io"
 	"math"
 	"net/url"
-	"os" // If still writing to file, or for file path handling
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -38,9 +38,95 @@ func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 	return fullPath, nil
 }
 
-// New struct for the output JSON matching WaveSurfer's needs for precomputed peaks
+func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
+	maxDb := 0.0
+
+	if err := a.WaitForFile(filePath); err != nil {
+		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
+	}
+
+	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
+	if err != nil {
+		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))
+		return nil, fmt.Errorf("failed to get/generate waveform for '%s': %v", filePath, err)
+	}
+	return data, nil
+}
+
+func (a *App) GetOrGenerateWaveformWithCache(
+	webInputPath string,
+	samplesPerPixel int,
+	peakType string,
+	minDb float64,
+	maxDb float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
+) (*PrecomputedWaveformData, error) {
+	localFSPath, err := a.resolvePublicAudioPath(webInputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve web input path '%s' for pre-check: %w", webInputPath, err)
+	}
+	a.updateFileUsage(localFSPath)
+
+	if err := a.WaitForFile(localFSPath); err != nil {
+		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
+	}
+
+	if _, statErr := os.Stat(localFSPath); os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("audio file does not exist at resolved path '%s' (from '%s')", localFSPath, webInputPath)
+	} else if statErr != nil {
+		return nil, fmt.Errorf("error stating file at resolved path '%s': %w", localFSPath, statErr)
+	}
+
+	key := WaveformCacheKey{
+		FilePath:         webInputPath,
+		SamplesPerPixel:  samplesPerPixel,
+		PeakType:         peakType,
+		MinDb:            minDb,
+		MaxDb:            maxDb,
+		ClipStartSeconds: clipStartSeconds,
+		ClipEndSeconds:   clipEndSeconds,
+	}
+
+	a.cacheMutex.RLock()
+	cachedData, found := a.waveformCache[key]
+	a.cacheMutex.RUnlock()
+
+	if found {
+		return cachedData, nil
+	}
+
+	// --- CACHE MISS: Decide which processor to call ---
+	a.waveformSemaphore <- struct{}{}
+	defer func() {
+		<-a.waveformSemaphore // Release semaphore
+	}()
+
+	var waveformData *PrecomputedWaveformData
+
+	switch peakType {
+	case "linear":
+		waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel, clipStartSeconds, clipEndSeconds)
+	case "logarithmic":
+		waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
+	default:
+		err = fmt.Errorf("unknown peakType: '%s'", peakType)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("error during waveform processing for '%s': %w", webInputPath, err)
+	}
+
+	a.cacheMutex.Lock()
+	a.waveformCache[key] = waveformData
+	a.cacheMutex.Unlock()
+
+	return waveformData, nil
+}
+
+// struct for the output JSON matching WaveSurfer's needs for precomputed peaks
 type PrecomputedWaveformData struct {
-	Duration float64   `json:"duration"` // Duration in seconds
+	Duration float64   `json:"duration"` // in seconds
 	Peaks    []float64 `json:"peaks"`    // Normalized peak values (0.0 to 1.0) for display, one per pixel/block
 }
 

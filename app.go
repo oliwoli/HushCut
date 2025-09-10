@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,15 +25,13 @@ import (
 
 type FfmpegStatus int
 
-// Define the possible values using iota to auto-increment them
+// ENUM
 const (
-	// StatusUnknown will be 0, which is the default zero value for our new type.
 	StatusUnknown FfmpegStatus = iota // 0
 	StatusReady                       // 1
 	StatusMissing                     // 2
 )
 
-// App struct
 type App struct {
 	ctx     context.Context
 	isDev   bool
@@ -44,10 +41,10 @@ type App struct {
 	ffmpegVersion string
 	updateInfo    *UpdateResponseV1
 
-	licenseMutex     sync.Mutex // Mutex to protect license operations
-	licenseVerifyKey []byte     // Public key for verifying license file signatures
+	licenseMutex     sync.Mutex
+	licenseVerifyKey []byte
 	licenseValid     bool
-	licenseOkChan    chan bool // Channel to signal license validity
+	licenseOkChan    chan bool
 	machineID        string
 
 	silenceCache      map[CacheKey][]SilencePeriod
@@ -57,8 +54,8 @@ type App struct {
 	pythonReadyChan   chan bool
 	pythonReady       bool
 	pythonCommandPort int
-	resourcesPath     string // → a.appResourcesPath (immutable, inside bundle)
-	userResourcesPath string // → Application Support or config dir (writable)
+	resourcesPath     string
+	userResourcesPath string
 	tmpPath           string
 	pendingMu         sync.Mutex
 	pendingTasks      map[string]chan PythonCommandResponse
@@ -67,17 +64,17 @@ type App struct {
 	ffmpegSemaphore   chan struct{}
 	waveformSemaphore chan struct{}
 	conversionTracker sync.Map
-	fileUsage         map[string]time.Time // New field for file usage tracking
-	mu                sync.Mutex           // Mutex to protect fileUsage
+	fileUsage         map[string]time.Time
+	mu                sync.Mutex
 
 	// -- HTTP -- //
 	httpClient *http.Client
 	authToken  string
 
 	// --- FFmpeg STATE ---
-	ffmpegMutex     sync.RWMutex  // Protects hasFfmpeg flag
-	ffmpegReadyChan chan struct{} // Used to signal when FFmpeg is ready
-	ffmpegOnce      sync.Once     // Ensures the ready channel is closed only once
+	ffmpegMutex     sync.RWMutex
+	ffmpegReadyChan chan struct{}
+	ffmpegOnce      sync.Once // Ensures the ready channel is closed only once
 	// ----- //
 
 }
@@ -85,16 +82,16 @@ type App struct {
 // NewApp creates a new App application struct
 func NewApp() *App {
 	return &App{
-		licenseOkChan:     make(chan bool, 1), // Buffered channel to avoid blocking
+		licenseOkChan:     make(chan bool, 1),
 		silenceCache:      make(map[CacheKey][]SilencePeriod),
-		waveformCache:     make(map[WaveformCacheKey]*PrecomputedWaveformData), // Initialize new cache
-		pythonReadyChan:   make(chan bool, 1),                                  // Buffered channel
+		waveformCache:     make(map[WaveformCacheKey]*PrecomputedWaveformData),
+		pythonReadyChan:   make(chan bool, 1),
 		pythonReady:       false,
 		tmpPath:           "", // Will be initialized in startup
 		pendingTasks:      make(map[string]chan PythonCommandResponse),
 		ffmpegSemaphore:   make(chan struct{}, 8),
 		waveformSemaphore: make(chan struct{}, 3),
-		conversionTracker: sync.Map{}, // Initialize the new tracker
+		conversionTracker: sync.Map{},
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -219,87 +216,14 @@ func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 func (a *App) GetGoServerPort() int {
 	if !isServerInitialized {
 		log.Println("Wails App: GetAudioServerPort called, but server is not (yet) initialized or failed to start. Returning 0.")
-		return 0 // Or -1, or some other indicator that it's not ready
+		return 0
 	}
-	return actualPort // Accesses the global from httpserver.go
-}
-
-//go:embed python-backend/src/HushCut.lua
-var luaScriptData []byte
-
-func (a *App) installLuaScript() {
-	// The source script data is now embedded directly in the binary.
-	if len(luaScriptData) == 0 {
-		log.Println("Embedded Lua script is empty. Skipping installation.")
-		return
-	}
-
-	// 1. Determine the correct destination directory (logic is unchanged)
-	platform := runtime.Environment(a.ctx).Platform
-	var destScriptsDir string
-	// ... switch statement for platform is the same as before ...
-	switch platform {
-	case "darwin":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Printf("Could not get user home directory on macOS: %v", err)
-			return
-		}
-		destScriptsDir = filepath.Join(homeDir, "Library", "Application Support", "Blackmagic Design", "DaVinci Resolve", "Fusion", "Scripts", "Edit")
-
-	case "windows":
-		appDataDir := os.Getenv("APPDATA")
-		if appDataDir == "" {
-			log.Println("Could not resolve %APPDATA% directory on Windows.")
-			return
-		}
-		destScriptsDir = filepath.Join(appDataDir, "Blackmagic Design", "DaVinci Resolve", "Support", "Fusion", "Scripts", "Edit")
-
-	case "linux":
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Printf("Could not get user home directory on Linux: %v", err)
-			return
-		}
-		destScriptsDir = filepath.Join(homeDir, ".local", "share", "DaVinciResolve", "Fusion", "Scripts", "Edit")
-
-	default:
-		log.Printf("Resolve script installation not supported on this platform: %s", platform)
-		return
-	}
-
-	// 2. Check if the script needs to be copied by comparing file content
-	destScriptPath := filepath.Join(destScriptsDir, "HushCut.lua")
-	existingData, err := os.ReadFile(destScriptPath)
-	if err == nil {
-		// File exists, now compare its content with the embedded script
-		if bytes.Equal(existingData, luaScriptData) {
-			log.Printf("Resolve script is already up-to-date at %s", destScriptPath)
-			return
-		}
-	}
-
-	log.Printf("Installing or updating Resolve script at %s", destScriptPath)
-
-	// 3. Ensure the destination directory exists
-	if err := os.MkdirAll(destScriptsDir, 0755); err != nil {
-		log.Printf("Failed to create destination directory %s: %v", destScriptsDir, err)
-		return
-	}
-
-	// 4. Write the embedded data to the destination
-	if err := os.WriteFile(destScriptPath, luaScriptData, 0644); err != nil {
-		log.Printf("Failed to write destination script %s: %v", destScriptPath, err)
-		return
-	}
-
-	log.Println("✅ Successfully installed DaVinci Resolve script.")
+	return actualPort
 }
 
 func getMacCacheTmpDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil || homeDir == "" {
-		// Fallback to os.TempDir() if we can't get home directory
 		return filepath.Join(os.TempDir(), "HushCut")
 	}
 
@@ -319,7 +243,6 @@ func (a *App) startup(ctx context.Context) {
 		a.isDev = true
 	}
 
-	// Initialize tmp and resources path based on platform
 	goExecutablePath, err_exec := os.Executable()
 	if err_exec != nil {
 		log.Fatalf("Could not get executable path: %v", err_exec)
@@ -479,7 +402,6 @@ func (a *App) startup(ctx context.Context) {
 
 	runtime.EventsEmit(a.ctx, "ffmpeg:status", a.ffmpegStatus)
 
-	// set window always on top
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
@@ -493,44 +415,15 @@ func (a *App) signalFfmpegReady() {
 	})
 }
 
-func (a *App) signalLicenseOk() {
-	log.Println("Signaling that license is now valid.")
-	a.licenseValid = true
-	a.licenseOkChan <- true
-	runtime.EventsEmit(a.ctx, "license:valid", nil)
-}
-
-func (a *App) waitForValidLicense() error {
-	a.licenseMutex.Lock()
-	isReady := a.licenseValid
-	a.licenseMutex.Unlock()
-
-	if isReady {
-		return nil // License valid, proceed.
-	}
-
-	// If not ready, block and wait for the signal.
-	log.Println("Task is waiting for License activation...")
-	select {
-	case <-a.licenseOkChan:
-		log.Println("License activated. Resuming task.")
-		return nil
-	case <-a.ctx.Done():
-		log.Println("Application is shutting down; aborting License activation.")
-		return a.ctx.Err()
-	}
-}
-
 func (a *App) waitForFfmpeg() error {
 	a.ffmpegMutex.RLock()
 	isReady := a.ffmpegStatus
 	a.ffmpegMutex.RUnlock()
 
 	if isReady == StatusReady {
-		return nil // FFmpeg already available, proceed.
+		return nil
 	}
 
-	// If not ready, block and wait for the signal.
 	log.Println("Task is waiting for FFmpeg to become available...")
 	select {
 	case <-a.ffmpegReadyChan:
@@ -540,157 +433,6 @@ func (a *App) waitForFfmpeg() error {
 		log.Println("Application is shutting down; aborting wait for FFmpeg.")
 		return a.ctx.Err()
 	}
-}
-
-type FFBinariesResponse struct {
-	Version string `json:"version"`
-	Bin     map[string]struct {
-		FFmpeg string `json:"ffmpeg"`
-	} `json:"bin"`
-}
-
-func (a *App) DownloadFFmpeg() error {
-	if a.ffmpegVersion == "" {
-		return fmt.Errorf("a.ffmpegVersion must be set before calling DownloadFFmpeg")
-	}
-
-	// 1. Determine the platform and architecture to select the correct binary
-	// Use wails runtime for platform and standard go runtime for architecture
-	// to ensure compatibility with different wails versions.
-	platform := runtime.Environment(a.ctx).Platform // "darwin", "windows", "linux"
-	arch := runtime.Environment(a.ctx).Arch         // "amd64", "arm64", etc.
-
-	var platformKey string
-	switch platform {
-	case "darwin":
-		// The API uses "osx-64" for Intel-based Macs.
-		// Note: The ffbinaries API does not currently provide native arm64 (Apple Silicon) builds.
-		if arch == "amd64" {
-			platformKey = "osx-64"
-		} else {
-			// still just use amd64, should still run on arm systems
-			platformKey = "osx-64" // TODO: find another api
-			//return fmt.Errorf("unsupported macOS architecture: %s. ffbinaries only supports amd64", arch)
-		}
-	case "windows":
-		if arch == "amd64" {
-			platformKey = "windows-64"
-		} else {
-			return fmt.Errorf("unsupported Windows architecture: %s. ffbinaries only supports amd64", arch)
-		}
-	case "linux":
-		switch arch {
-		case "amd64":
-			platformKey = "linux-64"
-		case "arm64":
-			platformKey = "linux-arm64"
-		case "arm":
-			// NOTE: ffbinaries offers 'linux-armhf' and 'linux-armel'.
-			// We are defaulting to 'linux-armhf' which is common for devices like Raspberry Pi.
-			platformKey = "linux-armhf"
-		case "386":
-			platformKey = "linux-32"
-		default:
-			return fmt.Errorf("unsupported Linux architecture: %s", arch)
-		}
-	default:
-		return fmt.Errorf("unsupported platform for ffmpeg download: %s", platform)
-	}
-	log.Printf("Resolved platform key for ffbinaries API: %s", platformKey)
-
-	// 2. Fetch the download URL from the ffbinaries API
-	apiURL := fmt.Sprintf("https://ffbinaries.com/api/v1/version/%s", a.ffmpegVersion)
-	log.Printf("Fetching FFmpeg download info from: %s", apiURL)
-
-	apiResp, err := http.Get(apiURL)
-	if err != nil {
-		return fmt.Errorf("failed to call ffbinaries API: %w", err)
-	}
-	defer apiResp.Body.Close()
-
-	if apiResp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(apiResp.Body)
-		return fmt.Errorf("ffbinaries API returned non-OK status: %s - %s", apiResp.Status, string(bodyBytes))
-	}
-
-	var ffbinariesData FFBinariesResponse
-	if err := json.NewDecoder(apiResp.Body).Decode(&ffbinariesData); err != nil {
-		return fmt.Errorf("failed to parse ffbinaries API response: %w", err)
-	}
-
-	platformInfo, ok := ffbinariesData.Bin[platformKey]
-	if !ok || platformInfo.FFmpeg == "" {
-		return fmt.Errorf("could not find ffmpeg download URL for platform %s in API response", platformKey)
-	}
-	downloadURL := platformInfo.FFmpeg
-
-	var installDir = a.userResourcesPath
-	finalBinaryName := "ffmpeg"
-	if platform == "windows" {
-		finalBinaryName = "ffmpeg.exe"
-	}
-
-	if err := os.MkdirAll(installDir, 0755); err != nil {
-		return fmt.Errorf("could not create install directory at %s: %w", installDir, err)
-	}
-
-	// 4. Download and extract in a temporary directory
-	tempDir, err := os.MkdirTemp("", "ffmpeg-download-*")
-	if err != nil {
-		return fmt.Errorf("could not create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(tempDir) // Clean up temp directory on exit
-
-	downloadPath := filepath.Join(tempDir, "ffmpeg.zip")
-
-	log.Printf("Downloading FFmpeg from %s to %s", downloadURL, downloadPath)
-	downloadResp, err := http.Get(downloadURL)
-	if err != nil {
-		return fmt.Errorf("could not download ffmpeg zip: %w", err)
-	}
-	defer downloadResp.Body.Close()
-
-	out, err := os.Create(downloadPath)
-	if err != nil {
-		return fmt.Errorf("could not create download file: %w", err)
-	}
-
-	_, err = io.Copy(out, downloadResp.Body)
-	out.Close()
-	if err != nil {
-		return fmt.Errorf("could not write download to file: %w", err)
-	}
-
-	// 5. Extract the archive (all binaries from this API are in .zip format)
-	// The '-o' flag overwrites files without prompting.
-	if err := unzip(downloadPath, tempDir); err != nil {
-		log.Printf("Unzip failed. Output:\n%s", err)
-	}
-
-	// 6. Locate, move, and set permissions for the binary
-	extractedFfmpegPath := filepath.Join(tempDir, finalBinaryName)
-	if _, err := os.Stat(extractedFfmpegPath); os.IsNotExist(err) {
-		return fmt.Errorf("could not find '%s' in the extracted archive", finalBinaryName)
-	}
-
-	log.Printf("Moving FFmpeg from %s to %s", extractedFfmpegPath, a.ffmpegBinaryPath)
-	if err := moveFile(extractedFfmpegPath, a.ffmpegBinaryPath); err != nil {
-		return fmt.Errorf("failed to move ffmpeg binary: %w", err)
-	}
-
-	if platform != "windows" {
-		if err := os.Chmod(a.ffmpegBinaryPath, 0755); err != nil {
-			return fmt.Errorf("could not make ffmpeg executable: %w", err)
-		}
-	}
-
-	// 7. Update the app state
-	a.ffmpegStatus = StatusReady
-	a.signalFfmpegReady()
-	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
-
-	log.Println("FFmpeg download and installation complete.")
-	return nil
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -768,7 +510,7 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) initializeBackendsAndPython() {
 	log.Println("Go Routine: Starting backend initialization...")
 
-	// 1. Launch Go's HTTP Server
+	// Launch Go's HTTP Server
 	if err := a.LaunchHttpServer(); err != nil {
 		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Go HTTP server: %v", err)
 		log.Println("Go Routine: " + errMsg)
@@ -786,7 +528,7 @@ func (a *App) initializeBackendsAndPython() {
 		return
 	}
 
-	// 2. Determine if Python is already running (dev mode)
+	// Determine if Python is already running (dev mode)
 	if a.pythonCommandPort != 0 {
 		log.Printf("Go Routine: Python command server detected on port: %d", a.pythonCommandPort)
 		if err := a.registerWithPython(goHTTPServerPort); err != nil {
@@ -858,7 +600,7 @@ func (a *App) registerWithPython(goPort int) error {
 	return fmt.Errorf("failed to register with Python after multiple attempts")
 }
 
-// GetSettings reads settings.json. Creates it with defaults if it doesn't exist.
+// reads settings.json. Creates it with defaults if it doesn't exist.
 func (a *App) GetSettings() (map[string]any, error) {
 	var settingsData map[string]any
 	settingsPath := filepath.Join(a.userResourcesPath, "settings.json")
@@ -901,7 +643,7 @@ func (a *App) GetSettings() (map[string]any, error) {
 	return settingsData, nil
 }
 
-// SaveSettings saves the given configuration data to settings.json.
+// saves the given configuration data to settings.json.
 func (a *App) SaveSettings(settingsData map[string]interface{}) error {
 	jsonData, err := json.MarshalIndent(settingsData, "", "  ")
 	if err != nil {
@@ -923,13 +665,11 @@ func (a *App) SaveSettings(settingsData map[string]interface{}) error {
 func (a *App) SelectDirectory() (string, error) {
 	settings, err := a.GetSettings()
 	if err != nil {
-		// Log the error but don't prevent the dialog from opening
 		log.Printf("Error getting settings for default directory: %v", err)
 	}
 
 	defaultDir := ""
 	if davinciPath, ok := settings["davinciFolderPath"].(string); ok && davinciPath != "" {
-		// Check if the path exists and is a directory
 		info, err := os.Stat(davinciPath)
 		if err == nil && info.IsDir() {
 			defaultDir = davinciPath
@@ -944,288 +684,7 @@ func (a *App) SelectDirectory() (string, error) {
 }
 
 func (a *App) CloseApp() {
-	// Close the app
 	runtime.Quit(a.ctx)
-	// Optionally, you can also perform any cleanup tasks here
-}
-
-func (a *App) DetectSilences(
-	filePath string,
-	loudnessThreshold float64,
-	minSilenceDurationSeconds float64,
-	paddingLeftSeconds float64,
-	paddingRightSeconds float64,
-	minContentDuration float64,
-	clipStartSeconds float64,
-	clipEndSeconds float64,
-	framerate float64,
-) ([]SilencePeriod, error) {
-	if err := a.waitForValidLicense(); err != nil {
-		return nil, fmt.Errorf("license validation failed: %w", err)
-	}
-
-	if err := a.waitForFfmpeg(); err != nil {
-		return nil, err
-	}
-
-	if clipStartSeconds < 0 {
-		clipStartSeconds = 0
-	}
-	if clipEndSeconds <= clipStartSeconds {
-		return nil, fmt.Errorf("clip end (%.3f) must be greater than start (%.3f)", clipEndSeconds, clipStartSeconds)
-	}
-
-	absPath := filepath.Join(a.tmpPath, filePath)
-	// Mark the input file as used after its absolute path is determined
-	a.updateFileUsage(absPath)
-	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)
-	if minSilenceDurationSeconds < 0.009 {
-		minSilenceDurationSeconds = 0.009
-	}
-
-	minSilenceDurationForFFmpeg := fmt.Sprintf("%f", minSilenceDurationSeconds)
-
-	filterGraph := fmt.Sprintf("atrim=start=%.6f:end=%.6f,silencedetect=n=%s:d=%s",
-		clipStartSeconds, clipEndSeconds,
-		loudnessThresholdStr, minSilenceDurationForFFmpeg,
-	)
-
-	args := []string{
-		"-nostdin", "-i", absPath, "-af", filterGraph, "-f", "null", "-",
-	}
-	cmd := ExecCommand(a.ffmpegBinaryPath, args...)
-	var outputBuffer bytes.Buffer
-	cmd.Stderr = &outputBuffer
-
-	if err := cmd.Run(); err != nil && len(outputBuffer.String()) == 0 {
-		return nil, fmt.Errorf("ffmpeg failed: %w. Output: %s", err, outputBuffer.String())
-	}
-
-	var preliminarySilences []SilencePeriod
-	silenceStartRegex := regexp.MustCompile(`silence_start:\s*([0-9]+\.?[0-9]*)`)
-	silenceEndRegex := regexp.MustCompile(`silence_end:\s*([0-9]+\.?[0-9]*)`)
-	scanner := bufio.NewScanner(&outputBuffer)
-
-	var currentStartTime float64 = -1
-	const epsilon = 0.001
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if match := silenceStartRegex.FindStringSubmatch(line); len(match) > 1 {
-			start, _ := strconv.ParseFloat(match[1], 64)
-			currentStartTime = start // ✅ CORRECTED: Timestamps are absolute, no offset needed.
-		}
-
-		if match := silenceEndRegex.FindStringSubmatch(line); len(match) > 1 && currentStartTime != -1 {
-			endTime, _ := strconv.ParseFloat(match[1], 64)
-
-			adjustedStart := currentStartTime
-			adjustedEnd := endTime
-
-			if adjustedStart > clipStartSeconds+epsilon {
-				adjustedStart += paddingLeftSeconds
-			}
-			if adjustedEnd < clipEndSeconds-epsilon {
-				adjustedEnd -= paddingRightSeconds
-			}
-
-			adjustedStart = math.Max(adjustedStart, clipStartSeconds)
-			adjustedEnd = math.Min(adjustedEnd, clipEndSeconds)
-
-			if adjustedEnd-adjustedStart >= minSilenceDurationSeconds {
-				preliminarySilences = append(preliminarySilences, SilencePeriod{
-					Start: adjustedStart,
-					End:   adjustedEnd,
-				})
-			}
-			currentStartTime = -1
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading ffmpeg output: %w", err)
-	}
-
-	if len(preliminarySilences) == 0 {
-		return []SilencePeriod{}, nil
-	}
-
-	if first := preliminarySilences[0]; first.Start-clipStartSeconds > epsilon && first.Start-clipStartSeconds < minContentDuration {
-		preliminarySilences[0].Start = clipStartSeconds
-	}
-	if last := preliminarySilences[len(preliminarySilences)-1]; clipEndSeconds-last.End > epsilon && clipEndSeconds-last.End < minContentDuration {
-		preliminarySilences[len(preliminarySilences)-1].End = clipEndSeconds
-	}
-
-	var mergedSilences []SilencePeriod
-	if len(preliminarySilences) > 0 {
-		current := preliminarySilences[0]
-		for i := 1; i < len(preliminarySilences); i++ {
-			next := preliminarySilences[i]
-			if contentDuration := next.Start - current.End; contentDuration < minContentDuration {
-				current.End = next.End
-			} else {
-				mergedSilences = append(mergedSilences, current)
-				current = next
-			}
-		}
-		mergedSilences = append(mergedSilences, current)
-	}
-
-	return mergedSilences, nil
-}
-
-func (a *App) GetOrDetectSilencesWithCache(
-	filePath string,
-	loudnessThreshold float64,
-	minSilenceDurationSeconds float64,
-	paddingLeftSeconds float64,
-	paddingRightSeconds float64,
-	minContentDuration float64,
-	clipStartSeconds float64,
-	clipEndSeconds float64,
-	framerate float64,
-) ([]SilencePeriod, error) {
-	key := CacheKey{
-		FilePath:                  filePath,
-		LoudnessThreshold:         loudnessThreshold,
-		MinSilenceDurationSeconds: minSilenceDurationSeconds,
-		PaddingLeftSeconds:        paddingLeftSeconds,
-		PaddingRightSeconds:       paddingRightSeconds,
-		MinContentDuration:        minContentDuration,
-		ClipStartSeconds:          clipStartSeconds,
-		ClipEndSeconds:            clipEndSeconds,
-	}
-
-	// 1. Try to read from cache (read lock)
-	a.cacheMutex.RLock()
-	cachedSilences, found := a.silenceCache[key]
-	a.cacheMutex.RUnlock()
-
-	if found {
-		//log.Println("Cache hit for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
-		return cachedSilences, nil
-	}
-
-	// log.Println("Cache miss for key:", key.FilePath, key.LoudnessThreshold, key.MinSilenceDurationSeconds) // For debugging
-
-	// 2. If not found, perform the detection
-	silences, err := a.DetectSilences(
-		filePath,
-		loudnessThreshold,
-		minSilenceDurationSeconds,
-		paddingLeftSeconds,
-		paddingRightSeconds,
-		minContentDuration,
-		clipStartSeconds,
-		clipEndSeconds,
-		framerate,
-	)
-	if err != nil {
-		// Do not cache errors, so subsequent calls can retry.
-		return nil, err
-	}
-
-	// 3. Store the result in the cache (write lock)
-	a.cacheMutex.Lock()
-	a.silenceCache[key] = silences
-	a.cacheMutex.Unlock()
-	return silences, nil
-}
-
-// New method to be called from Wails frontend
-func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
-	maxDb := 0.0 // Consistent with original function; this is now passed to the caching layer.
-
-	if err := a.WaitForFile(filePath); err != nil {
-		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
-	}
-
-	// The caching function GetOrGenerateWaveformWithCache will handle path resolution
-	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
-	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))
-		return nil, fmt.Errorf("failed to get/generate waveform for '%s': %v", filePath, err)
-	}
-
-	// runtime.LogInfof(a.ctx, "Successfully retrieved/generated waveform for: %s, Duration: %.2fs, Peaks: %d",
-	//  filePath, data.Duration, len(data.Peaks))
-	return data, nil
-}
-
-func (a *App) GetOrGenerateWaveformWithCache(
-	webInputPath string,
-	samplesPerPixel int,
-	peakType string,
-	minDb float64,
-	maxDb float64,
-	clipStartSeconds float64,
-	clipEndSeconds float64,
-) (*PrecomputedWaveformData, error) {
-	// First, resolve the webInputPath to a local file system path to check for existence.
-	// This also validates if effectiveAudioFolderPath is set.
-	localFSPath, err := a.resolvePublicAudioPath(webInputPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve web input path '%s' for pre-check: %w", webInputPath, err)
-	}
-	// Mark the input file as used after its absolute path is determined
-	a.updateFileUsage(localFSPath)
-
-	if err := a.WaitForFile(localFSPath); err != nil {
-		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
-	}
-
-	if _, statErr := os.Stat(localFSPath); os.IsNotExist(statErr) {
-		return nil, fmt.Errorf("audio file does not exist at resolved path '%s' (from '%s')", localFSPath, webInputPath)
-	} else if statErr != nil {
-		return nil, fmt.Errorf("error stating file at resolved path '%s': %w", localFSPath, statErr)
-	}
-
-	// The cache key uses the original webInputPath as the primary identifier.
-	key := WaveformCacheKey{
-		FilePath:         webInputPath,
-		SamplesPerPixel:  samplesPerPixel,
-		PeakType:         peakType,
-		MinDb:            minDb,
-		MaxDb:            maxDb,
-		ClipStartSeconds: clipStartSeconds,
-		ClipEndSeconds:   clipEndSeconds,
-	}
-
-	a.cacheMutex.RLock()
-	cachedData, found := a.waveformCache[key]
-	a.cacheMutex.RUnlock()
-
-	if found {
-		return cachedData, nil
-	}
-
-	// --- CACHE MISS: Decide which processor to call ---
-	a.waveformSemaphore <- struct{}{}
-	defer func() {
-		<-a.waveformSemaphore // Release semaphore
-	}()
-
-	var waveformData *PrecomputedWaveformData
-
-	switch peakType {
-	case "linear":
-		waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel, clipStartSeconds, clipEndSeconds)
-	case "logarithmic":
-		waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
-	default:
-		err = fmt.Errorf("unknown peakType: '%s'", peakType)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("error during waveform processing for '%s': %w", webInputPath, err)
-	}
-
-	a.cacheMutex.Lock()
-	a.waveformCache[key] = waveformData
-	a.cacheMutex.Unlock()
-
-	return waveformData, nil
 }
 
 func (a *App) GetPythonReadyStatus() bool {
@@ -1236,31 +695,6 @@ func (a *App) GetFFmpegStatus() FfmpegStatus {
 	return a.ffmpegStatus
 }
 
-const fileUsageFileName = "file_usage.json"
-
-func (a *App) updateFileUsage(filePath string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Ensure the path is absolute and clean
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		log.Printf("Error getting absolute path for file usage: %v", err)
-		return
-	}
-
-	// CRITICAL SAFETY CHECK: Only track files within tmp path
-	if !strings.HasPrefix(absPath, a.tmpPath) {
-		log.Printf("WARNING: Attempted to track file outside tmp path. Skipping: %s", absPath)
-		return
-	}
-
-	// Store only the base filename as the key
-	fileName := filepath.Base(absPath)
-	a.fileUsage[fileName] = time.Now()
-	//log.Printf("Updated usage for file: %s", fileName)
-}
-
 func (a *App) GetAppVersion() string {
 	return a.appVersion
 }
@@ -1269,102 +703,8 @@ func (a *App) GetFfmpegVersion() string {
 	return a.ffmpegVersion
 }
 
-func (a *App) getFileUsagePath() string {
-	return filepath.Join(a.tmpPath, fileUsageFileName)
-}
-
-func (a *App) loadUsageData() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	filePath := a.getFileUsagePath()
-	log.Printf("Attempting to load file usage data from: %s", filePath)
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Println("file_usage.json does not exist. Initializing empty usage data.")
-			a.fileUsage = make(map[string]time.Time)
-			return
-		}
-		log.Printf("Error reading file_usage.json: %v", err)
-		return
-	}
-
-	var rawUsage map[string]string
-	if err := json.Unmarshal(data, &rawUsage); err != nil {
-		log.Printf("Error unmarshaling file_usage.json: %v", err)
-		return
-	}
-
-	// Check if rawUsage is empty after unmarshaling
-	if len(rawUsage) == 0 {
-		log.Println("file_usage.json is empty or contains no valid entries. Initializing empty usage data.")
-		a.fileUsage = make(map[string]time.Time)
-		return
-	}
-
-	a.fileUsage = make(map[string]time.Time)
-	for fileName, v := range rawUsage {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			log.Printf("Error parsing time for %s: %v", fileName, err)
-			continue
-		}
-		// Reconstruct the full path for internal use
-		fullPath := filepath.Join(a.tmpPath, fileName)
-		a.fileUsage[fullPath] = t
-	}
-	log.Printf("Successfully loaded %d entries from file_usage.json", len(a.fileUsage))
-}
-
-func (a *App) saveUsageData() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	filePath := a.getFileUsagePath()
-	//log.Printf("Attempting to save file usage data to: %s. Number of entries: %d", filePath, len(rawUsage))
-
-	rawUsage := make(map[string]string)
-	for fullPath, v := range a.fileUsage {
-		fileName := filepath.Base(fullPath)
-		rawUsage[fileName] = v.Format(time.RFC3339)
-	}
-
-	data, err := json.MarshalIndent(rawUsage, "", "  ")
-	if err != nil {
-		log.Printf("Error marshaling file usage data: %v", err)
-		return
-	}
-
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("Error creating directory for file_usage.json: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		log.Printf("Error writing file_usage.json: %v", err)
-		return
-	}
-	log.Println("Successfully saved file usage data.")
-}
-
-func isValidWav(path string) bool {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return false // File doesn't exist
-	}
-	if err != nil {
-		log.Printf("Error stating file %s: %v", path, err)
-		return false // Some other error
-	}
-	// Exists and is not an empty file
-	return !info.IsDir() && info.Size() > 44 // 44 bytes is a common WAV header size
-}
-
 type ConversionProgress struct {
-	FilePath   string  `json:"filePath"` // The final ABSOLUTE output path
+	FilePath   string  `json:"filePath"`
 	Percentage float64 `json:"percentage"`
 	Error      string  `json:"error,omitempty"`
 }
@@ -1383,8 +723,6 @@ func (a *App) GetCurrentConversionProgress() map[string]float64 {
 	})
 	return progressMap
 }
-
-// In app.go - Replace your existing StandardizeAudioToWav function
 
 var durationRegex = regexp.MustCompile(`Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})`)
 
@@ -1405,86 +743,6 @@ func parseDuration(s string) (time.Duration, error) {
 
 }
 
-// calculateMP3DelaySec calculates the specific delay for MP3 files.
-// It uses a set of hardcoded values for known sample rates from the user's
-// provided data for perfect accuracy, and falls back to a predictive model
-// for all other sample rates.
-func calculateMP3DelaySec(sampleRate int) float64 {
-	return 0.0
-	//Use a switch for high performance and clarity.
-	// switch sampleRate {
-	// // --- Hardcoded values from your delay-data.csv for perfect precision ---
-	// case 8000:
-	// 	return 0.210
-	// case 16000:
-	// 	return 0.104994792
-	// case 44100:
-	// 	return 0.051177083
-	// case 48000:
-	// 	return 0.047015625
-	// default:
-	// 	// --- Fallback to the predictive model for any other sample rate ---
-	// 	// This ensures we can handle any MP3 file gracefully.
-	// 	const a = 1.30299795e+07
-	// 	const k = 1.24413193
-	// 	const b = 28.43853540
-
-	// 	fs := float64(sampleRate)
-
-	// 	// Calculate the delay in milliseconds using the model.
-	// 	delayMilliseconds := (a / math.Pow(fs, k)) + b
-
-	// 	// Convert the delay from milliseconds to seconds.
-	// 	return delayMilliseconds / 1000.0
-	// }
-}
-
-func (a *App) getStartTimeWithFFmpeg(inputPath string) (float64, error) {
-	cmd := ExecCommand(a.ffmpegBinaryPath, "-i", inputPath)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	_ = cmd.Run()
-
-	output := stderr.String()
-
-	// Regex for "start: <value>"
-	re := regexp.MustCompile(`(?m)start:\s+([0-9.]+)`)
-	matches := re.FindStringSubmatch(output)
-	if len(matches) >= 2 {
-		startTime := strings.TrimSpace(matches[1])
-		return strconv.ParseFloat(startTime, 64)
-	}
-
-	// Fallback regex for "pts_time:<value>"
-	rePTS := regexp.MustCompile(`(?m)pts_time:([0-9.]+)`)
-	matches = rePTS.FindStringSubmatch(output)
-	if len(matches) >= 2 {
-		startTime := strings.TrimSpace(matches[1])
-		return strconv.ParseFloat(startTime, 64)
-	}
-
-	return 0.0, fmt.Errorf("start time not found in ffmpeg output")
-}
-
-func (a *App) createSilenceFile(tempDir string, delaySec float64, sampleRate int, outputPath string) (string, error) {
-	filename := filepath.Base(outputPath)
-
-	silencePath := filepath.Join(tempDir, fmt.Sprintf("silence_%s.wav", filename))
-	durationStr := fmt.Sprintf("%.9f", delaySec)
-
-	cmd := ExecCommand(a.ffmpegBinaryPath,
-		"-f", "lavfi",
-		"-i", fmt.Sprintf("anullsrc=channel_layout=mono:sample_rate=%d", sampleRate),
-		"-t", durationStr,
-		"-y", silencePath)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate silence WAV: %w\n%s", err, output)
-	}
-	return silencePath, nil
-}
-
 func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *int) error {
 	tracker := &ConversionTracker{Done: make(chan error, 1)}
 	actualTracker, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker)
@@ -1497,22 +755,18 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		return err
 	}
 
-	// This goroutine is now the "owner" of the conversion task.
-	// We must ensure the Done channel is closed and the tracker entry is removed.
 	defer func() {
 		close(tracker.Done)
 		a.conversionTracker.Delete(outputPath)
 		log.Printf("StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
 
-	// 2. NOW, wait for FFmpeg to be ready.
 	if err := a.waitForFfmpeg(); err != nil {
-		// If waiting fails (e.g., app quits), signal the error to any waiters.
 		tracker.Done <- err
 		return err
 	}
 
-	if isValidWav(outputPath) {
+	if isValidWavFile(outputPath) {
 		tracker.Done <- nil
 		return nil
 	}
@@ -1522,7 +776,6 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	var infoOutput bytes.Buffer
 	infoCmd.Stderr = &infoOutput
 	_ = infoCmd.Run() // Ignore error as ffmpeg prints info to stderr even on failure
-	infoStr := infoOutput.String()
 
 	totalDuration, err := parseDuration(infoOutput.String())
 	if err != nil {
@@ -1531,46 +784,13 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	}
 	totalDurationUs := float64(totalDuration.Microseconds())
 
-	// --- START OF MODIFIED LOGIC ---
-	var startTime float64
-
-	// Regex to find the audio stream, its codec, and sample rate.
-
-	reAudioStream := regexp.MustCompile(`Stream #\d+:\d+.*: Audio: (\w+).*?(\d+)\s+Hz`)
-	matches := reAudioStream.FindStringSubmatch(infoStr)
-
-	var sampleRate int = 44100 // Default sample rate if not found
-	// Check if the audio stream is MP3.
-	if len(matches) >= 3 && matches[1] == "mp3" {
-		codec := matches[1]
-		sampleRateStr := matches[2]
-		sampleRate, err = strconv.Atoi(sampleRateStr)
-		if err == nil && sampleRate > 0 {
-			// If it's an MP3, use the custom calculation.
-			startTime = calculateMP3DelaySec(sampleRate)
-			log.Printf("Detected MP3 audio stream (codec: %s, rate: %d Hz). Applying calculated delay of %.6f seconds.", codec, sampleRate, startTime)
-		}
-	}
-
-	// If startTime is still 0, it's not an MP3 or parsing failed. Fall back to the original metadata method.
-	if startTime == 0.0 {
-		log.Printf("File is not MP3 or info not found; falling back to metadata start_time.")
-		startTime, err = a.getStartTimeWithFFmpeg(inputPath)
-		if err != nil {
-			log.Printf("Could not get start time for %s via metadata: %v", inputPath, err)
-			startTime = 0.0 // Default to 0 if we can't determine it
-		}
-	}
-
-	// 3. Assemble the correct ffmpeg command (channel-aware or mono-mixdown)
+	// Assemble the correct ffmpeg command (channel-aware or mono-mixdown)
 	args := []string{
 		"-y",
 		"-i", inputPath,
 	}
 
 	var filterChain []string
-
-	tempDir := os.TempDir()
 
 	// 2. Add channel mapping or mono mixdown filters to the SAME chain.
 	if sourceChannel != nil && *sourceChannel > 0 {
@@ -1579,26 +799,19 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		mapFilter := fmt.Sprintf("channelmap=map=%d", channelIndex)
 		filterChain = append(filterChain, mapFilter)
 	} else {
-		// For a standard mono mixdown, it's cleaner to use the 'pan' filter
-		// than the '-ac 1' output option when other filters are in use.
 		log.Printf("Standardizing '%s' to mono", filepath.Base(inputPath))
 		panFilter := "pan=mono|c0=0.5*FL+0.5*FR"
 		filterChain = append(filterChain, panFilter)
 	}
 
-	// 3. If we have any filters in our chain, join them with commas and add them to the args.
+	// If we have any filters in our chain, join them with commas and add them to the args.
 	if len(filterChain) > 0 {
 		finalFilterString := strings.Join(filterChain, ",")
 		args = append(args, "-af", finalFilterString)
 	}
 
-	// 4. Add the final output codec and other options.
-	// The -acodec option is now outside the if/else block for clarity.
 	args = append(args, "-acodec", "pcm_s16le")
-	// Add the progress flag and output path to complete the command
 	args = append(args, "-progress", "pipe:1", outputPath)
-
-	// 4. Execute the command and process its output
 	cmd := ExecCommand(a.ffmpegBinaryPath, args...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -1622,7 +835,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		runtime.EventsEmit(a.ctx, "conversion:progress", ConversionProgress{FilePath: outputPath, Percentage: 0})
 	}
 
-	// 5. Goroutine to read and parse progress from stdout
+	// Goroutine to read and parse progress from stdout
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -1665,7 +878,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	var stderrBuf bytes.Buffer
 	go io.Copy(&stderrBuf, stderrPipe) // Silently consume stderr
 
-	// 6. Wait for completion and signal the result
+	// Wait for completion and signal the result
 	err = cmd.Wait()
 	wg.Wait() // Ensure the progress scanner has finished reading
 
@@ -1674,44 +887,6 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		runtime.EventsEmit(a.ctx, "conversion:error", ConversionProgress{FilePath: outputPath, Error: finalErr.Error()})
 		tracker.Done <- finalErr
 		return finalErr
-	}
-
-	// Now handle silence and concat
-	if startTime > 0 {
-		//startTime *= 2
-		log.Printf("Detected start time %.6f for '%s'. Adding silence at the beginning.", startTime, filepath.Base(inputPath))
-		silenceWav, err := a.createSilenceFile(tempDir, startTime, sampleRate, outputPath)
-		if err != nil {
-			log.Printf("Failed to create silence file for '%s': %v", filepath.Base(inputPath), err)
-			tracker.Done <- err
-			return err
-		}
-		// rename the outputPath to a temporary, intermediate file
-		tempOutputPath := outputPath + ".temp.wav"
-		if err := os.Rename(outputPath, tempOutputPath); err != nil {
-			tracker.Done <- fmt.Errorf("failed to rename output file: %w", err)
-			return err
-		}
-		concatListPath := filepath.Join(tempDir, "concat_list.txt")
-		concatContent := fmt.Sprintf("file '%s'\nfile '%s'\n", silenceWav, tempOutputPath)
-		if err := os.WriteFile(concatListPath, []byte(concatContent), 0644); err != nil {
-			tracker.Done <- err
-			return err
-		}
-
-		concatCmd := ExecCommand(a.ffmpegBinaryPath,
-			"-f", "concat", "-safe", "0", "-i", concatListPath,
-			"-acodec", "pcm_s16le", "-y", outputPath)
-
-		concatOut, err := concatCmd.CombinedOutput()
-		defer os.Remove(tempOutputPath)
-		defer os.Remove(silenceWav)
-		defer os.Remove(concatListPath)
-		if err != nil {
-			tracker.Done <- fmt.Errorf("concat failed: %w\n%s", err, concatOut)
-			return err
-		}
-		log.Printf("Successfully concatenated silence to '%s'.", filepath.Base(outputPath))
 	}
 
 	// On success, signal 100% and completion
@@ -1733,10 +908,8 @@ func (a *App) WaitForFile(path string) error {
 		return nil
 	}
 
-	// It's in the tracker, so we wait for the conversion to finish.
 	log.Printf("Waiting for file to be ready: %s", path)
 
-	// 1. Correctly assert the value to our tracker struct type.
 	tracker, ok := val.(*ConversionTracker)
 	if !ok {
 		// This should theoretically never happen if we only ever store *ConversionTracker.
@@ -1744,7 +917,7 @@ func (a *App) WaitForFile(path string) error {
 		return fmt.Errorf("internal error: invalid type found in conversion tracker for path %s", path)
 	}
 
-	// 2. Wait on the 'Done' channel *within* the struct.
+	// Wait on the 'Done' channel *within* the struct.
 	// This will block until an error is sent or the channel is closed (on success).
 	err := <-tracker.Done
 
@@ -1941,16 +1114,11 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 		return nil
 	}
 
-	// This function now just dispatches the mixdown jobs.
-	// It does not need to wait for them or handle their errors directly,
-	// as any part of the app that needs the file will wait and get the error.
 	for processedName, representativeItem := range contentMap {
 		outputPath := filepath.Join(a.tmpPath, processedName)
 
-		// Mark the processed file as used
 		a.updateFileUsage(outputPath)
 
-		// Kick off the mixdown job for this clip. This call is now non-blocking.
 		a.ExecuteAndTrackMixdown(projectData.Timeline.ProjectFPS, outputPath, representativeItem.NestedClips)
 	}
 
@@ -1959,13 +1127,12 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 }
 
 func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips []*NestedAudioTimelineItem) {
-	// 1. Register the job. If another process is already working on this, we don't need to do anything.
 	tracker := &ConversionTracker{Done: make(chan error, 1)}
 	if _, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker); loaded {
 		return // Job is already running, exit.
 	}
 
-	// 2. Launch the actual work in a new goroutine.
+	// Launch the actual work in a new goroutine.
 	go func() {
 		// This goroutine is the "owner" and is responsible for cleanup and signaling.
 		defer func() {
@@ -1978,7 +1145,7 @@ func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips
 		defer func() { <-a.ffmpegSemaphore }()
 
 		var err error
-		if !isValidWav(outputPath) {
+		if !isValidWavFile(outputPath) {
 			err = a.executeMixdownCommand(fps, outputPath, nestedClips)
 		}
 

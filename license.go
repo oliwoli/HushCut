@@ -24,6 +24,33 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+func (a *App) signalLicenseOk() {
+	log.Println("Signaling that license is now valid.")
+	a.licenseValid = true
+	a.licenseOkChan <- true
+	runtime.EventsEmit(a.ctx, "license:valid", nil)
+}
+
+func (a *App) waitForValidLicense() error {
+	a.licenseMutex.Lock()
+	isReady := a.licenseValid
+	a.licenseMutex.Unlock()
+
+	if isReady {
+		return nil
+	}
+
+	log.Println("Task is waiting for License activation...")
+	select {
+	case <-a.licenseOkChan:
+		log.Println("License activated. Resuming task.")
+		return nil
+	case <-a.ctx.Done():
+		log.Println("Application is shutting down; aborting License activation.")
+		return a.ctx.Err()
+	}
+}
+
 // verifySignature checks if the data was signed by your private key.
 func (a *App) verifySignature(data map[string]interface{}, signatureB64 string) error {
 	// Parse public key

@@ -126,12 +126,6 @@ function supportsRealBackdrop() {
   return applied && applied !== "none";
 }
 
-// EventsOn("ffmpeg:missing", (data) => {
-//   console.log("Event: MISSING FFMPEG", data);
-//   // Simple alert for now, TODO: use nicer shadcn component
-//   alert("missing ffmpeg bljiad");
-// });
-
 const Status = {
     Unknown: 0,
     Ready: 1,
@@ -147,15 +141,12 @@ function AppContent() {
 
 
   useEffect(() => {
-    // Listen for the "ffmpeg:status" event from the Go backend.
-    // The 'status' variable will be the boolean payload (true or false).
     EventsOn("ffmpeg:status", (status) => {
         console.log("Received ffmpeg status from backend:", status);
         setFFmpegReady(status);
     });
 
-    // It's good practice to have a fallback in case the event is missed,
-    // though the event is the primary mechanism.
+    // fallback, probably not needed
     const checkInitialStatus = async () => {
         const isFfmpegReady = await GetFFmpegStatus();
         // Only set if status is still unknown
@@ -163,21 +154,16 @@ function AppContent() {
             setFFmpegReady(isFfmpegReady);
         }
     };
-
-    // We can still call this, but the event will likely arrive first
-    // and provide the definitive answer.
     checkInitialStatus();
   }, []);
 
   useEffect(() => {
-    // This ensures we only run when the status changes from false to true
     if (pythonReady && !prevPythonReady) {
       console.log("Python backend is now ready, triggering a re-sync.");
       handleSyncRef.current();
     }
   }, [pythonReady, prevPythonReady]);
 
-  // Effect to listen for Python status updates from the Go backend
   useEffect(() => {
     const checkInitialStatus = async () => {
       setPythonReady(await GetPythonReadyStatus());
@@ -194,27 +180,7 @@ function AppContent() {
     return () => {
       if (typeof unsubscribe === "function") unsubscribe(); // Cleanup listener
     };
-  }, []); // Empty dependency array means this runs once on mount
-
-  useEffect(() => {
-    // Don't do anything until the initial status check is complete.
-    if (ffmpegStatus === Status.Unknown) {
-      return;
-    }
-
-    // This condition elegantly handles two scenarios:
-    // 1. The initial check finds FFmpeg is ready (null -> true).
-    // 2. The user downloads FFmpeg (false -> true).
-    if (ffmpegStatus === Status.Ready && prevFfmpegStatus !== Status.Ready) {
-      console.log("FFmpeg is ready, calling handleSync.");
-      handleSync();
-    }
-    // This handles the case where the initial check finds FFmpeg is NOT ready.
-    else if (ffmpegStatus === Status.Missing && prevFfmpegStatus === Status.Unknown) {
-      console.log("Initial FFmpeg check failed, calling handleSync to show alert.");
-      handleSync();
-    }
-  }, [ffmpegStatus, prevFfmpegStatus]);
+  }, []); // runs once on mount
 
   const isBusy = useAppState(s => s.isBusy);
   const setBusy = useAppState(s => s.setBusy);
@@ -233,7 +199,6 @@ function AppContent() {
   const [httpPort, setHttpPort] = useState<number | null>(null);
   const setToken = useAppState(s => s.setToken);
 
-  //const projectData = useGlobalStore((s) => s.projectData);
   const [projectData, setProjectData] =
     useState<main.ProjectDataPayload | null>(null);
 
@@ -251,8 +216,6 @@ function AppContent() {
     if (currTimecode) {
       const currentFrame = currTimecode.frameCount;
 
-      // 2. Find the clip that contains the current frame
-      // A clip "contains" the frame if the frame is between its start and end markers.
       const clipAtTimecode = audioItems.find(
         (item) =>
           currentFrame >= item.start_frame && currentFrame < item.end_frame
@@ -277,14 +240,12 @@ function AppContent() {
     }
   }, [currTimecode, audioItems, timelineFps]);
 
-  // 3. Use useMemo for PURE calculations. It now only derives the active clip.
   const currentActiveClip = useMemo(() => {
     if (!projectData || !httpPort || !projectData.timeline?.audio_track_items) {
       return null;
     }
     if (audioItems.length === 0) return null;
 
-    // Find the item corresponding to the current ID.
     let itemToDisplay = currentClipId
       ? audioItems.find(
         (item) => (item.id || item.processed_file_name) === currentClipId
@@ -307,13 +268,10 @@ function AppContent() {
     }
     console.log("syncing...")
     if (ffmpegStatus == Status.Unknown) {
-      //const isFfmpegReady = await GetFFmpegStatus();
-      //setFFmpegReady(isFfmpegReady);
       return
     }
 
     if (ffmpegStatus == Status.Missing && hasValidLicense) {
-      console.log("no ffmpeg! (handle sync");
       EventsEmit("showAlert", {
         title: "FFmpeg Download Needed",
         message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
@@ -321,8 +279,7 @@ function AppContent() {
           {
             label: "Download",
             onClick: async () => {
-              // This logic is moved from the old toast action.
-              // We can still use toast for in-progress/success feedback.
+              // TODO: needs to show progress bar
               toast.info("Downloading FFmpeg...");
               ffmpegStatus == Status.Unknown
               try {
@@ -339,8 +296,6 @@ function AppContent() {
       });
       return;
     }
-
-    //const loadingToastId = toast.loading("Syncing with DaVinci Resolve…");
     setBusy(true);
     setSyncing(true);
 
@@ -348,7 +303,6 @@ function AppContent() {
       newData: main.ProjectDataPayload | null
     ) => {
       if (newData) {
-        // extract the timecode
         const timecode = Timecode(
           newData.timeline.curr_timecode,
           newData.timeline.fps as FRAMERATE
@@ -359,9 +313,7 @@ function AppContent() {
         newData.timeline.curr_timecode = "";
       }
       if (!deepEqual(projectData, newData)) {
-        // Using fast-deep-equal
         setProjectData(newData);
-
         setHasProjectData(!!newData);
 
         if (!newData) return
@@ -396,19 +348,10 @@ function AppContent() {
         );
         setProjectData(null);
         setHasProjectData(false);
-        // toast.error("Sync failed", {
-        //   id: loadingToastId,
-        //   description: response.message || "An error occurred during sync.",
-        //   duration: 5000,
-        // });
         setBusy(false);
         setSyncing(false);
       } else if (response && response.status === "success") {
         await conditionalSetProjectData(response.data);
-        // toast.success("Synced with DaVinci Resolve", {
-        //   id: loadingToastId,
-        //   duration: 1500,
-        // });
         setBusy(false);
         setSyncing(false);
       } else {
@@ -420,31 +363,20 @@ function AppContent() {
         setProjectData(null);
         setHasProjectData(false);
         setTimelineName(null)
-        // toast.error("Sync failed: Unexpected response format", {
-        //   id: loadingToastId,
-        //   duration: 5000,
-        // });
         setBusy(false);
         setSyncing(false);
       }
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
-      //alert(`Error calling SyncWithDavinci or Go-level error: ${err}`);
       setProjectData(null);
       setHasProjectData(false);
       setTimelineName(null)
 
       if (err && err.alertIssued) {
-        //toast.dismiss(loadingToastId);
       } else {
         const errorMessage =
           err?.message ||
           (typeof err === "string" ? err : "An unknown error occurred.");
-        // toast.error("Sync Error", {
-        //   id: loadingToastId,
-        //   description: `${errorMessage}`,
-        //   duration: 5000,
-        // });
       }
       setBusy(false);
       setSyncing(false);
@@ -460,14 +392,9 @@ function AppContent() {
 
   useEffect(() => {
     console.count("ffmpegReady useEffect ran");
-    // Don't do anything until the initial status check is complete.
     if (ffmpegStatus === Status.Unknown) {
       return;
     }
-
-    // This condition elegantly handles two scenarios:
-    // 1. The initial check finds FFmpeg is ready (null -> true).
-    // 2. The user downloads FFmpeg (false -> true).
     if (ffmpegStatus === Status.Ready && prevFfmpegStatus !== Status.Ready) {
       console.log("FFmpeg is ready, calling handleSync (via ref).");
       handleSyncRef.current();
@@ -478,8 +405,6 @@ function AppContent() {
       handleSyncRef.current();
     }
   }, [ffmpegStatus, prevFfmpegStatus]);
-
-  const initialInitDone = useRef(false); // Ref to track if the effect has run
 
   useEffect(() => {
     const hasBlur = supportsRealBackdrop();
@@ -537,14 +462,12 @@ function AppContent() {
       }
     };
 
-    // 1. Set up the event listener for the future
     const unsubscribeGoListener = EventsOn("go:ready", initializeApp);
 
-    // 2. Immediately check if the backend is ALREADY ready (in case we missed the event)
     const checkIsAlreadyReady = async () => {
       const port = await GetGoServerPort();
       if (port > 0) {
-        // The server is already up. We missed the event, so run initialization manually.
+        // fallback, probably not needed
         console.log("App.tsx: Go backend was already ready. Initializing...");
         initializeApp();
       }
@@ -552,13 +475,12 @@ function AppContent() {
 
     checkIsAlreadyReady();
 
-    // Cleanup the listener when the component unmounts
     return () => {
       unsubscribeGoListener();
     };
-  }, []); // Empty array ensures this setup runs only once
+  }, []);
 
-  // check if the license is valid
+  // License check
   useEffect(() => {
     const checkLicenseValidity = async () => {
       if (hasValidLicense !== null) return; // Already checked
@@ -572,18 +494,11 @@ function AppContent() {
           message: "Please enter your license key.",
           status: "warning",
         });
-
-        // if (userLicenseKey) {
-        //   const licenseData = await VerifyLicense(userLicenseKey);
-        //   console.log("App.tsx: License verification result:", licenseData);
-        // };
       }
     }
     checkLicenseValidity();
   }, []);
 
-
-  // Effect to register Wails event listeners (runs once on mount)
   useEffect(() => {
     const handleProjectData = (data: main.ProjectDataPayload) => {
       console.log(
@@ -592,22 +507,16 @@ function AppContent() {
       );
       setProjectData(data);
     };
-    // Register the event listener
     const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
-    // It's good practice to have a cleanup, though Wails might handle it.
-    // If EventsOn returns a function to unlisten, use it here.
+
     return () => {
       if (typeof unsubscribe === "function") unsubscribe();
     };
   }, []);
 
-
-
   const syncTimeoutRef = useRef<number | null>(null);
   const syncMouseUpListenerRef = useRef<(() => void) | null>(null);
 
-  // Helper to cancel any scheduled sync operation.
-  // This is useful on blur or unmount.
   const cancelPendingSync = () => {
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
@@ -664,42 +573,33 @@ function AppContent() {
         if (!response || response.status === "error") {
           const errMessage = response?.message || "Unknown error occurred in timeline generation.";
           console.error("Executing pending: Timeline generation failed:", errMessage);
-          // TODO: Add error toast
+          // TODO: Add error message
           return;
         }
         console.log("Executing pending: 'HushCut Silences' process finished successfully.");
-        // TODO: Add success toast
       }
     } catch (error) {
       console.error("Executing pending: Error during 'HushCut Silences' process:", error);
-      // TODO: Add error toast
+      // TODO: Add error message
     }
   };
 
   const handleFocusWithDragDelay = () => {
-    // First, cancel any previously pending sync, just in case.
     cancelPendingSync();
 
     const executeSyncAndCleanup = () => {
-      // Ensure cleanup happens, even if called directly by the timeout.
       cancelPendingSync();
 
       console.log("Drag-friendly delay is over. Executing sync.");
       handleSync();
     };
 
-    // Store the listener function in a ref so it can be removed by other functions.
     syncMouseUpListenerRef.current = executeSyncAndCleanup;
 
-    console.log("Window focused. Waiting for mouseup or a short timeout to sync.");
-
-    // Add the listener for the mouse release. We manage removal manually.
     window.addEventListener('mouseup', syncMouseUpListenerRef.current, { capture: true });
 
     // Set a fallback timeout for non-mouse focus (e.g., Alt+Tab).
     syncTimeoutRef.current = setTimeout(() => {
-      console.log("Sync fallback timeout triggered.");
-      // Call the main handler, which will sync and clean up.
       executeSyncAndCleanup();
     }, 1200);
   };
@@ -946,12 +846,12 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
 
 
 interface ClientPortalProps {
-  children: React.ReactNode; // The standard type for any valid React child
+  children: React.ReactNode;
   targetId: string;
 }
 
 const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
-  if (typeof window === 'undefined') return null; // Skip SSR
+  if (typeof window === 'undefined') return null;
 
   const container = document.getElementById(targetId);
   return container ? createPortal(children, container) : null;

@@ -387,27 +387,21 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     useAnimationFrameWithResizeObserver: true,
   });
 
-
-  // ✨ ADDED: Effect to scroll to and focus the selected clip
   useEffect(() => {
     if (!currentFileId) return;
 
     const selectedIndex = sortedItems.findIndex(item => item.id === currentFileId);
 
     if (selectedIndex !== -1) {
-      // Scroll the item into the center of the view
       columnVirtualizer.scrollToIndex(selectedIndex, { align: 'center', behavior: 'smooth' });
 
-      // Focus the button element after a short delay to allow for the scroll
       setTimeout(() => {
         const buttonEl = itemRefs.current.get(currentFileId);
-        buttonEl?.focus({ preventScroll: true }); // preventScroll avoids a second jump
-      }, 150); // Delay may need adjustment depending on scroll animation
+        buttonEl?.focus({ preventScroll: true });
+      }, 150);
     }
   }, [currentFileId, sortedItems, columnVirtualizer]);
 
-
-  // Get the virtual items to render
   const virtualItems = columnVirtualizer.getVirtualItems();
 
   useEffect(() => {
@@ -415,20 +409,17 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     if (!element) return;
 
     const handleWheel = (e: globalThis.WheelEvent) => {
-      // Find the scrollable viewport inside the component
       const viewport = element.querySelector<HTMLDivElement>('[data-slot="scroll-area-viewport"]');
       if (!viewport || e.deltaY === 0) return;
 
-      // This will now work because the listener is not passive
       e.preventDefault();
 
       viewport.scrollBy({
         left: e.deltaY,
-        behavior: 'auto', // 'auto' often feels more responsive than 'smooth' for wheel scrolling
+        behavior: 'auto',
       });
     };
 
-    // Add the event listener with the crucial `{ passive: false }` option
     element.addEventListener('wheel', handleWheel, { passive: false });
 
     return () => {
@@ -469,7 +460,6 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
               }}
             >
               <AudioClip
-                // ✨ Pass the ref callback to the child component
                 forwardedRef={(el) => { itemRefs.current.set(item.id, el); }}
                 index={String(virtualItem.index + 1).padStart(String(sortedItems.length).length, '0')}
                 item={item}
