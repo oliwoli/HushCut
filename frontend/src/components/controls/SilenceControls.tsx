@@ -43,7 +43,7 @@ const _MinDurationControl = React.memo(() => {
                 <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
                     <SliderZag
                         id={`min-duration-${currentClipId}`}
-                        min={0} max={5} step={0.001}
+                        min={0} max={2} step={0.001}
                         value={[minDuration]}
                         onChange={(vals) => setMinDuration(vals[0])}
                         onDoubleClick={resetMinDuration}
@@ -195,7 +195,7 @@ const _MinContentControl = React.memo(() => {
                 <div className="flex w-56 items-center gap-2" aria-disabled={isDisabled}>
                     <SliderZag
                         id={`min-content-${currentClipId}`}
-                        min={0} max={5} step={0.01}
+                        min={0} max={1} step={0.01}
                         value={[minContent]}
                         onChange={(vals) => setMinContent(vals[0])}
                         onDoubleClick={resetMinDuration}

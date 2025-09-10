@@ -22,8 +22,6 @@ export function GetFfmpegVersion():Promise<string>;
 
 export function GetGoServerPort():Promise<number>;
 
-export function GetMachineID():Promise<string>;
-
 export function GetOrDetectSilencesWithCache(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number):Promise<Array<main.SilencePeriod>>;
 
 export function GetOrGenerateWaveformWithCache(arg1:string,arg2:number,arg3:string,arg4:number,arg5:number,arg6:number,arg7:number):Promise<main.PrecomputedWaveformData>;

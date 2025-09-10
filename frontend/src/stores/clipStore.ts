@@ -62,10 +62,10 @@ export const useTProjectDataStore = create<ProjectDataStore>((set) => ({
 // The SINGLE source of truth for default parameter values
 export const defaultParameters = {
   threshold: -30,
-  minDuration: 1.0,
-  paddingLeft: 0.5,
-  paddingRight: 0.5,
-  minContent: 0.0,
+  minDuration: 0.5,
+  paddingLeft: 0.0,
+  paddingRight: 0.0,
+  minContent: 0.1,
   paddingLocked: true,
   bypassed: false
 };

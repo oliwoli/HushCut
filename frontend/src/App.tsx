@@ -24,7 +24,7 @@ import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
 import { EventsEmit, EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
-import WaveformPlayer from "./components/audio/waveform";
+import WaveformPlayer from "./components/audio/waveformPlayer";
 import RemoveSilencesButton, { deriveAllClipDetectionParams, prepareProjectDataWithEdits } from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
 import { usePrevious, useWindowFocus } from "./hooks/hooks";
