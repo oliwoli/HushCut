@@ -381,6 +381,7 @@ func (a *App) startup(ctx context.Context) {
 		ffmpegBinName = "ffmpeg.exe"
 	}
 	a.ffmpegBinaryPath = filepath.Join(a.userResourcesPath, ffmpegBinName)
+
 	if !binaryExists(a.ffmpegBinaryPath) {
 		// log.Printf("Primary ffmpeg resolution failed or binary not usable (%v). Falling back to system PATH...", err)
 		log.Printf("ffmpeg not found at %s", a.ffmpegBinaryPath)
@@ -394,6 +395,23 @@ func (a *App) startup(ctx context.Context) {
 			//log.Printf("Could not find ffmpeg binary in any known location or system PATH: %v", lookupErr)
 			log.Print("no ffmpeg installation in system PATH")
 		}
+
+		platform := runtime.Environment(a.ctx).Platform
+		if platform == "windows" {
+			cmd := exec.Command("cmd", "/c", "where", "ffmpeg")
+			out, err := cmd.Output()
+			if err == nil && len(out) > 0 {
+				cleanPath := strings.TrimSpace(string(out))
+				firstPath := strings.Fields(cleanPath)[0]
+
+				a.ffmpegBinaryPath = firstPath
+				log.Printf("Found and sanitized ffmpeg path: %s", a.ffmpegBinaryPath)
+				a.ffmpegStatus = StatusReady
+			} else {
+				log.Println("ffmpeg could not be detected: ", err)
+			}
+		}
+
 	} else {
 		log.Printf("ffmpeg found at %s", a.ffmpegBinaryPath)
 		a.ffmpegStatus = StatusReady
