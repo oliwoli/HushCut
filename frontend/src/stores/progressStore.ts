@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { EventsOn } from '@wails/runtime/runtime';
+import { Percent } from 'lucide-react';
 
 const getFileName = (fullPath: string): string => {
   if (!fullPath) return '';
@@ -13,12 +14,14 @@ const generateWaveformJobKey = (fileName: string, start: number, end: number): s
 interface ProgressState {
   conversionProgress: Record<string, number>;
   waveformProgress: Record<string, number>;
+  downloadProgress: Record<string, number>;
   conversionErrors: Record<string, boolean>;
 }
 
 export const useProgressStore = create<ProgressState>()(() => ({
   conversionProgress: {},
   waveformProgress: {},
+  downloadProgress: {},
   conversionErrors: {},
 }));
 
@@ -32,6 +35,19 @@ export function initializeProgressListeners() {
       }));
     }
   });
+
+EventsOn("download:progress", (e) => {
+  const fileName = getFileName(e.filePath);
+  if (!fileName) return;
+
+  useProgressStore.setState(state => {
+    const last = state.downloadProgress[fileName] ?? 0;
+    // only update if changed by at least 1%
+    if (e.percentage !== 100 && Math.abs(last - e.percentage) < 0.1) return state;
+    return { downloadProgress: { ...state.downloadProgress, [fileName]: e.percentage } };
+  });
+});
+
 
   EventsOn('conversion:done', (e: { filePath: string }) => {
     const fileName = getFileName(e.filePath);

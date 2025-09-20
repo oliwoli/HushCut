@@ -63,7 +63,7 @@ type App struct {
 	ffmpegStatus      FfmpegStatus
 	ffmpegSemaphore   chan struct{}
 	waveformSemaphore chan struct{}
-	conversionTracker sync.Map
+	progressTracker   sync.Map
 	fileUsage         map[string]time.Time
 	mu                sync.Mutex
 
@@ -91,7 +91,7 @@ func NewApp() *App {
 		pendingTasks:      make(map[string]chan PythonCommandResponse),
 		ffmpegSemaphore:   make(chan struct{}, 8),
 		waveformSemaphore: make(chan struct{}, 3),
-		conversionTracker: sync.Map{},
+		progressTracker:   sync.Map{},
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -112,10 +112,11 @@ func (a *App) OpenURL(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
 }
 
-type ConversionTracker struct {
+type ProgressTracker struct {
 	mu         sync.RWMutex // Protects access to the percentage
 	Percentage float64
 	Done       chan error
+	TaskType   string
 }
 
 func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
@@ -387,7 +388,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("ffmpeg not found at %s", a.ffmpegBinaryPath)
 		a.ffmpegStatus = StatusMissing
 		// TODO: figure out how to handle versions (accept locally installed ffmpeg if same minor version?)
-		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil && a.ffmpegStatus != StatusMissing {
 			a.ffmpegBinaryPath = pathInSystem
 			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
 			a.ffmpegStatus = StatusReady
@@ -720,17 +721,18 @@ func (a *App) GetFfmpegVersion() string {
 	return a.ffmpegVersion
 }
 
-type ConversionProgress struct {
+type ProgressStatus struct {
 	FilePath   string  `json:"filePath"`
 	Percentage float64 `json:"percentage"`
 	Error      string  `json:"error,omitempty"`
+	TaskType   string  `json:"taskType"`
 }
 
-func (a *App) GetCurrentConversionProgress() map[string]float64 {
+func (a *App) GetCurrentProgressStatus() map[string]float64 {
 	progressMap := make(map[string]float64)
-	a.conversionTracker.Range(func(key, value interface{}) bool {
+	a.progressTracker.Range(func(key, value interface{}) bool {
 		filePath := key.(string)
-		tracker := value.(*ConversionTracker)
+		tracker := value.(*ProgressTracker)
 
 		tracker.mu.RLock() // Lock for reading
 		progressMap[filePath] = tracker.Percentage
@@ -761,20 +763,20 @@ func parseDuration(s string) (time.Duration, error) {
 }
 
 func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *int) error {
-	tracker := &ConversionTracker{Done: make(chan error, 1)}
-	actualTracker, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker)
+	tracker := &ProgressTracker{Done: make(chan error, 1)}
+	actualTracker, loaded := a.progressTracker.LoadOrStore(outputPath, tracker)
 
 	if loaded {
 		// If another goroutine is already working on this, just wait for its result.
 		log.Printf("StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
-		err := <-actualTracker.(*ConversionTracker).Done
+		err := <-actualTracker.(*ProgressTracker).Done
 		log.Printf("StandardizeAudioToWav: Wait finished for %s.", filepath.Base(outputPath))
 		return err
 	}
 
 	defer func() {
 		close(tracker.Done)
-		a.conversionTracker.Delete(outputPath)
+		a.progressTracker.Delete(outputPath)
 		log.Printf("StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
 
@@ -849,7 +851,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	// Emit a 0% event immediately so the UI feels responsive
 	if totalDurationUs > 0 {
-		runtime.EventsEmit(a.ctx, "conversion:progress", ConversionProgress{FilePath: outputPath, Percentage: 0})
+		runtime.EventsEmit(a.ctx, "conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: 0})
 	}
 
 	// Goroutine to read and parse progress from stdout
@@ -887,7 +889,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 			tracker.mu.Lock()
 			tracker.Percentage = percentage
 			tracker.mu.Unlock()
-			runtime.EventsEmit(a.ctx, "conversion:progress", ConversionProgress{FilePath: outputPath, Percentage: percentage})
+			runtime.EventsEmit(a.ctx, "conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: percentage, TaskType: "conversion"})
 			lastReportedPct = percentage
 		}
 	}()
@@ -901,7 +903,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	if err != nil {
 		finalErr := fmt.Errorf("ffmpeg standardization failed for %s: %w. Stderr: %s", inputPath, err, stderrBuf.String())
-		runtime.EventsEmit(a.ctx, "conversion:error", ConversionProgress{FilePath: outputPath, Error: finalErr.Error()})
+		runtime.EventsEmit(a.ctx, "conversion:error", ProgressStatus{FilePath: outputPath, Error: finalErr.Error()})
 		tracker.Done <- finalErr
 		return finalErr
 	}
@@ -910,7 +912,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	tracker.mu.Lock()
 	tracker.Percentage = 100.0
 	tracker.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "conversion:done", ConversionProgress{FilePath: outputPath, Percentage: 100})
+	runtime.EventsEmit(a.ctx, "conversion:done", ProgressStatus{FilePath: outputPath, Percentage: 100})
 	tracker.Done <- nil
 
 	// Update file usage timestamp
@@ -920,14 +922,14 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 }
 
 func (a *App) WaitForFile(path string) error {
-	val, ok := a.conversionTracker.Load(path)
+	val, ok := a.progressTracker.Load(path)
 	if !ok {
 		return nil
 	}
 
 	log.Printf("Waiting for file to be ready: %s", path)
 
-	tracker, ok := val.(*ConversionTracker)
+	tracker, ok := val.(*ProgressTracker)
 	if !ok {
 		// This should theoretically never happen if we only ever store *ConversionTracker.
 		// It acts as a safeguard against unexpected internal errors.
@@ -1144,8 +1146,8 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 }
 
 func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips []*NestedAudioTimelineItem) {
-	tracker := &ConversionTracker{Done: make(chan error, 1)}
-	if _, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker); loaded {
+	tracker := &ProgressTracker{Done: make(chan error, 1)}
+	if _, loaded := a.progressTracker.LoadOrStore(outputPath, tracker); loaded {
 		return // Job is already running, exit.
 	}
 
@@ -1154,7 +1156,7 @@ func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips
 		// This goroutine is the "owner" and is responsible for cleanup and signaling.
 		defer func() {
 			close(tracker.Done)
-			a.conversionTracker.Delete(outputPath)
+			a.progressTracker.Delete(outputPath)
 		}()
 
 		// Acquire a semaphore slot for the duration of this job
