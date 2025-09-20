@@ -93,5 +93,7 @@ func (a *App) checkForUpdate(currentVersion string) {
 }
 
 func (a *App) GetUpdateInfo() *UpdateResponseV1 {
+	runtime.EventsEmit(a.ctx, "updateAvailable", a.updateInfo)
 	return a.updateInfo
+
 }

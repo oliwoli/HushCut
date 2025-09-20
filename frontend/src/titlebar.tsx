@@ -1,4 +1,14 @@
-import { XIcon, Ellipsis, PinIcon, ExternalLink, Info, Heart, CircleIcon, Settings2Icon, RefreshCwIcon } from "lucide-react";
+import {
+  XIcon,
+  Ellipsis,
+  PinIcon,
+  ExternalLink,
+  Info,
+  Heart,
+  CircleIcon,
+  Settings2Icon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
   DropdownMenu,
@@ -7,8 +17,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-
+} from "@/components/ui/dropdown-menu";
 
 import { memo, useState, useEffect } from "react";
 
@@ -17,44 +26,56 @@ import { useAppState } from "./stores/appSync";
 import clsx from "clsx";
 
 import { BrowserOpenURL, EventsEmit, EventsOn } from "@wails/runtime/runtime";
-import { CloseApp, SetWindowAlwaysOnTop } from "@wails/go/main/App";
+import {
+  CloseApp,
+  GetUpdateInfo,
+  SetWindowAlwaysOnTop,
+} from "@wails/go/main/App";
 import { main } from "@wails/go/models";
-
 
 const _TitleBar = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(true);
-  const [updateInfo, setUpdateInfo] = useState<main.UpdateResponseV1 | null>(null);
-
+  const [updateInfo, setUpdateInfo] = useState<main.UpdateResponseV1 | null>(
+    null
+  );
 
   useEffect(() => {
     // EventsOn returns a function that unsubscribes the listener.
     // We'll call this in the cleanup phase of useEffect.
-    const unsubscribe = EventsOn("updateAvailable", (info: main.UpdateResponseV1) => {
-      console.log("Received updateAvailable event:", info);
-      if (info) {
-        setUpdateInfo(info);
+    const unsubscribe = EventsOn(
+      "updateAvailable",
+      (info: main.UpdateResponseV1) => {
+        console.log("Received updateAvailable event:", info);
+        if (info) {
+          setUpdateInfo(info);
 
-        if (info.show_alert) {
-          // You can still emit your internal showAlert event here
-          EventsEmit("showAlert", {
-            severity: info.alert_severity,
-            title: info.alert_content.title,
-            message: info.alert_content.message,
-            actions: [
-              {
-                label: info.alert_content.button_label,
-                onClick: () => BrowserOpenURL(info.alert_content.button_url),
-              },
-            ],
-          });
+          if (info.show_alert) {
+            // You can still emit your internal showAlert event here
+            EventsEmit("showAlert", {
+              severity: info.alert_severity,
+              title: info.alert_content.title,
+              message: info.alert_content.message,
+              actions: [
+                {
+                  label: info.alert_content.button_label,
+                  onClick: () => BrowserOpenURL(info.alert_content.button_url),
+                },
+              ],
+            });
+          }
         }
       }
-    });
-
+    );
     // This cleanup function is called when the component unmounts.
     return () => {
       unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    if (!updateInfo) {
+      GetUpdateInfo();
+    }
   }, []);
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -71,10 +92,9 @@ const _TitleBar = () => {
     }
   }, [dropdownOpen]);
 
-  const isBusy = useAppState(s => s.isBusy);
-  const hasProjectData = useAppState(s => s.hasProjectData);
-  const timelineName = useAppState(s => s.timelineName);
-
+  const isBusy = useAppState((s) => s.isBusy);
+  const hasProjectData = useAppState((s) => s.hasProjectData);
+  const timelineName = useAppState((s) => s.timelineName);
 
   // This function will handle the logic
   const handlePinClick = () => {
@@ -108,8 +128,6 @@ const _TitleBar = () => {
     });
   };
 
-
-
   return (
     <div className="select-none">
       <div id="draggable" className="select-none">
@@ -124,45 +142,58 @@ const _TitleBar = () => {
             </Button>
             <Button
               size={"sm"}
-              className={`group px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 scale-90 transition-colors duration-50 ${alwaysOnTop
-                ? "text-teal-600 hover:text-zinc-100" // Pinned style
-                : "text-zinc-500 hover:text-zinc-200 " // Default style
-                }`}
+              className={`group px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 scale-90 transition-colors duration-50 ${
+                alwaysOnTop
+                  ? "text-teal-600 hover:text-zinc-100" // Pinned style
+                  : "text-zinc-500 hover:text-zinc-200 " // Default style
+              }`}
               onClick={handlePinClick}
             >
               <PinIcon
                 // 2. Apply dynamic classes for styling
-                className={`${alwaysOnTop
-                  ? "fill-teal-600 group-hover:fill-teal-200" // Pinned style
-                  : "" // Default style
-                  }`}
+                className={`${
+                  alwaysOnTop
+                    ? "fill-teal-600 group-hover:fill-teal-200" // Pinned style
+                    : "" // Default style
+                }`}
                 strokeWidth={`${alwaysOnTop ? 1.8 : 2.5}`}
               />
             </Button>
           </div>
           <div className="flex items-center gap-2 select-none">
-            <label className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline select-none">HushCut
+            <label className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline select-none">
+              HushCut
             </label>
             <CircleIcon
               size={8}
               className={clsx(
-                'stroke-0', // always applied
-                !hasProjectData && 'fill-red-600',
-                hasProjectData && isBusy && 'fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50',
-                hasProjectData && !isBusy && 'fill-teal-600'
+                "stroke-0", // always applied
+                !hasProjectData && "fill-red-600",
+                hasProjectData &&
+                  isBusy &&
+                  "fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50",
+                hasProjectData && !isBusy && "fill-teal-600"
               )}
             />
             {timelineName && (
-              <label className="text-neutral-500 text-xs select-none">{timelineName}</label>
+              <label className="text-neutral-500 text-xs select-none">
+                {timelineName}
+              </label>
             )}
-
           </div>
           <div className="flex items-center gap-2">
             {updateInfo && (
-              <Button onClick={handleUpdateClick} variant={"ghost"} className="px-0 overflow-hidden">
+              <Button
+                onClick={handleUpdateClick}
+                variant={"ghost"}
+                className="px-0 overflow-hidden"
+              >
                 <div className="relative w-full h-max animate-update-label overflow-hidden opacity-0">
                   <span className="text-xs flex gap-2 items-center text-teal-500 hover:text-teal-100">
-                    <RefreshCwIcon className="relative pt-[1px] pb-[1px]" strokeWidth={2.5} />
+                    <RefreshCwIcon
+                      className="relative pt-[1px] pb-[1px]"
+                      strokeWidth={2.5}
+                    />
                     {updateInfo.update_label}
                   </span>
                 </div>
@@ -181,12 +212,17 @@ const _TitleBar = () => {
                 <DropdownMenuContent
                   className="mr-1"
                   align="end"
-                  style={{ opacity: dropdownOpacity, transition: 'opacity 150ms ease-in-out' }}
+                  style={{
+                    opacity: dropdownOpacity,
+                    transition: "opacity 150ms ease-in-out",
+                  }}
                   disableRadixAnimations={dropdownOpacity === 0}
                 >
                   {/* <DropdownMenuLabel>Menu</DropdownMenuLabel> */}
                   {/* <DropdownMenuSeparator /> */}
-                  <DropdownMenuItem onSelect={() => setSettingsDialogOpen(true)}>
+                  <DropdownMenuItem
+                    onSelect={() => setSettingsDialogOpen(true)}
+                  >
                     <Settings2Icon className="mr-2 h-4 w-4" />
                     <span>Settings</span>
                   </DropdownMenuItem>
