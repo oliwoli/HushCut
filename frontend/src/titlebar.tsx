@@ -119,6 +119,7 @@ const _TitleBar = () => {
       severity: updateInfo.alert_severity,
       title: updateInfo.alert_content.title,
       message: updateInfo.alert_content.message,
+      markdown: updateInfo.github_data.body,
       actions: [
         {
           label: updateInfo.alert_content.button_label ?? "Download",
@@ -142,20 +143,18 @@ const _TitleBar = () => {
             </Button>
             <Button
               size={"sm"}
-              className={`group px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 scale-90 transition-colors duration-50 ${
-                alwaysOnTop
-                  ? "text-teal-600 hover:text-zinc-100" // Pinned style
-                  : "text-zinc-500 hover:text-zinc-200 " // Default style
-              }`}
+              className={`group px-0 mx-0 bg-transparent hover:bg-transparent text-zinc-500 scale-90 transition-colors duration-50 ${alwaysOnTop
+                ? "text-teal-600 hover:text-zinc-100" // Pinned style
+                : "text-zinc-500 hover:text-zinc-200 " // Default style
+                }`}
               onClick={handlePinClick}
             >
               <PinIcon
                 // 2. Apply dynamic classes for styling
-                className={`${
-                  alwaysOnTop
-                    ? "fill-teal-600 group-hover:fill-teal-200" // Pinned style
-                    : "" // Default style
-                }`}
+                className={`${alwaysOnTop
+                  ? "fill-teal-600 group-hover:fill-teal-200" // Pinned style
+                  : "" // Default style
+                  }`}
                 strokeWidth={`${alwaysOnTop ? 1.8 : 2.5}`}
               />
             </Button>
@@ -170,8 +169,8 @@ const _TitleBar = () => {
                 "stroke-0", // always applied
                 !hasProjectData && "fill-red-600",
                 hasProjectData &&
-                  isBusy &&
-                  "fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50",
+                isBusy &&
+                "fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50",
                 hasProjectData && !isBusy && "fill-teal-600"
               )}
             />
