@@ -208,6 +208,11 @@ class NestedAudioTimelineItem(TypedDict):
     nested_items: Optional[list["NestedAudioTimelineItem"]]
 
 
+class SourceChannel(TypedDict):
+    stream_idx: int
+    channel_idx: int
+
+
 class TimelineItem(TypedDict):
     bmd_item: Any
     bmd_mpi: Any
@@ -224,7 +229,7 @@ class TimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
-    source_channel: Optional[int]
+    source_channel: Optional[SourceChannel]
     link_group_id: Optional[int]
     type: Optional[Literal["Compound", "Timeline"]]
     nested_clips: Optional[list[NestedAudioTimelineItem]]
@@ -401,7 +406,7 @@ def _create_nested_audio_item_from_otio(
     resolve_meta = otio_clip.get("metadata", {}).get("Resolve_OTIO", {})
     channels_info = resolve_meta.get("Channels", [])
 
-    if len(channels_info) == 1:
+    if len(channels_info) >= 1:
         channel_num = channels_info[0].get("Source Track ID")
         if isinstance(channel_num, int) and channel_num > 0:
             source_channel = channel_num
@@ -1384,7 +1389,7 @@ def get_items_by_tracktype(
                 "processed_file_name": None,  # Initialized as None
                 "source_start_frame": source_start_float,
                 "source_end_frame": source_end_float,
-                "source_channel": 0,  # Default value
+                "source_channel": {"stream_idx": 1, "channel_idx": 0},
                 "link_group_id": None,  # Default value
                 "type": None,  # Default value, changed from "Clip"
                 "nested_clips": [],  # Default value
@@ -1591,6 +1596,39 @@ def mixdown_compound_clips(
             tl_item["source_file_path"] = output_wav_path
 
 
+def build_stream_map(audio_mapping: dict):
+    """
+    Build a list of streams with channel counts, based on Resolve's audio mapping.
+    Returns: [{"id": "embedded", "channels": N}, {"id": "linked_1", "channels": M}, ...]
+    """
+    streams = []
+    if "embedded_audio_channels" in audio_mapping:
+        streams.append(
+            {"id": "embedded", "channels": audio_mapping["embedded_audio_channels"]}
+        )
+
+    for lid, info in audio_mapping.get("linked_audio", {}).items():
+        streams.append({"id": f"linked_{lid}", "channels": info["channels"]})
+
+    return streams
+
+
+def resolve_to_ffmpeg_channel(channel_idx: int, streams: list[dict]):
+    """
+    Convert Resolve's 1-based flat channel index to (stream_number, ffmpeg_channel_idx).
+    stream_number is just the position in streams[] (0-based), to be aligned with ffmpeg’s #0:x
+    """
+    remaining = channel_idx
+    for i, stream in enumerate(
+        streams, start=1
+    ):  # ffmpeg stream indices typically start at 1
+        if remaining <= stream["channels"]:
+            return (i, remaining - 1)  # ffmpeg channel idx is 0-based
+        remaining -= stream["channels"]
+
+    raise ValueError(f"Channel {channel_idx} not found in streams")
+
+
 def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     global PROJECT, MEDIA_POOL, TEMP_DIR, PROJECT_DATA
 
@@ -1635,30 +1673,49 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         source_path = item["source_file_path"]
         source_uuid = uuid_from_path(source_path).hex
 
-        item["source_channel"] = 0  # Default to 0 (mono mixdown)
+        item["source_channel"] = {
+            "stream_idx": 1,
+            "channel_idx": 0,
+        }  # Default to 0 (mono mixdown)
         item["processed_file_name"] = f"{source_uuid}.wav"
 
         try:
             mapping_str = item["bmd_item"].GetSourceAudioChannelMapping()
             if mapping_str:
+                print(f"RAW MAPPING FOR '{item['name']}': {mapping_str}")
                 mapping = json.loads(mapping_str)
-                clip_track_map = mapping.get("track_mapping", {}).get("1", {})
+                track_mappings = mapping.get("track_mapping", {})
+                if not track_mappings:
+                    raise ValueError("No track mapping found in JSON.")
+                streams = build_stream_map(mapping)
+
+                print(f"STREAMS: {streams}")
+
+                first_key = next(iter(track_mappings))
+                clip_track_map = track_mappings[first_key]
+
                 clip_type = clip_track_map.get("type")
                 channel_indices = clip_track_map.get("channel_idx", [])
+                print(
+                    f"PYTHON: Clip type: {clip_type} ... channel indices: {channel_indices}"
+                )
+                resolve_channel = channel_indices[0]
+                ffmpeg_ch = resolve_channel - 1  # 1-based → 0-based
+                stream_idx = 0  # only one stream exists
 
-                # --- THIS IS THE FIX for the source_channel bug ---
-                # Check for clip_type and convert to lower for case-insensitive comparison.
-                if (
-                    clip_type
-                    and clip_type.lower() == "mono"
-                    and len(channel_indices) == 1
-                ):
-                    channel_num = channel_indices[0]
+                print(
+                    f"PYTHON: Resolve channel {resolve_channel} → ffmpeg stream #{stream_idx} channel {ffmpeg_ch}"
+                )
+
+                if clip_type and channel_indices:
                     print(
-                        f"Detected clip '{item['name']}' using specific source channel: {channel_num}"
+                        f"Detected clip '{item['name']}' using specific source channel: {ffmpeg_ch}"
                     )
-                    item["source_channel"] = channel_num
-                    item["processed_file_name"] = f"{source_uuid}_ch{channel_num}.wav"
+                    item["source_channel"] = {
+                        "stream_idx": stream_idx,
+                        "channel_idx": ffmpeg_ch,
+                    }
+                    item["processed_file_name"] = f"{source_uuid}_ch{ffmpeg_ch}.wav"
         except Exception as e:
             print(
                 f"Warning: Could not get audio mapping for '{item['name']}'. Defaulting to mono mixdown. Error: {e}"

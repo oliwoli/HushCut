@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -762,7 +763,83 @@ func parseDuration(s string) (time.Duration, error) {
 
 }
 
-func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *int) error {
+type VideoStream struct {
+	FFmpegIndex int // actual stream # in ffmpeg
+	Width       int
+	Height      int
+}
+
+type AudioStream struct {
+	FFmpegIndex int
+	Channels    int
+	Layout      string
+}
+
+func parseFFmpegStreams(ffmpegOutput string) ([]VideoStream, []AudioStream) {
+	videoStreams := []VideoStream{}
+	audioStreams := []AudioStream{}
+
+	lines := strings.Split(ffmpegOutput, "\n")
+
+	videoRe := regexp.MustCompile(`Stream #0:(\d+).*Video:`)
+	// This single, powerful regex captures all known audio formats.
+	// It looks for "stereo", "mono", a layout like "4.0", or the text "X channels".
+	audioRe := regexp.MustCompile(`Stream #0:(\d+).*Audio:.*, (stereo|mono|(\d+)\.[\d\.]+|(\d+) channels)`)
+
+	for _, line := range lines {
+		if videoRe.MatchString(line) {
+			// We only need to know that a video stream exists to offset audio stream indices.
+			// No need to parse width/height unless you need it elsewhere.
+			videoStreams = append(videoStreams, VideoStream{})
+
+		} else if strings.Contains(line, "Audio:") {
+			matches := audioRe.FindStringSubmatch(line)
+			if matches == nil {
+				// If our smart regex fails, it's an unknown format. Default to 1 channel.
+				log.Printf("WARNING: Could not parse channel count for line: %s. Defaulting to 1.", line)
+
+				// Try to at least get the stream index
+				simpleIndexRe := regexp.MustCompile(`Stream #0:(\d+)`)
+				indexMatches := simpleIndexRe.FindStringSubmatch(line)
+				if indexMatches != nil {
+					idx, _ := strconv.Atoi(indexMatches[1])
+					audioStreams = append(audioStreams, AudioStream{FFmpegIndex: idx, Channels: 1})
+				}
+				continue
+			}
+
+			idx, _ := strconv.Atoi(matches[1])
+			layoutStr := matches[2]
+			numChannels := 0
+
+			switch {
+			case layoutStr == "stereo":
+				numChannels = 2
+			case layoutStr == "mono":
+				numChannels = 1
+			case strings.HasSuffix(layoutStr, " channels"):
+				// Handles "3 channels"
+				fmt.Sscanf(layoutStr, "%d channels", &numChannels)
+			default:
+				// Handles "4.0", "5.1", etc. We only care about the first number.
+				fmt.Sscanf(layoutStr, "%d", &numChannels)
+			}
+
+			if numChannels == 0 { // Safety check if Sscanf fails
+				numChannels = 1
+			}
+
+			audioStreams = append(audioStreams, AudioStream{
+				FFmpegIndex: idx,
+				Channels:    numChannels,
+			})
+		}
+	}
+
+	return videoStreams, audioStreams
+}
+
+func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *SourceChannel) error {
 	tracker := &ProgressTracker{Done: make(chan error, 1)}
 	actualTracker, loaded := a.progressTracker.LoadOrStore(outputPath, tracker)
 
@@ -785,6 +862,22 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		return err
 	}
 
+	outputFileName := filepath.Base(outputPath)
+	go func() {
+		_, err := a.GetOrGenerateWaveformWithCache(
+			outputFileName,
+			128,
+			"logarithmic",
+			-60.0,
+			0.0,
+			0,
+			math.MaxFloat64,
+		)
+		if err != nil {
+			log.Printf("Error precomputing logarithmic waveform: %v", err)
+		}
+	}()
+
 	if isValidWavFile(outputPath) {
 		tracker.Done <- nil
 		return nil
@@ -803,34 +896,68 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	}
 	totalDurationUs := float64(totalDuration.Microseconds())
 
-	// Assemble the correct ffmpeg command (channel-aware or mono-mixdown)
-	args := []string{
-		"-y",
-		"-i", inputPath,
+	videoStreams, audioStreams := parseFFmpegStreams(infoOutput.String())
+
+	log.Printf("DEBUG: Detected %d audio streams.", len(audioStreams))
+	log.Printf("DEBUG: Detected %d video streams for file %s", len(videoStreams), inputPath)
+	for i, as := range audioStreams {
+		log.Printf("  - Stream %d: %d channels", i, as.Channels)
 	}
 
-	var filterChain []string
+	streamFound := false
+	ffmpegStream := 0
+	remaining := sourceChannel.ChannelIndex // 0-based index from Python
+	streamIndexInAudioStreams := 0
 
-	// 2. Add channel mapping or mono mixdown filters to the SAME chain.
-	if sourceChannel != nil && *sourceChannel > 0 {
-		channelIndex := *sourceChannel - 1
-		log.Printf("Extracting channel %d from '%s' using channelmap filter", *sourceChannel, filepath.Base(inputPath))
-		mapFilter := fmt.Sprintf("channelmap=map=%d", channelIndex)
-		filterChain = append(filterChain, mapFilter)
+	for i, aStream := range audioStreams {
+		if remaining < aStream.Channels {
+			ffmpegStream = len(videoStreams) + i // absolute stream index in ffmpeg
+			streamFound = true
+			streamIndexInAudioStreams = i // save the index for later
+			break
+		}
+		remaining -= aStream.Channels
+	}
+
+	if !streamFound {
+		return fmt.Errorf("audio channel index %d is out of bounds for the available streams", sourceChannel.ChannelIndex)
+	}
+
+	args := []string{"-y", "-i", inputPath}
+
+	if sourceChannel != nil {
+		aStream := audioStreams[streamIndexInAudioStreams]
+		log.Printf("Mixing all %d channels from stream %d of '%s'", aStream.Channels, ffmpegStream, filepath.Base(inputPath))
+
+		panExpr := ""
+		for ch := 0; ch < aStream.Channels; ch++ {
+			if ch > 0 {
+				panExpr += "+"
+			}
+			panExpr += fmt.Sprintf("%g*c%d", 1.0/float64(aStream.Channels), ch)
+		}
+
+		afArg := fmt.Sprintf("pan=mono|c0=%s", panExpr)
+		args = append(args,
+			"-map", fmt.Sprintf("0:%d", ffmpegStream),
+			"-af", afArg,
+			"-vn",
+		)
 	} else {
 		log.Printf("Standardizing '%s' to mono", filepath.Base(inputPath))
-		panFilter := "pan=mono|c0=0.5*FL+0.5*FR"
-		filterChain = append(filterChain, panFilter)
+		args = append(args,
+			"-af", "pan=mono|c0=0.5*FL+0.5*FR",
+			"-vn",
+		)
 	}
 
-	// If we have any filters in our chain, join them with commas and add them to the args.
-	if len(filterChain) > 0 {
-		finalFilterString := strings.Join(filterChain, ",")
-		args = append(args, "-af", finalFilterString)
-	}
+	args = append(args,
+		"-acodec", "pcm_s16le",
+		"-progress", "pipe:1",
+		outputPath,
+	)
+	log.Printf("FFMPEG FINAL EXTRACT CMD: %s", args)
 
-	args = append(args, "-acodec", "pcm_s16le")
-	args = append(args, "-progress", "pipe:1", outputPath)
 	cmd := ExecCommand(a.ffmpegBinaryPath, args...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -917,7 +1044,6 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	// Update file usage timestamp
 	a.updateFileUsage(outputPath)
-
 	return nil
 }
 
@@ -954,7 +1080,7 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 	// --- Step 1: Collect all unique processing jobs from the entire data structure ---
 	type audioJob struct {
 		SourcePath string
-		Channel    *int
+		Channel    *SourceChannel
 	}
 	// The key is the target output path, which ensures each unique job is only listed once.
 	jobsToProcess := make(map[string]audioJob)
