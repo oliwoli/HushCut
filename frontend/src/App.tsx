@@ -67,7 +67,7 @@ import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LicensePrompt from "./components/ui-custom/LicensePrompt";
-import { LoaderCircleIcon } from "lucide-react";
+import { ChevronRightIcon, LoaderCircleIcon } from "lucide-react";
 import DownloadPrompt from "./components/ui-custom/DownloadPrompt";
 
 const getDefaultDetectionParams = (): DetectionParams => ({
@@ -248,8 +248,8 @@ function AppContent() {
 
     let itemToDisplay = currentClipId
       ? audioItems.find(
-          (item) => (item.id || item.processed_file_name) === currentClipId
-        )
+        (item) => (item.id || item.processed_file_name) === currentClipId
+      )
       : audioItems[0];
 
     // Fallback if the ID wasn't found (e.g., during a state transition)
@@ -661,16 +661,14 @@ function AppContent() {
   const getStatusText = () => {
     if (syncing) {
       return (
-        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-          <div className="flex-1 flex top-40 h-min pointer-events-none absolute inset-0 z-50 opacity-0 animate-sync-box">
-            <div className="bg-[#101012de] p-6 border-1 border-zinc-100/20 rounded-sm items-center mx-auto text-center text-sm text-zinc-400">
-              <LoaderCircleIcon
-                size={32}
-                className="text-teal-500/40 animate-spin mx-auto mb-3"
-              />
-              <p>Syncing with DaVinci.</p>
-              <p> Please wait...</p>
-            </div>
+        <div className="flex-1 flex top-40 h-min pointer-events-none absolute inset-0 z-50 opacity-0 animate-sync-box">
+          <div className="bg-[#101012de] p-6 border-1 border-zinc-100/20 rounded-sm items-center mx-auto text-center text-sm text-zinc-400">
+            <LoaderCircleIcon
+              size={32}
+              className="text-teal-500/40 animate-spin mx-auto mb-3"
+            />
+            <p>Syncing with DaVinci.</p>
+            <p> Please wait...</p>
           </div>
         </div>
       );
@@ -678,13 +676,25 @@ function AppContent() {
       return;
     } else if (!projectData) {
       return (
-        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-          <p className="text-gray-500">No active timeline.</p>
+        <div className="my-auto space-y-8 text-gray-500">
+          <div className="w-full gap-2 flex items-center justify-center rounded-sm">
+            <p className="text-gray-500">No active timeline.</p>
+          </div>
+          <div className="rounded-sm text-center text-sm">
+            <div>Own the free version of DaVinci?</div>
+            Make sure to open HushCut from DaVinci by navigating to
+            <div className="flex mx-auto gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
+              Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
+              Scripts <ChevronRightIcon size={16} className="text-zinc-700" />
+              Edit <ChevronRightIcon size={16} className="text-zinc-700" />
+              HushCut
+            </div>
+          </div>
         </div>
       );
     } else if (!httpPort) {
       return (
-        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+        <div className="w-full h-full flex items-center justify-center rounded-sm">
           <p className="text-gray-500">
             There was a problem setting up the local http server.
           </p>
