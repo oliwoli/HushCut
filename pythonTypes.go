@@ -37,9 +37,14 @@ type NestedAudioTimelineItem struct {
 	SourceStartFrame  float64                    `json:"source_start_frame"`
 	SourceEndFrame    float64                    `json:"source_end_frame"`
 	Duration          float64                    `json:"duration"`
-	SourceChannel     *int                       `json:"source_channel,omitempty"`
+	SourceChannel     *SourceChannel             `json:"source_channel,omitempty"`
 	EditInstructions  []EditInstruction          `json:"edit_instructions"`
 	NestedItems       []*NestedAudioTimelineItem `json:"nested_items,omitempty"`
+}
+
+type SourceChannel struct {
+	StreamIndex  int `json:"stream_idx"`
+	ChannelIndex int `json:"channel_idx"`
 }
 
 // TimelineItem corresponds to the Python TimelineItem TypedDict.
@@ -59,7 +64,7 @@ type TimelineItem struct {
 	SourceEndFrame    float64                    `json:"source_end_frame"`
 	Duration          float64                    `json:"duration"`
 	EditInstructions  []EditInstruction          `json:"edit_instructions"`
-	SourceChannel     *int                       `json:"source_channel,omitempty"`
+	SourceChannel     *SourceChannel             `json:"source_channel,omitempty"`
 	LinkGroupID       int                        `json:"link_group_id,omitempty"`
 	Type              string                     `json:"type,omitempty"` // "Compound", "Timeline"
 	NestedClips       []*NestedAudioTimelineItem `json:"nested_clips,omitempty"`
