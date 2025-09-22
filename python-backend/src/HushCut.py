@@ -204,7 +204,7 @@ class NestedAudioTimelineItem(TypedDict):
     source_end_frame: float
     duration: float
     edit_instructions: list[EditInstruction]
-    source_channel: int
+    source_channel: SourceChannel
     nested_items: Optional[list["NestedAudioTimelineItem"]]
 
 
@@ -397,28 +397,46 @@ def _create_nested_audio_item_from_otio(
     # Convert duration to timeline frames
     duration_frames = duration_sec * timeline_fps
 
-    # if max_duration is not None and duration_frames > max_duration:
-    #     duration_frames = max_duration
-
-    source_channel = 0  # Default to 0 for mono mixdown
-    processed_file_name = f"{source_uuid}.wav"  # Default filename
+    source_channel: SourceChannel = {"stream_idx": 1, "channel_idx": 0}
+    processed_file_name = f"{source_uuid}.wav"
 
     resolve_meta = otio_clip.get("metadata", {}).get("Resolve_OTIO", {})
-    channels_info = resolve_meta.get("Channels", [])
+    mapping_str = resolve_meta.get("AudioMapping")
 
-    if len(channels_info) >= 1:
-        channel_num = channels_info[0].get("Source Track ID")
-        if isinstance(channel_num, int) and channel_num > 0:
-            source_channel = channel_num
-            processed_file_name = f"{source_uuid}_ch{source_channel}.wav"
-            logging.info(
-                f"OTIO parser: Found mapping for clip '{otio_clip.get('name')}' to source channel {source_channel}"
+    if mapping_str:
+        try:
+            mapping = json.loads(mapping_str)
+            track_mappings = mapping.get("track_mapping", {})
+            if track_mappings:
+                first_key = next(iter(track_mappings))
+                clip_track_map = track_mappings.get(first_key, {})
+                clip_type = clip_track_map.get("type")
+                channel_indices = clip_track_map.get("channel_idx", [])
+
+                if clip_type and channel_indices:
+                    resolve_channel_raw = channel_indices[0]
+                    if isinstance(resolve_channel_raw, int):
+                        resolve_channel = resolve_channel_raw
+                    else:
+                        resolve_channel = 1  # fallback
+                    ffmpeg_ch = resolve_channel - 1
+                    stream_idx = 0  # only one stream exists
+
+                    source_channel = {
+                        "stream_idx": stream_idx,
+                        "channel_idx": ffmpeg_ch,
+                    }
+                    processed_file_name = f"{source_uuid}_ch{ffmpeg_ch}.wav"
+        except Exception as e:
+            logging.warning(
+                f"Could not parse audio mapping for '{otio_clip.get('name')}'. "
+                f"Defaulting to mono mixdown. Error: {e}"
             )
 
     nested_item: NestedAudioTimelineItem = {
         "source_file_path": source_file_path,
         "processed_file_name": processed_file_name,
-        "source_channel": source_channel + 1,
+        "source_channel": source_channel,
         "start_frame": clip_start_in_container,
         "end_frame": clip_start_in_container + duration_frames,
         "source_start_frame": normalized_source_start_frame,

@@ -218,7 +218,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
     [item.id, onClipClick]
   );
 
-  const isNested = item.type !== null;
+  const isNested = item.type && item.type !== null && item.type.length > 0
 
   const handleBypassClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -317,10 +317,9 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-gradient-to-t from-black/50 via-black/20 to-transparent"
         )}>
           <div className="flex items-center space-x-1.5">
-            {isNested && (
+            {isNested ? (
               <LayersIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
-            )}
-            {!isNested && (
+            ) : (
               <AudioLinesIcon className={cn("text-sm h-[14px] text-stone-400 p-0 mr-1")} />
             )}
             <div className={cn(
