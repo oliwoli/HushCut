@@ -76,8 +76,8 @@ const ClipLinkIcon = ({ className }: { className?: string }) => (
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path>
   </svg>
 );
-const TARGET_PEAK_COUNT = 64;
-const ASSUMED_SAMPLE_RATE = 48000; // A reasonable assumption for video-related audio
+const TARGET_PEAK_COUNT = 56;
+const ASSUMED_SAMPLE_RATE = 48000;
 const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some detail
 
 
