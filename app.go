@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -63,7 +64,7 @@ type App struct {
 	ffmpegStatus      FfmpegStatus
 	ffmpegSemaphore   chan struct{}
 	waveformSemaphore chan struct{}
-	conversionTracker sync.Map
+	progressTracker   sync.Map
 	fileUsage         map[string]time.Time
 	mu                sync.Mutex
 
@@ -91,7 +92,7 @@ func NewApp() *App {
 		pendingTasks:      make(map[string]chan PythonCommandResponse),
 		ffmpegSemaphore:   make(chan struct{}, 8),
 		waveformSemaphore: make(chan struct{}, 3),
-		conversionTracker: sync.Map{},
+		progressTracker:   sync.Map{},
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -112,10 +113,11 @@ func (a *App) OpenURL(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
 }
 
-type ConversionTracker struct {
+type ProgressTracker struct {
 	mu         sync.RWMutex // Protects access to the percentage
 	Percentage float64
 	Done       chan error
+	TaskType   string
 }
 
 func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
@@ -387,7 +389,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("ffmpeg not found at %s", a.ffmpegBinaryPath)
 		a.ffmpegStatus = StatusMissing
 		// TODO: figure out how to handle versions (accept locally installed ffmpeg if same minor version?)
-		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
+		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil && a.ffmpegStatus != StatusMissing {
 			a.ffmpegBinaryPath = pathInSystem
 			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
 			a.ffmpegStatus = StatusReady
@@ -720,17 +722,18 @@ func (a *App) GetFfmpegVersion() string {
 	return a.ffmpegVersion
 }
 
-type ConversionProgress struct {
+type ProgressStatus struct {
 	FilePath   string  `json:"filePath"`
 	Percentage float64 `json:"percentage"`
 	Error      string  `json:"error,omitempty"`
+	TaskType   string  `json:"taskType"`
 }
 
-func (a *App) GetCurrentConversionProgress() map[string]float64 {
+func (a *App) GetCurrentProgressStatus() map[string]float64 {
 	progressMap := make(map[string]float64)
-	a.conversionTracker.Range(func(key, value interface{}) bool {
+	a.progressTracker.Range(func(key, value interface{}) bool {
 		filePath := key.(string)
-		tracker := value.(*ConversionTracker)
+		tracker := value.(*ProgressTracker)
 
 		tracker.mu.RLock() // Lock for reading
 		progressMap[filePath] = tracker.Percentage
@@ -760,21 +763,97 @@ func parseDuration(s string) (time.Duration, error) {
 
 }
 
-func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *int) error {
-	tracker := &ConversionTracker{Done: make(chan error, 1)}
-	actualTracker, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker)
+type VideoStream struct {
+	FFmpegIndex int // actual stream # in ffmpeg
+	Width       int
+	Height      int
+}
+
+type AudioStream struct {
+	FFmpegIndex int
+	Channels    int
+	Layout      string
+}
+
+func parseFFmpegStreams(ffmpegOutput string) ([]VideoStream, []AudioStream) {
+	videoStreams := []VideoStream{}
+	audioStreams := []AudioStream{}
+
+	lines := strings.Split(ffmpegOutput, "\n")
+
+	videoRe := regexp.MustCompile(`Stream #0:(\d+).*Video:`)
+	// This single, powerful regex captures all known audio formats.
+	// It looks for "stereo", "mono", a layout like "4.0", or the text "X channels".
+	audioRe := regexp.MustCompile(`Stream #0:(\d+).*Audio:.*, (stereo|mono|(\d+)\.[\d\.]+|(\d+) channels)`)
+
+	for _, line := range lines {
+		if videoRe.MatchString(line) {
+			// We only need to know that a video stream exists to offset audio stream indices.
+			// No need to parse width/height unless you need it elsewhere.
+			videoStreams = append(videoStreams, VideoStream{})
+
+		} else if strings.Contains(line, "Audio:") {
+			matches := audioRe.FindStringSubmatch(line)
+			if matches == nil {
+				// If our smart regex fails, it's an unknown format. Default to 1 channel.
+				log.Printf("WARNING: Could not parse channel count for line: %s. Defaulting to 1.", line)
+
+				// Try to at least get the stream index
+				simpleIndexRe := regexp.MustCompile(`Stream #0:(\d+)`)
+				indexMatches := simpleIndexRe.FindStringSubmatch(line)
+				if indexMatches != nil {
+					idx, _ := strconv.Atoi(indexMatches[1])
+					audioStreams = append(audioStreams, AudioStream{FFmpegIndex: idx, Channels: 1})
+				}
+				continue
+			}
+
+			idx, _ := strconv.Atoi(matches[1])
+			layoutStr := matches[2]
+			numChannels := 0
+
+			switch {
+			case layoutStr == "stereo":
+				numChannels = 2
+			case layoutStr == "mono":
+				numChannels = 1
+			case strings.HasSuffix(layoutStr, " channels"):
+				// Handles "3 channels"
+				fmt.Sscanf(layoutStr, "%d channels", &numChannels)
+			default:
+				// Handles "4.0", "5.1", etc. We only care about the first number.
+				fmt.Sscanf(layoutStr, "%d", &numChannels)
+			}
+
+			if numChannels == 0 { // Safety check if Sscanf fails
+				numChannels = 1
+			}
+
+			audioStreams = append(audioStreams, AudioStream{
+				FFmpegIndex: idx,
+				Channels:    numChannels,
+			})
+		}
+	}
+
+	return videoStreams, audioStreams
+}
+
+func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *SourceChannel) error {
+	tracker := &ProgressTracker{Done: make(chan error, 1)}
+	actualTracker, loaded := a.progressTracker.LoadOrStore(outputPath, tracker)
 
 	if loaded {
 		// If another goroutine is already working on this, just wait for its result.
 		log.Printf("StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
-		err := <-actualTracker.(*ConversionTracker).Done
+		err := <-actualTracker.(*ProgressTracker).Done
 		log.Printf("StandardizeAudioToWav: Wait finished for %s.", filepath.Base(outputPath))
 		return err
 	}
 
 	defer func() {
 		close(tracker.Done)
-		a.conversionTracker.Delete(outputPath)
+		a.progressTracker.Delete(outputPath)
 		log.Printf("StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
 
@@ -782,6 +861,22 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		tracker.Done <- err
 		return err
 	}
+
+	outputFileName := filepath.Base(outputPath)
+	go func() {
+		_, err := a.GetOrGenerateWaveformWithCache(
+			outputFileName,
+			128,
+			"logarithmic",
+			-60.0,
+			0.0,
+			0,
+			math.MaxFloat64,
+		)
+		if err != nil {
+			log.Printf("Error precomputing logarithmic waveform: %v", err)
+		}
+	}()
 
 	if isValidWavFile(outputPath) {
 		tracker.Done <- nil
@@ -801,34 +896,68 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	}
 	totalDurationUs := float64(totalDuration.Microseconds())
 
-	// Assemble the correct ffmpeg command (channel-aware or mono-mixdown)
-	args := []string{
-		"-y",
-		"-i", inputPath,
+	videoStreams, audioStreams := parseFFmpegStreams(infoOutput.String())
+
+	log.Printf("DEBUG: Detected %d audio streams.", len(audioStreams))
+	log.Printf("DEBUG: Detected %d video streams for file %s", len(videoStreams), inputPath)
+	for i, as := range audioStreams {
+		log.Printf("  - Stream %d: %d channels", i, as.Channels)
 	}
 
-	var filterChain []string
+	streamFound := false
+	ffmpegStream := 0
+	remaining := sourceChannel.ChannelIndex // 0-based index from Python
+	streamIndexInAudioStreams := 0
 
-	// 2. Add channel mapping or mono mixdown filters to the SAME chain.
-	if sourceChannel != nil && *sourceChannel > 0 {
-		channelIndex := *sourceChannel - 1
-		log.Printf("Extracting channel %d from '%s' using channelmap filter", *sourceChannel, filepath.Base(inputPath))
-		mapFilter := fmt.Sprintf("channelmap=map=%d", channelIndex)
-		filterChain = append(filterChain, mapFilter)
+	for i, aStream := range audioStreams {
+		if remaining < aStream.Channels {
+			ffmpegStream = len(videoStreams) + i // absolute stream index in ffmpeg
+			streamFound = true
+			streamIndexInAudioStreams = i // save the index for later
+			break
+		}
+		remaining -= aStream.Channels
+	}
+
+	if !streamFound {
+		return fmt.Errorf("audio channel index %d is out of bounds for the available streams", sourceChannel.ChannelIndex)
+	}
+
+	args := []string{"-y", "-i", inputPath}
+
+	if sourceChannel != nil {
+		aStream := audioStreams[streamIndexInAudioStreams]
+		log.Printf("Mixing all %d channels from stream %d of '%s'", aStream.Channels, ffmpegStream, filepath.Base(inputPath))
+
+		panExpr := ""
+		for ch := 0; ch < aStream.Channels; ch++ {
+			if ch > 0 {
+				panExpr += "+"
+			}
+			panExpr += fmt.Sprintf("%g*c%d", 1.0/float64(aStream.Channels), ch)
+		}
+
+		afArg := fmt.Sprintf("pan=mono|c0=%s", panExpr)
+		args = append(args,
+			"-map", fmt.Sprintf("0:%d", ffmpegStream),
+			"-af", afArg,
+			"-vn",
+		)
 	} else {
 		log.Printf("Standardizing '%s' to mono", filepath.Base(inputPath))
-		panFilter := "pan=mono|c0=0.5*FL+0.5*FR"
-		filterChain = append(filterChain, panFilter)
+		args = append(args,
+			"-af", "pan=mono|c0=0.5*FL+0.5*FR",
+			"-vn",
+		)
 	}
 
-	// If we have any filters in our chain, join them with commas and add them to the args.
-	if len(filterChain) > 0 {
-		finalFilterString := strings.Join(filterChain, ",")
-		args = append(args, "-af", finalFilterString)
-	}
+	args = append(args,
+		"-acodec", "pcm_s16le",
+		"-progress", "pipe:1",
+		outputPath,
+	)
+	log.Printf("FFMPEG FINAL EXTRACT CMD: %s", args)
 
-	args = append(args, "-acodec", "pcm_s16le")
-	args = append(args, "-progress", "pipe:1", outputPath)
 	cmd := ExecCommand(a.ffmpegBinaryPath, args...)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -849,7 +978,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	// Emit a 0% event immediately so the UI feels responsive
 	if totalDurationUs > 0 {
-		runtime.EventsEmit(a.ctx, "conversion:progress", ConversionProgress{FilePath: outputPath, Percentage: 0})
+		runtime.EventsEmit(a.ctx, "conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: 0})
 	}
 
 	// Goroutine to read and parse progress from stdout
@@ -887,7 +1016,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 			tracker.mu.Lock()
 			tracker.Percentage = percentage
 			tracker.mu.Unlock()
-			runtime.EventsEmit(a.ctx, "conversion:progress", ConversionProgress{FilePath: outputPath, Percentage: percentage})
+			runtime.EventsEmit(a.ctx, "conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: percentage, TaskType: "conversion"})
 			lastReportedPct = percentage
 		}
 	}()
@@ -901,7 +1030,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	if err != nil {
 		finalErr := fmt.Errorf("ffmpeg standardization failed for %s: %w. Stderr: %s", inputPath, err, stderrBuf.String())
-		runtime.EventsEmit(a.ctx, "conversion:error", ConversionProgress{FilePath: outputPath, Error: finalErr.Error()})
+		runtime.EventsEmit(a.ctx, "conversion:error", ProgressStatus{FilePath: outputPath, Error: finalErr.Error()})
 		tracker.Done <- finalErr
 		return finalErr
 	}
@@ -910,24 +1039,23 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	tracker.mu.Lock()
 	tracker.Percentage = 100.0
 	tracker.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "conversion:done", ConversionProgress{FilePath: outputPath, Percentage: 100})
+	runtime.EventsEmit(a.ctx, "conversion:done", ProgressStatus{FilePath: outputPath, Percentage: 100})
 	tracker.Done <- nil
 
 	// Update file usage timestamp
 	a.updateFileUsage(outputPath)
-
 	return nil
 }
 
 func (a *App) WaitForFile(path string) error {
-	val, ok := a.conversionTracker.Load(path)
+	val, ok := a.progressTracker.Load(path)
 	if !ok {
 		return nil
 	}
 
 	log.Printf("Waiting for file to be ready: %s", path)
 
-	tracker, ok := val.(*ConversionTracker)
+	tracker, ok := val.(*ProgressTracker)
 	if !ok {
 		// This should theoretically never happen if we only ever store *ConversionTracker.
 		// It acts as a safeguard against unexpected internal errors.
@@ -952,7 +1080,7 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 	// --- Step 1: Collect all unique processing jobs from the entire data structure ---
 	type audioJob struct {
 		SourcePath string
-		Channel    *int
+		Channel    *SourceChannel
 	}
 	// The key is the target output path, which ensures each unique job is only listed once.
 	jobsToProcess := make(map[string]audioJob)
@@ -1144,8 +1272,8 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 }
 
 func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips []*NestedAudioTimelineItem) {
-	tracker := &ConversionTracker{Done: make(chan error, 1)}
-	if _, loaded := a.conversionTracker.LoadOrStore(outputPath, tracker); loaded {
+	tracker := &ProgressTracker{Done: make(chan error, 1)}
+	if _, loaded := a.progressTracker.LoadOrStore(outputPath, tracker); loaded {
 		return // Job is already running, exit.
 	}
 
@@ -1154,7 +1282,7 @@ func (a *App) ExecuteAndTrackMixdown(fps float64, outputPath string, nestedClips
 		// This goroutine is the "owner" and is responsible for cleanup and signaling.
 		defer func() {
 			close(tracker.Done)
-			a.conversionTracker.Delete(outputPath)
+			a.progressTracker.Delete(outputPath)
 		}()
 
 		// Acquire a semaphore slot for the duration of this job

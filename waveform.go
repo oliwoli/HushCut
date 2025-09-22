@@ -3,15 +3,18 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/sync/singleflight"
 )
 
 func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
@@ -40,10 +43,12 @@ func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 
 func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
 	maxDb := 0.0
+	start := time.Now()
 
 	if err := a.WaitForFile(filePath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
 	}
+	log.Printf("WaitForFile took: %s (file: %s)", time.Since(start), filePath)
 
 	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
 	if err != nil {
@@ -52,6 +57,39 @@ func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string,
 	}
 	return data, nil
 }
+
+func sliceWaveform(full *PrecomputedWaveformData, startSec, endSec float64) *PrecomputedWaveformData {
+	if endSec < 0 || endSec > full.Duration {
+		endSec = full.Duration
+	}
+	if startSec < 0 {
+		startSec = 0
+	}
+
+	startIndex := int((startSec / full.Duration) * float64(len(full.Peaks)))
+	endIndex := int((endSec / full.Duration) * float64(len(full.Peaks)))
+	if endIndex > len(full.Peaks) {
+		endIndex = len(full.Peaks)
+	}
+
+	return &PrecomputedWaveformData{
+		Peaks:    full.Peaks[startIndex:endIndex],
+		Duration: endSec - startSec,
+		// copy any other metadata needed
+	}
+}
+
+func (k WaveformCacheKey) String() string {
+	return fmt.Sprintf("%s|%d|%s|%f|%f",
+		k.FilePath,
+		k.SamplesPerPixel,
+		k.PeakType,
+		k.MinDb,
+		k.MaxDb,
+	)
+}
+
+var waveformGroup singleflight.Group
 
 func (a *App) GetOrGenerateWaveformWithCache(
 	webInputPath string,
@@ -62,66 +100,53 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	clipStartSeconds float64,
 	clipEndSeconds float64,
 ) (*PrecomputedWaveformData, error) {
-	localFSPath, err := a.resolvePublicAudioPath(webInputPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve web input path '%s' for pre-check: %w", webInputPath, err)
-	}
-	a.updateFileUsage(localFSPath)
-
-	if err := a.WaitForFile(localFSPath); err != nil {
-		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
-	}
-
-	if _, statErr := os.Stat(localFSPath); os.IsNotExist(statErr) {
-		return nil, fmt.Errorf("audio file does not exist at resolved path '%s' (from '%s')", localFSPath, webInputPath)
-	} else if statErr != nil {
-		return nil, fmt.Errorf("error stating file at resolved path '%s': %w", localFSPath, statErr)
-	}
 
 	key := WaveformCacheKey{
-		FilePath:         webInputPath,
-		SamplesPerPixel:  samplesPerPixel,
-		PeakType:         peakType,
-		MinDb:            minDb,
-		MaxDb:            maxDb,
-		ClipStartSeconds: clipStartSeconds,
-		ClipEndSeconds:   clipEndSeconds,
+		FilePath:        webInputPath,
+		SamplesPerPixel: samplesPerPixel,
+		PeakType:        peakType,
+		MinDb:           minDb,
+		MaxDb:           maxDb,
 	}
 
-	a.cacheMutex.RLock()
-	cachedData, found := a.waveformCache[key]
-	a.cacheMutex.RUnlock()
+	// Single-flight ensures only 1 goroutine computes the waveform per key
+	v, err, _ := waveformGroup.Do(key.String(), func() (any, error) {
+		a.cacheMutex.RLock()
+		cachedData, found := a.waveformCache[key]
+		a.cacheMutex.RUnlock()
+		if found {
+			log.Println("CACHE HIT for key", key)
+			return cachedData, nil
+		}
 
-	if found {
-		return cachedData, nil
-	}
+		log.Println("CACHE MISS for key", key)
 
-	// --- CACHE MISS: Decide which processor to call ---
-	a.waveformSemaphore <- struct{}{}
-	defer func() {
-		<-a.waveformSemaphore // Release semaphore
-	}()
+		// compute full waveform (semaphore optional if you still want to limit concurrency)
+		var waveformData *PrecomputedWaveformData
+		var err error
+		switch peakType {
+		case "linear":
+			waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel)
+		case "logarithmic":
+			waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb)
+		default:
+			err = fmt.Errorf("unknown peakType: '%s'", peakType)
+		}
+		if err != nil {
+			return nil, err
+		}
 
-	var waveformData *PrecomputedWaveformData
-
-	switch peakType {
-	case "linear":
-		waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel, clipStartSeconds, clipEndSeconds)
-	case "logarithmic":
-		waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb, clipStartSeconds, clipEndSeconds)
-	default:
-		err = fmt.Errorf("unknown peakType: '%s'", peakType)
-	}
-
+		a.cacheMutex.Lock()
+		a.waveformCache[key] = waveformData
+		a.cacheMutex.Unlock()
+		return waveformData, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("error during waveform processing for '%s': %w", webInputPath, err)
+		return nil, err
 	}
 
-	a.cacheMutex.Lock()
-	a.waveformCache[key] = waveformData
-	a.cacheMutex.Unlock()
-
-	return waveformData, nil
+	cachedData := v.(*PrecomputedWaveformData)
+	return sliceWaveform(cachedData, clipStartSeconds, clipEndSeconds), nil
 }
 
 // struct for the output JSON matching WaveSurfer's needs for precomputed peaks
@@ -135,8 +160,6 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	samplesPerPixel int,
 	minDisplayDb float64, // e.g., -60.0
 	maxDisplayDb float64, // e.g., 0.0
-	clipStartSeconds float64,
-	clipEndSeconds float64,
 ) (*PrecomputedWaveformData, error) {
 
 	if samplesPerPixel < 1 {
@@ -145,18 +168,11 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	if minDisplayDb >= maxDisplayDb {
 		return nil, fmt.Errorf("minDisplayDb must be less than maxDisplayDb")
 	}
-	if clipStartSeconds < 0 {
-		return nil, fmt.Errorf("ClipStartSeconds must be non-negative")
-	}
-	if clipEndSeconds <= clipStartSeconds {
-		return nil, fmt.Errorf("ClipEndSeconds (%.2f) must be greater than ClipStartSeconds (%.2f)", clipEndSeconds, clipStartSeconds)
-	}
 
 	absPath, err := a.resolvePublicAudioPath(webInputPath)
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}
-
 	if err := a.WaitForFile(absPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
@@ -171,7 +187,6 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	if !decoder.IsValidFile() {
 		return nil, fmt.Errorf("'%s' is not a valid WAV file", absPath)
 	}
-
 	if decoder.WavAudioFormat != 1 || decoder.BitDepth != 16 {
 		return nil, fmt.Errorf("unsupported WAV format: only 16-bit PCM is supported (got %d-bit, format %d)", decoder.BitDepth, decoder.WavAudioFormat)
 	}
@@ -181,58 +196,19 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		return nil, fmt.Errorf("could not retrieve audio format details from '%s'", absPath)
 	}
 	sampleRate := int(format.SampleRate)
-	if sampleRate == 0 {
-		return nil, fmt.Errorf("file '%s' reported 0 sample rate", absPath)
-	}
 	inputChannels := int(format.NumChannels)
-	if inputChannels == 0 {
-		return nil, fmt.Errorf("file '%s' reported 0 channels", absPath)
+
+	// Estimate number of peaks
+	duration, _ := decoder.Duration()
+	expectedNumPeaks := 100
+	if duration > 0 {
+		numFrames := int(float64(sampleRate) * duration.Seconds())
+		expectedNumPeaks = (numFrames + samplesPerPixel - 1) / samplesPerPixel
 	}
 
-	// Determine effective clip range based on audio duration, if known
-	actualClipStartSeconds := clipStartSeconds
-	actualClipEndSeconds := clipEndSeconds
+	peaks := make([]float64, 0, expectedNumPeaks)
 
-	audioFileDuration, err := decoder.Duration() // This is time.Duration
-	if err == nil {                              // Duration is known
-		fileDurationSeconds := audioFileDuration.Seconds()
-		if actualClipStartSeconds >= fileDurationSeconds {
-			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil // Clip starts after or at EOF
-		}
-		if actualClipEndSeconds > fileDurationSeconds {
-			actualClipEndSeconds = fileDurationSeconds // Trim clip end to file duration
-		}
-		if actualClipEndSeconds <= actualClipStartSeconds { // After trimming, clip might be empty/invalid
-			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil
-		}
-	}
-	// If err != nil for decoder.Duration(), we proceed without knowing the exact file end, relying on EOF.
-
-	startFrameOffset := int(actualClipStartSeconds * float64(sampleRate))
-	endFrameOffset := int(actualClipEndSeconds * float64(sampleRate))
-
-	// If calculated frame offsets result in no frames (e.g., sub-frame duration after clipping)
-	if startFrameOffset >= endFrameOffset {
-		// Calculate the duration of the intended, possibly tiny, clip.
-		effectiveDuration := actualClipEndSeconds - actualClipStartSeconds
-		if effectiveDuration < 0 { // Should not happen due to earlier checks, but safety.
-			effectiveDuration = 0
-		}
-		return &PrecomputedWaveformData{Duration: effectiveDuration, Peaks: []float64{}}, nil
-	}
-
-	numFramesInClip := endFrameOffset - startFrameOffset
-	expectedNumPeaks := 100 // Default capacity
-	if numFramesInClip > 0 && samplesPerPixel > 0 {
-		expectedNumPeaks = (numFramesInClip + samplesPerPixel - 1) / samplesPerPixel
-	}
-
-	processedPeaks := make([]float64, 0, expectedNumPeaks)
-	var currentMaxAbsSampleInBlock int32 = 0
-	samplesProcessedInBlock := 0
-	currentFrameInFile := 0 // Tracks the current frame index from the beginning of the file
-
-	chunkSize := 8192 // Number of samples (not frames) in each read buffer
+	chunkSize := 8192
 	if chunkSize%inputChannels != 0 {
 		chunkSize = (chunkSize/inputChannels + 1) * inputChannels
 	}
@@ -241,144 +217,126 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		Data:   make([]int, chunkSize),
 	}
 
-processingLoop:
+	var (
+		currentMaxAbs   int32
+		samplesInBlock  int
+		totalFrames     int
+		lastReportedPct float64 = -10.0
+	)
+
 	for {
-		if currentFrameInFile >= endFrameOffset { // Already processed or skipped past the clip end
-			break
-		}
-
-		numSamplesRead, readErr := decoder.PCMBuffer(pcmBuffer)
-
-		if numSamplesRead == 0 {
+		numSamples, readErr := decoder.PCMBuffer(pcmBuffer)
+		if numSamples == 0 {
 			if readErr != io.EOF && readErr != nil {
 				return nil, fmt.Errorf("error reading PCM chunk: %w", readErr)
 			}
-			break // EOF or other reason for no samples
-		}
-
-		samplesInChunk := pcmBuffer.Data[:numSamplesRead]
-		numFramesInChunk := numSamplesRead / inputChannels
-
-		for i := 0; i < numFramesInChunk; i++ {
-			frameToProcessIndex := currentFrameInFile
-			currentFrameInFile++ // Advance master frame counter
-
-			if frameToProcessIndex >= endFrameOffset { // Reached end of clip segment
-				break processingLoop // Break outer loop as well
-			}
-			if frameToProcessIndex < startFrameOffset { // Skip frames before clip start
-				continue
-			}
-
-			// Process sample (within the clip segment)
-			var maxSampleInFrame int32 = 0
-			for ch := 0; ch < inputChannels; ch++ {
-				sampleVal := int32(samplesInChunk[i*inputChannels+ch])
-				absVal := sampleVal
-				if absVal < 0 {
-					absVal = -absVal
-				}
-				if absVal > maxSampleInFrame {
-					maxSampleInFrame = absVal
-				}
-			}
-
-			if maxSampleInFrame > currentMaxAbsSampleInBlock {
-				currentMaxAbsSampleInBlock = maxSampleInFrame
-			}
-			samplesProcessedInBlock++
-
-			if samplesProcessedInBlock >= samplesPerPixel {
-				normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
-				dBValue := minDisplayDb
-				if normalizedLinearPeak >= 0.000001 { // Approx -120dB threshold for silence
-					dBValue = 20 * math.Log10(normalizedLinearPeak)
-				}
-
-				if dBValue < minDisplayDb {
-					dBValue = minDisplayDb
-				} else if dBValue > maxDisplayDb {
-					dBValue = maxDisplayDb
-				}
-
-				visualHeight := (dBValue - minDisplayDb) / (maxDisplayDb - minDisplayDb)
-				if visualHeight < 0.0 {
-					visualHeight = 0.0
-				}
-				if visualHeight > 1.0 {
-					visualHeight = 1.0
-				}
-				processedPeaks = append(processedPeaks, visualHeight)
-
-				currentMaxAbsSampleInBlock = 0
-				samplesProcessedInBlock = 0
-			}
-		} // End of frame processing in chunk
-
-		if readErr == io.EOF { // EOF encountered
 			break
 		}
-		if readErr != nil { // Other read error
-			return nil, fmt.Errorf("error reading PCM chunk (mid-file): %w", readErr)
-		}
-	} // End of chunk reading loop (processingLoop)
 
-	// Handle any remaining samples for the last data point if they fall within the clip
-	if samplesProcessedInBlock > 0 {
-		// This block is only processed if samples were accumulated from within the clip range
-		normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
-		dBValue := minDisplayDb
-		if normalizedLinearPeak >= 0.000001 {
-			dBValue = 20 * math.Log10(normalizedLinearPeak)
+		file, err := os.Open(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open input file '%s': %w", absPath, err)
 		}
-		if dBValue < minDisplayDb {
-			dBValue = minDisplayDb
-		} else if dBValue > maxDisplayDb {
-			dBValue = maxDisplayDb
+		defer file.Close()
+
+		fileInfo, err := file.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("could not get file info for '%s': %w", absPath, err)
 		}
-		visualHeight := (dBValue - minDisplayDb) / (maxDisplayDb - minDisplayDb)
-		if visualHeight < 0.0 {
-			visualHeight = 0.0
+
+		// Optional progress
+		pos, err := file.Seek(0, io.SeekCurrent)
+		if err == nil {
+			totalBytes := fileInfo.Size()
+			if totalBytes > 0 {
+				pct := (float64(pos) / float64(totalBytes)) * 100
+				if pct-lastReportedPct >= 5 {
+					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
+						FilePath:   webInputPath,
+						Percentage: pct,
+					})
+					lastReportedPct = pct
+				}
+			}
 		}
-		if visualHeight > 1.0 {
-			visualHeight = 1.0
+
+		for i := 0; i < numSamples; i += inputChannels {
+			var maxFrameSample int32
+			for ch := 0; ch < inputChannels; ch++ {
+				val := int32(pcmBuffer.Data[i+ch])
+				if val < 0 {
+					val = -val
+				}
+				if val > maxFrameSample {
+					maxFrameSample = val
+				}
+			}
+
+			if maxFrameSample > currentMaxAbs {
+				currentMaxAbs = maxFrameSample
+			}
+			samplesInBlock++
+			totalFrames++
+
+			if samplesInBlock >= samplesPerPixel {
+				normalized := float64(currentMaxAbs) / 32767.0
+				dB := minDisplayDb
+				if normalized > 0 {
+					dB = 20 * math.Log10(normalized)
+				}
+				if dB < minDisplayDb {
+					dB = minDisplayDb
+				} else if dB > maxDisplayDb {
+					dB = maxDisplayDb
+				}
+				visual := (dB - minDisplayDb) / (maxDisplayDb - minDisplayDb)
+				if visual < 0 {
+					visual = 0
+				} else if visual > 1 {
+					visual = 1
+				}
+				peaks = append(peaks, visual)
+				currentMaxAbs = 0
+				samplesInBlock = 0
+			}
 		}
-		processedPeaks = append(processedPeaks, visualHeight)
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("error reading PCM chunk: %w", readErr)
+		}
 	}
 
-	// Calculate the final duration of the segment for which peaks were generated.
-	var finalOutputDuration float64
-
-	// Determine the effective end time of the data used for peaks.
-	// actualClipEndSeconds was already capped by file duration if known.
-	// currentFrameInFile is the number of frames iterated over from the start of the file.
-	effectiveDataEndTimeSeconds := float64(currentFrameInFile) / float64(sampleRate)
-
-	// The peak data cannot extend beyond actualClipEndSeconds (user request, capped by file length)
-	// nor beyond where we actually read data (effectiveDataEndTimeSeconds due to EOF).
-	finalEffectiveEndBoundary := actualClipEndSeconds
-	if effectiveDataEndTimeSeconds < actualClipEndSeconds {
-		finalEffectiveEndBoundary = effectiveDataEndTimeSeconds
+	// leftover samples
+	if samplesInBlock > 0 {
+		normalized := float64(currentMaxAbs) / 32767.0
+		dB := minDisplayDb
+		if normalized > 0 {
+			dB = 20 * math.Log10(normalized)
+		}
+		if dB < minDisplayDb {
+			dB = minDisplayDb
+		} else if dB > maxDisplayDb {
+			dB = maxDisplayDb
+		}
+		visual := (dB - minDisplayDb) / (maxDisplayDb - minDisplayDb)
+		if visual < 0 {
+			visual = 0
+		} else if visual > 1 {
+			visual = 1
+		}
+		peaks = append(peaks, visual)
 	}
 
-	if finalEffectiveEndBoundary > actualClipStartSeconds {
-		finalOutputDuration = finalEffectiveEndBoundary - actualClipStartSeconds
-	} else {
-		finalOutputDuration = 0 // Clip start was at or after where data ended
-	}
+	finalDuration := float64(totalFrames) / float64(sampleRate)
 
-	if finalOutputDuration < 0 { // Safety, should not happen with logic above
-		finalOutputDuration = 0
-	}
-
-	// If no peaks were actually generated (e.g., clip entirely outside data, or zero effective length), duration should be 0.
-	if len(processedPeaks) == 0 {
-		finalOutputDuration = 0
-	}
+	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{FilePath: webInputPath})
 
 	return &PrecomputedWaveformData{
-		Duration: finalOutputDuration,
-		Peaks:    processedPeaks,
+		Duration: finalDuration,
+		Peaks:    peaks,
 	}, nil
 }
 
@@ -392,18 +350,10 @@ type WaveformProgress struct {
 func (a *App) ProcessWavToLinearPeaks(
 	webInputPath string,
 	samplesPerPixel int,
-	clipStartSeconds float64,
-	clipEndSeconds float64,
 ) (*PrecomputedWaveformData, error) {
 
 	if samplesPerPixel < 1 {
 		return nil, fmt.Errorf("samples_per_pixel must be at least 1")
-	}
-	if clipStartSeconds < 0 {
-		return nil, fmt.Errorf("ClipStartSeconds must be non-negative")
-	}
-	if clipEndSeconds <= clipStartSeconds {
-		return nil, fmt.Errorf("ClipEndSeconds (%.2f) must be greater than ClipStartSeconds (%.2f)", clipEndSeconds, clipStartSeconds)
 	}
 
 	absPath, err := a.resolvePublicAudioPath(webInputPath)
@@ -413,24 +363,24 @@ func (a *App) ProcessWavToLinearPeaks(
 	if err := a.WaitForFile(absPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
+
 	file, err := os.Open(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open input file '%s': %w", absPath, err)
 	}
 	defer file.Close()
+
 	fileInfo, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("could not get file info for '%s': %w", absPath, err)
 	}
 	totalBytes := fileInfo.Size()
-	var lastReportedPct float64 = -10.0
-	decoder := wav.NewDecoder(file)
 
+	decoder := wav.NewDecoder(file)
 	if !decoder.IsValidFile() {
 		return nil, fmt.Errorf("'%s' is not a valid WAV file", absPath)
 	}
 
-	// This function specifically supports 16-bit PCM WAV files.
 	if decoder.WavAudioFormat != 1 || decoder.BitDepth != 16 {
 		return nil, fmt.Errorf("unsupported WAV format: only 16-bit PCM is supported (got %d-bit, format %d)", decoder.BitDepth, decoder.WavAudioFormat)
 	}
@@ -440,56 +390,19 @@ func (a *App) ProcessWavToLinearPeaks(
 		return nil, fmt.Errorf("could not retrieve audio format details from '%s'", absPath)
 	}
 	sampleRate := int(format.SampleRate)
-	if sampleRate == 0 {
-		return nil, fmt.Errorf("file '%s' reported 0 sample rate", absPath)
-	}
 	inputChannels := int(format.NumChannels)
-	if inputChannels == 0 {
-		return nil, fmt.Errorf("file '%s' reported 0 channels", absPath)
+
+	// Estimate number of peaks (optional)
+	duration, _ := decoder.Duration()
+	expectedNumPeaks := 100
+	if duration > 0 {
+		numFrames := int(float64(sampleRate) * duration.Seconds())
+		expectedNumPeaks = (numFrames + samplesPerPixel - 1) / samplesPerPixel
 	}
 
-	// Determine effective clip range based on audio duration, if known
-	actualClipStartSeconds := clipStartSeconds
-	actualClipEndSeconds := clipEndSeconds
+	peaks := make([]float64, 0, expectedNumPeaks)
 
-	audioFileDuration, err := decoder.Duration() // This is time.Duration
-	if err == nil {                              // Duration is known
-		fileDurationSeconds := audioFileDuration.Seconds()
-		if actualClipStartSeconds >= fileDurationSeconds {
-			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil // Clip starts after or at EOF
-		}
-		if actualClipEndSeconds > fileDurationSeconds {
-			actualClipEndSeconds = fileDurationSeconds // Trim clip end to file duration
-		}
-		if actualClipEndSeconds <= actualClipStartSeconds { // After trimming, clip might be empty/invalid
-			return &PrecomputedWaveformData{Duration: 0, Peaks: []float64{}}, nil
-		}
-	}
-	// If err != nil for decoder.Duration(), we proceed without knowing the exact file end, relying on EOF.
-
-	startFrameOffset := int(actualClipStartSeconds * float64(sampleRate))
-	endFrameOffset := int(actualClipEndSeconds * float64(sampleRate))
-
-	if startFrameOffset >= endFrameOffset {
-		effectiveDuration := actualClipEndSeconds - actualClipStartSeconds
-		if effectiveDuration < 0 {
-			effectiveDuration = 0
-		}
-		return &PrecomputedWaveformData{Duration: effectiveDuration, Peaks: []float64{}}, nil
-	}
-
-	numFramesInClip := endFrameOffset - startFrameOffset
-	expectedNumPeaks := 100 // Default capacity
-	if numFramesInClip > 0 && samplesPerPixel > 0 {
-		expectedNumPeaks = (numFramesInClip + samplesPerPixel - 1) / samplesPerPixel
-	}
-
-	processedPeaks := make([]float64, 0, expectedNumPeaks)
-	var currentMaxAbsSampleInBlock int32 = 0
-	samplesProcessedInBlock := 0
-	currentFrameInFile := 0 // Tracks the current frame index from the beginning of the file
-
-	chunkSize := 8192 // Number of samples (not frames) in each read buffer
+	chunkSize := 8192
 	if chunkSize%inputChannels != 0 {
 		chunkSize = (chunkSize/inputChannels + 1) * inputChannels
 	}
@@ -498,84 +411,55 @@ func (a *App) ProcessWavToLinearPeaks(
 		Data:   make([]int, chunkSize),
 	}
 
-processingLoop:
+	var (
+		currentMaxAbs   int32
+		samplesInBlock  int
+		lastReportedPct float64 = -10.0
+		totalFrames     int
+	)
+
 	for {
-		if currentFrameInFile >= endFrameOffset {
+		numSamples, readErr := decoder.PCMBuffer(pcmBuffer)
+		if numSamples == 0 {
 			break
 		}
 
-		numSamplesRead, readErr := decoder.PCMBuffer(pcmBuffer)
-
-		if numSamplesRead == 0 {
-			break
-		}
-
-		if numSamplesRead > 0 && totalBytes > 0 {
-			// Ask the file handle for its current position (offset in bytes).
-			currentPos, seekErr := file.Seek(0, io.SeekCurrent)
-
-			// Only report progress if we can successfully get the position.
-			if seekErr == nil {
-				percentage := (float64(currentPos) / float64(totalBytes)) * 100
-				if percentage > 100 {
-					percentage = 100
-				}
-
-				if percentage-lastReportedPct >= 5.0 {
+		// Optional progress reporting
+		if totalBytes > 0 {
+			if pos, err := file.Seek(0, io.SeekCurrent); err == nil {
+				pct := (float64(pos) / float64(totalBytes)) * 100
+				if pct-lastReportedPct >= 5 {
 					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
 						FilePath:   webInputPath,
-						ClipStart:  clipStartSeconds,
-						ClipEnd:    clipEndSeconds,
-						Percentage: percentage,
+						Percentage: pct,
 					})
-					lastReportedPct = percentage
+					lastReportedPct = pct
 				}
 			}
 		}
 
-		samplesInChunk := pcmBuffer.Data[:numSamplesRead]
-		numFramesInChunk := numSamplesRead / inputChannels
-
-		for i := 0; i < numFramesInChunk; i++ {
-			frameToProcessIndex := currentFrameInFile
-			currentFrameInFile++
-
-			if frameToProcessIndex >= endFrameOffset {
-				break processingLoop
-			}
-			if frameToProcessIndex < startFrameOffset {
-				continue
-			}
-
-			var maxSampleInFrame int32 = 0
+		for i := 0; i < numSamples; i += inputChannels {
+			var maxFrameSample int32
 			for ch := 0; ch < inputChannels; ch++ {
-				sampleVal := int32(samplesInChunk[i*inputChannels+ch])
-				absVal := sampleVal
-				if absVal < 0 {
-					absVal = -absVal
+				val := int32(pcmBuffer.Data[i+ch])
+				if val < 0 {
+					val = -val
 				}
-				if absVal > maxSampleInFrame {
-					maxSampleInFrame = absVal
+				if val > maxFrameSample {
+					maxFrameSample = val
 				}
 			}
 
-			if maxSampleInFrame > currentMaxAbsSampleInBlock {
-				currentMaxAbsSampleInBlock = maxSampleInFrame
+			if maxFrameSample > currentMaxAbs {
+				currentMaxAbs = maxFrameSample
 			}
-			samplesProcessedInBlock++
+			samplesInBlock++
+			totalFrames++
 
-			if samplesProcessedInBlock >= samplesPerPixel {
-				// --- Linear Peak Calculation ---
-				// Normalize the max absolute sample value. 32767 is the max for 16-bit audio.
-				normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
-				if normalizedLinearPeak > 1.0 { // Clamp to 1.0 for safety
-					normalizedLinearPeak = 1.0
-				}
-				processedPeaks = append(processedPeaks, normalizedLinearPeak)
-				// --- End of Linear Peak Calculation ---
-
-				currentMaxAbsSampleInBlock = 0
-				samplesProcessedInBlock = 0
+			if samplesInBlock >= samplesPerPixel {
+				peaks = append(peaks, float64(currentMaxAbs)/32767.0)
+				currentMaxAbs = 0
+				samplesInBlock = 0
 			}
 		}
 
@@ -583,51 +467,23 @@ processingLoop:
 			break
 		}
 		if readErr != nil {
-			return nil, fmt.Errorf("error reading PCM chunk (mid-file): %w", readErr)
+			return nil, fmt.Errorf("error reading PCM: %w", readErr)
 		}
 	}
 
-	// Handle any remaining samples for the last data point if they fall within the clip
-	if samplesProcessedInBlock > 0 {
-		// --- Final Linear Peak Calculation ---
-		normalizedLinearPeak := float64(currentMaxAbsSampleInBlock) / 32767.0
-		if normalizedLinearPeak > 1.0 {
-			normalizedLinearPeak = 1.0
-		}
-		processedPeaks = append(processedPeaks, normalizedLinearPeak)
-		// --- End of Final Linear Peak Calculation ---
+	// Handle leftover samples
+	if samplesInBlock > 0 {
+		peaks = append(peaks, float64(currentMaxAbs)/32767.0)
 	}
 
-	// Calculate the final duration of the segment for which peaks were generated.
-	var finalOutputDuration float64
-	effectiveDataEndTimeSeconds := float64(currentFrameInFile) / float64(sampleRate)
-	finalEffectiveEndBoundary := actualClipEndSeconds
-	if effectiveDataEndTimeSeconds < actualClipEndSeconds {
-		finalEffectiveEndBoundary = effectiveDataEndTimeSeconds
-	}
-
-	if finalEffectiveEndBoundary > actualClipStartSeconds {
-		finalOutputDuration = finalEffectiveEndBoundary - actualClipStartSeconds
-	} else {
-		finalOutputDuration = 0
-	}
-
-	if finalOutputDuration < 0 {
-		finalOutputDuration = 0
-	}
-
-	if len(processedPeaks) == 0 {
-		finalOutputDuration = 0
-	}
+	finalDuration := float64(totalFrames) / float64(sampleRate)
 
 	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{
-		FilePath:  webInputPath,
-		ClipStart: clipStartSeconds,
-		ClipEnd:   clipEndSeconds,
+		FilePath: webInputPath,
 	})
 
 	return &PrecomputedWaveformData{
-		Duration: finalOutputDuration,
-		Peaks:    processedPeaks,
+		Duration: finalDuration,
+		Peaks:    peaks,
 	}, nil
 }

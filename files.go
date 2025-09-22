@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -190,6 +191,38 @@ type FFBinariesResponse struct {
 	} `json:"bin"`
 }
 
+type downloadProgressWriter struct {
+	tracker     *ProgressTracker
+	totalBytes  int64
+	written     int64
+	filePath    string
+	emitContext context.Context
+}
+
+func (pw *downloadProgressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	pw.written += int64(n)
+
+	if pw.totalBytes > 0 {
+		pct := (float64(pw.written) / float64(pw.totalBytes)) * 100
+		if pct > 100 {
+			pct = 100
+		}
+
+		pw.tracker.mu.Lock()
+		pw.tracker.Percentage = pct
+		pw.tracker.mu.Unlock()
+
+		runtime.EventsEmit(pw.emitContext, "download:progress", ProgressStatus{
+			FilePath:   pw.filePath,
+			Percentage: pct,
+			TaskType:   "download",
+		})
+	}
+
+	return n, nil
+}
+
 func (a *App) DownloadFFmpeg() error {
 	if a.ffmpegVersion == "" {
 		return fmt.Errorf("a.ffmpegVersion must be set before calling DownloadFFmpeg")
@@ -283,22 +316,60 @@ func (a *App) DownloadFFmpeg() error {
 	downloadPath := filepath.Join(tempDir, "ffmpeg.zip")
 
 	log.Printf("Downloading FFmpeg from %s to %s", downloadURL, downloadPath)
+
 	downloadResp, err := http.Get(downloadURL)
 	if err != nil {
 		return fmt.Errorf("could not download ffmpeg zip: %w", err)
 	}
 	defer downloadResp.Body.Close()
 
+	// Get total content length for percentage calc
+	contentLength := downloadResp.ContentLength
+	if contentLength <= 0 {
+		log.Printf("Warning: server did not send Content-Length header, progress won't be accurate")
+	}
+
+	// Register tracker
+	tracker := &ProgressTracker{
+		Done:     make(chan error, 1),
+		TaskType: "download",
+	}
+	a.progressTracker.Store(downloadPath, tracker)
+	defer a.progressTracker.Delete(downloadPath)
+
+	// Open destination file
 	out, err := os.Create(downloadPath)
 	if err != nil {
 		return fmt.Errorf("could not create download file: %w", err)
 	}
+	defer out.Close()
 
-	_, err = io.Copy(out, downloadResp.Body)
+	// Wrap the writer with progress tracking
+	pw := &downloadProgressWriter{
+		tracker:     tracker,
+		totalBytes:  contentLength,
+		filePath:    downloadPath,
+		emitContext: a.ctx,
+	}
+
+	_, err = io.Copy(io.MultiWriter(out, pw), downloadResp.Body)
 	out.Close()
+
 	if err != nil {
+		tracker.Done <- err
 		return fmt.Errorf("could not write download to file: %w", err)
 	}
+
+	// Finalize
+	tracker.mu.Lock()
+	tracker.Percentage = 100
+	tracker.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "progress:done", ProgressStatus{
+		FilePath:   downloadPath,
+		Percentage: 100,
+		TaskType:   "download",
+	})
+	tracker.Done <- nil
 
 	// Extract the archive (all binaries from this API are in .zip format)
 	if err := unzip(downloadPath, tempDir); err != nil {

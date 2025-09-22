@@ -29,6 +29,7 @@ type GithubData struct {
 	TagName string        `json:"tag_name"`
 	HtmlUrl string        `json:"html_url"`
 	Assets  []GithubAsset `json:"assets"`
+	Body    string        `json:"body"`
 }
 
 type UpdateResponseV1 struct {
@@ -93,5 +94,7 @@ func (a *App) checkForUpdate(currentVersion string) {
 }
 
 func (a *App) GetUpdateInfo() *UpdateResponseV1 {
+	runtime.EventsEmit(a.ctx, "updateAvailable", a.updateInfo)
 	return a.updateInfo
+
 }

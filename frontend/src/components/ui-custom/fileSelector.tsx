@@ -10,6 +10,16 @@ import { useClipStore, useIsClipModified } from "@/stores/clipStore";
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
 
+function downsamplePeaks(fullPeaks: number[], targetPeakCount: number) {
+  const step = fullPeaks.length / targetPeakCount;
+  const out: number[] = [];
+  for (let i = 0; i < targetPeakCount; i++) {
+    const idx = Math.floor(i * step);
+    out.push(fullPeaks[idx]);
+  }
+  return out;
+}
+
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={cn("h-5 w-5", className)}>
@@ -165,29 +175,23 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
     setIsFetchingWaveform(true);
 
     const fetchWaveform = async () => {
-      const dynamicSamplesPerPixel = Math.max(
-        MIN_SAMPLES_PER_PIXEL,
-        Math.ceil(
-          (clipDuration * ASSUMED_SAMPLE_RATE) / TARGET_PEAK_COUNT
-        )
-      );
-
       try {
         // small debounce before actual call
         await new Promise((r) => setTimeout(r, 25));
         if (cancelled) return;
 
-        const peakData = await GetWaveform(
+        const fullResPeakData = await GetWaveform(
           item.processed_file_name!,
-          dynamicSamplesPerPixel,
+          128,
           "linear",
           -60.0,
           startSeconds,
           endSeconds
         );
-        if (!cancelled && peakData?.peaks) {
-          waveformCache.set(jobKey, peakData.peaks);
-          setWaveformPeaks(peakData.peaks);
+        const downsampledPeakData = downsamplePeaks(fullResPeakData.peaks, TARGET_PEAK_COUNT)
+        if (!cancelled && fullResPeakData?.peaks) {
+          waveformCache.set(jobKey, downsampledPeakData);
+          setWaveformPeaks(downsampledPeakData);
         }
       } catch (e) {
         if (!cancelled)
@@ -322,7 +326,11 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
             <div className={cn(
 
               "flex items-baseline space-x-1")}>
-              <p className="font-normal text-xs text-zinc-200/90 truncate max-w-28">{item.name}</p>
+              <p className={cn(
+                "font-normal text-xs truncate max-w-28",
+                isSelected ? "text-zinc-200/90" : "text-gray-400"
+              )}>
+                {item.name}</p>
               <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="p-0 m-0 ml-[-4px] mb-[2px]" /></span>
             </div>
           </div>

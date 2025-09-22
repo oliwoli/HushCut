@@ -334,13 +334,28 @@ div[part="minimap-overlay"] {
     95% {opacity: 90%}
     100% {top: 0px; opacity: 100%;}
   }
+
+  --animate-enter-calm-sm: 1000ms enter-calm-anim 0ms cubic-bezier(0.475, 0.000, 0.115, 1.000) forwards;
+@keyframes enter-calm-anim {
+  0% {
+    max-height: 0px;
+    opacity: 0;
+  }
+  50% {opacity: 0}
+  100% {
+    max-height: 20px;
+    opacity: 1;
+  }
 }
+}
+
 
 @layer utilities {
   .animate-spin-ccw {
     animation: var(--animate-spin-ccw);
   }
     .animate-press-tilt { animation: var(--animate-press-tilt); }
+    .animate-enter-calm-sm { animation: var(--animate-enter-calm-sm); }
 }
 
 

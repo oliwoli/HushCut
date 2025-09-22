@@ -439,8 +439,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const wsOptions: WaveSurferOptions = {
       container: waveformContainerRef.current,
       dragToSeek: true,
-      waveColor: peakData.duration < 1 ? "#9d9c9e" : "#777777",
-      progressColor: peakData.duration < 1 ? "#9d9c9e" : "#777777",
+      waveColor: peakData.duration < 1 ? "#9d9c9e" : "#6f7175",
+      progressColor: peakData.duration < 1 ? "#9d9c9e" : "#6f7175",
       cursorColor: "#e64b3d",
       cursorWidth: 2,
       height: "auto",
@@ -1141,8 +1141,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
               <span>{playbackRate.toFixed(2)}x</span>
             </div>
           )}
-          <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm items-center">
-            <div className="flex justify-end pr-1 sm:pr-4 w-full gap-2 font-mono text-sm items-center">
+          <div className="flex justify-end pr-2 sm:pr-2 w-full gap-2 font-mono text-sm items-center">
+            <div className="flex justify-end pr-0 w-full gap-2 font-mono text-sm items-center">
               <div className="flex items-center gap-1 text-sm">
                 {silenceData && silenceData.length > 0 && (
                   <button

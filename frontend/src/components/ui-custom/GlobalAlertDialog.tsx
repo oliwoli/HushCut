@@ -15,6 +15,9 @@ import { useAppState } from "@/stores/appSync";
 import { AlertTriangle, ChevronRightIcon, CircleAlert, Info, SirenIcon, XCircle } from "lucide-react"; // or whichever icons you prefer
 import { buttonVariants } from "../ui/button";
 import { cn } from "@/lib/utils";
+import { MarkdownRenderer } from "../MarkdownRenderer";
+import { ScrollArea } from "../ui/scroll-area";
+import { Separator } from "@radix-ui/react-dropdown-menu";
 
 const getAlertIcon = (type: AlertData["severity"]) => {
   switch (type) {
@@ -59,6 +62,7 @@ interface AlertAction {
 interface AlertData {
   title: string;
   message: string;
+  markdown?: string;
   actions?: AlertAction[]; // Add actions array to the interface
   severity?: "error" | "warning" | "info" | "important";
 }
@@ -104,6 +108,7 @@ const GlobalAlertDialog = () => {
       setAlertData({
         title: data.title || "No title",
         message: data.message || "No message",
+        markdown: data.markdown || "",
         actions: data.actions || [],
         severity: data.severity || "info"
       });
@@ -149,12 +154,25 @@ const GlobalAlertDialog = () => {
         />
         <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5">{getAlertIcon(alertData.severity)}</div>
         <AlertDialogHeader className="pl-11 gap-1 mt-2">
-          <AlertDialogTitle className="mb-0">
-            <div className="flex gap-2 items-center text-center">
-              {alertData.title}
-            </div>
+          <AlertDialogTitle className="mb-0 gap-2">
+            {alertData.title}
           </AlertDialogTitle>
-          <AlertDialogDescription className="mt-0">{alertData.message}{davinciNotConnectedMessage(alertData.message)}</AlertDialogDescription>
+          <AlertDialogDescription className="mt-0">
+            {alertData.message}
+          </AlertDialogDescription>
+          {davinciNotConnectedMessage(alertData.message)}
+
+          {alertData.markdown && (
+            <ScrollArea className="max-h-[60vh] overflow-y-auto pr-2">
+              <div className="mt-4">
+                <Separator className="bg-teal-800 h-px" />
+                <div className="prose prose-sm dark:prose-invert max-w-none max-h-2xl">
+                  <MarkdownRenderer markdown={alertData.markdown} />
+                </div>
+              </div>
+            </ScrollArea>
+          )}
+
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">
           <AlertDialogAction

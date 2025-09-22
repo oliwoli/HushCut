@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	github.com/denisbrodbeck/machineid v1.0.1
 	github.com/wailsapp/wails/v2 v2.10.2
+	golang.org/x/sync v0.16.0
 )
 
 require (

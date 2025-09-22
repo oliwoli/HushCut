@@ -50,9 +50,7 @@ export default function SliderZag({
     orientation: orientation,
     dir: dir,
     disabled,
-    // 👇 Console log on value change
     onValueChange: (details: { value: number[] }) => {
-      console.log('SliderZag value changed:', details.value)
       onChange?.(details.value)
     },
 

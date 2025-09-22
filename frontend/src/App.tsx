@@ -25,7 +25,10 @@ import { EventsEmit, EventsOn } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveformPlayer";
-import RemoveSilencesButton, { deriveAllClipDetectionParams, prepareProjectDataWithEdits } from "./lib/PythonRunner";
+import RemoveSilencesButton, {
+  deriveAllClipDetectionParams,
+  prepareProjectDataWithEdits,
+} from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
 import { usePrevious, useWindowFocus } from "./hooks/hooks";
 import FileSelector from "./components/ui-custom/fileSelector";
@@ -64,9 +67,8 @@ import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LicensePrompt from "./components/ui-custom/LicensePrompt";
-import { LoaderCircleIcon } from "lucide-react";
-
-
+import { ChevronRightIcon, LoaderCircleIcon } from "lucide-react";
+import DownloadPrompt from "./components/ui-custom/DownloadPrompt";
 
 const getDefaultDetectionParams = (): DetectionParams => ({
   loudnessThreshold: defaultParameters.threshold,
@@ -109,10 +111,9 @@ const createActiveFileFromTimelineItem = (
     sourceStartFrame: item.source_start_frame,
     sourceEndFrame: item.source_end_frame,
     startFrame: item.start_frame,
-    duration: item.duration
+    duration: item.duration,
   };
 };
-
 
 function supportsRealBackdrop() {
   const el = document.createElement("div");
@@ -127,32 +128,31 @@ function supportsRealBackdrop() {
 }
 
 const Status = {
-    Unknown: 0,
-    Ready: 1,
-    Missing: 2,
+  Unknown: 0,
+  Ready: 1,
+  Missing: 2,
 };
 
 function AppContent() {
-  const [ffmpegStatus, setFFmpegReady] = useState(Status.Unknown)
+  const [ffmpegStatus, setFFmpegReady] = useState(Status.Unknown);
   const prevFfmpegStatus = usePrevious(ffmpegStatus);
   const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
-  const [pythonReady, setPythonReady] = useState<boolean | null>(null)
+  const [pythonReady, setPythonReady] = useState<boolean | null>(null);
   const prevPythonReady = usePrevious(pythonReady);
-
 
   useEffect(() => {
     EventsOn("ffmpeg:status", (status) => {
-        console.log("Received ffmpeg status from backend:", status);
-        setFFmpegReady(status);
+      console.log("Received ffmpeg status from backend:", status);
+      setFFmpegReady(status);
     });
 
     // fallback, probably not needed
     const checkInitialStatus = async () => {
-        const isFfmpegReady = await GetFFmpegStatus();
-        // Only set if status is still unknown
-        if (ffmpegStatus === Status.Unknown) {
-            setFFmpegReady(isFfmpegReady);
-        }
+      const isFfmpegReady = await GetFFmpegStatus();
+      // Only set if status is still unknown
+      if (ffmpegStatus === Status.Unknown) {
+        setFFmpegReady(isFfmpegReady);
+      }
     };
     checkInitialStatus();
   }, []);
@@ -171,7 +171,7 @@ function AppContent() {
     checkInitialStatus(); // Check status on component mount
 
     const unsubscribe = EventsOn("pythonStatusUpdate", (data) => {
-      if (data && typeof data.isReady === 'boolean') {
+      if (data && typeof data.isReady === "boolean") {
         console.log(`Event: Python status changed to ${data.isReady}`);
         setPythonReady(data.isReady);
       }
@@ -182,29 +182,29 @@ function AppContent() {
     };
   }, []); // runs once on mount
 
-  const isBusy = useAppState(s => s.isBusy);
-  const setBusy = useAppState(s => s.setBusy);
+  const isBusy = useAppState((s) => s.isBusy);
+  const setBusy = useAppState((s) => s.setBusy);
 
-  const syncing = useAppState(s => s.syncing);
-  const setSyncing = useAppState(s => s.setSyncing);
+  const syncing = useAppState((s) => s.syncing);
+  const setSyncing = useAppState((s) => s.setSyncing);
 
-  const setHasProjectData = useAppState(s => s.setHasProjectData);
-  const setTimelineName = useAppState(s => s.setTimelineName);
+  const setHasProjectData = useAppState((s) => s.setHasProjectData);
+  const setTimelineName = useAppState((s) => s.setTimelineName);
 
-  const currentClipId = useClipStore(s => s.currentClipId);
-  const setCurrentClipId = useClipStore(s => s.setCurrentClipId);
+  const currentClipId = useClipStore((s) => s.currentClipId);
+  const setCurrentClipId = useClipStore((s) => s.setCurrentClipId);
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
-  const setToken = useAppState(s => s.setToken);
+  const setToken = useAppState((s) => s.setToken);
 
   const [projectData, setProjectData] =
     useState<main.ProjectDataPayload | null>(null);
 
   const setTimecode = useTimecodeStore((s) => s.setTimecode);
   //const setProjectData = useTimecodeStore((s) => s.setProjectData);
-  const currTimecode = useTimecodeStore(s => s.timecode);
+  const currTimecode = useTimecodeStore((s) => s.timecode);
   const audioItems = projectData?.timeline?.audio_track_items || [];
   const timelineFps = projectData?.timeline?.fps || 30;
 
@@ -222,7 +222,8 @@ function AppContent() {
       );
       if (clipAtTimecode) {
         // 3. Update the current clip ID
-        const newClipId = clipAtTimecode.id || clipAtTimecode.processed_file_name;
+        const newClipId =
+          clipAtTimecode.id || clipAtTimecode.processed_file_name;
         // Only update state if the ID has actually changed to prevent re-renders
         if (newClipId && newClipId !== currentClipId) {
           setCurrentClipId(newClipId);
@@ -232,7 +233,6 @@ function AppContent() {
           audioItems[0]?.id || audioItems[0]?.processed_file_name || null
         );
       }
-
     } else {
       setCurrentClipId(
         audioItems[0]?.id || audioItems[0]?.processed_file_name || null
@@ -257,42 +257,41 @@ function AppContent() {
       itemToDisplay = audioItems[0];
     }
 
-    return createActiveFileFromTimelineItem(itemToDisplay, httpPort, projectData.timeline.fps);
+    return createActiveFileFromTimelineItem(
+      itemToDisplay,
+      httpPort,
+      projectData.timeline.fps
+    );
   }, [projectData, httpPort, currentClipId]);
-
 
   const handleSync = async () => {
     if (isBusy) {
       console.log("Sync skipped: App is busy.");
       return;
     }
-    console.log("syncing...")
+    console.log("syncing...");
     if (ffmpegStatus == Status.Unknown) {
-      return
+      return;
     }
 
     if (ffmpegStatus == Status.Missing) {
-      EventsEmit("showAlert", {
+      EventsEmit("showDownloadPrompt", {
         title: "FFmpeg Download Needed",
-        message: "FFmpeg is required for HushCut to work. Would you like to download it now?",
-        actions: [
-          {
-            label: "Download",
-            onClick: async () => {
-              // TODO: needs to show progress bar
-              toast.info("Downloading FFmpeg...");
-              ffmpegStatus == Status.Unknown
-              try {
-                await DownloadFFmpeg();
-                toast.success("FFmpeg downloaded successfully!");
-                setFFmpegReady(Status.Ready);
-              } catch (err) {
-                toast.error("Failed to download FFmpeg: " + err);
-                setFFmpegReady(Status.Missing);
-              }
-            },
-          },
-        ],
+        message:
+          "FFmpeg is required for HushCut to work. Would you like to download it now?",
+        successTitle: "Done!",
+        successMessage: "Download completed.",
+        onDownload: async () => {
+          ffmpegStatus == Status.Unknown;
+          try {
+            await DownloadFFmpeg();
+            setFFmpegReady(Status.Ready);
+          } catch (err) {
+            toast.error("Failed to download FFmpeg: " + err);
+            setFFmpegReady(Status.Missing);
+          }
+        },
+        taskFileName: "ffmpeg.zip",
       });
       return;
     }
@@ -316,10 +315,10 @@ function AppContent() {
         setProjectData(newData);
         setHasProjectData(!!newData);
 
-        if (!newData) return
+        if (!newData) return;
         await Promise.all([
           ProcessProjectAudio(newData),
-          MixdownCompoundClips(newData)
+          MixdownCompoundClips(newData),
         ]);
         console.log("handleSync: Project data updated.");
       } else {
@@ -362,7 +361,7 @@ function AppContent() {
         );
         setProjectData(null);
         setHasProjectData(false);
-        setTimelineName(null)
+        setTimelineName(null);
         setBusy(false);
         setSyncing(false);
       }
@@ -370,7 +369,7 @@ function AppContent() {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
       setProjectData(null);
       setHasProjectData(false);
-      setTimelineName(null)
+      setTimelineName(null);
 
       if (err && err.alertIssued) {
       } else {
@@ -387,7 +386,8 @@ function AppContent() {
 
   useEffect(() => {
     handleSyncRef.current = handleSync;
-    if (projectData?.timeline?.name) setTimelineName(projectData?.timeline?.name)
+    if (projectData?.timeline?.name)
+      setTimelineName(projectData?.timeline?.name);
   }, [handleSync]);
 
   useEffect(() => {
@@ -400,8 +400,13 @@ function AppContent() {
       handleSyncRef.current();
     }
     // This handles the case where the initial check finds FFmpeg is NOT ready.
-    else if (ffmpegStatus === Status.Missing && prevFfmpegStatus === Status.Unknown) {
-      console.log("Initial FFmpeg check failed, calling handleSync (via ref) to show alert.");
+    else if (
+      ffmpegStatus === Status.Missing &&
+      prevFfmpegStatus === Status.Unknown
+    ) {
+      console.log(
+        "Initial FFmpeg check failed, calling handleSync (via ref) to show alert."
+      );
       handleSyncRef.current();
     }
   }, [ffmpegStatus, prevFfmpegStatus]);
@@ -409,9 +414,8 @@ function AppContent() {
   useEffect(() => {
     const hasBlur = supportsRealBackdrop();
     document.body.classList.add(hasBlur ? "has-blur" : "no-blur");
-    initializeProgressListeners()
+    initializeProgressListeners();
   }, []);
-
 
   const initHasRun = useRef(false);
 
@@ -421,10 +425,12 @@ function AppContent() {
       if (initHasRun.current) return;
       initHasRun.current = true;
 
-      console.log("App.tsx: Backend is ready, proceeding with initialization...");
+      console.log(
+        "App.tsx: Backend is ready, proceeding with initialization..."
+      );
 
       EventsOn("pythonStatusUpdate", (data) => {
-        if (data && typeof data.isReady === 'boolean') {
+        if (data && typeof data.isReady === "boolean") {
           console.log(`Event: Python status changed to ${data.isReady}`);
           setPythonReady(data.isReady);
         }
@@ -442,7 +448,7 @@ function AppContent() {
         const [isFfmpegReady, pyReady, goToken] = await Promise.all([
           GetFFmpegStatus(),
           GetPythonReadyStatus(),
-          GetToken()
+          GetToken(),
         ]);
 
         setToken(goToken);
@@ -455,7 +461,6 @@ function AppContent() {
         if (isFfmpegReady) {
           handleSyncRef.current();
         }
-
       } catch (err) {
         console.error("App.tsx: Error during app initialization:", err);
         setHttpPort(null);
@@ -495,7 +500,7 @@ function AppContent() {
           status: "warning",
         });
       }
-    }
+    };
     checkLicenseValidity();
   }, []);
 
@@ -523,7 +528,9 @@ function AppContent() {
       syncTimeoutRef.current = null;
     }
     if (syncMouseUpListenerRef.current) {
-      window.removeEventListener('mouseup', syncMouseUpListenerRef.current, { capture: true });
+      window.removeEventListener("mouseup", syncMouseUpListenerRef.current, {
+        capture: true,
+      });
       syncMouseUpListenerRef.current = null;
     }
   };
@@ -555,7 +562,10 @@ function AppContent() {
     // after a pending state.
     const clipStoreState = useClipStore.getState();
     const timelineItems = projectData?.timeline?.audio_track_items ?? [];
-    const currentClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
+    const currentClipParams = deriveAllClipDetectionParams(
+      timelineItems,
+      clipStoreState
+    );
     const keepSilence = useGlobalStore.getState().keepSilence;
 
     try {
@@ -571,15 +581,25 @@ function AppContent() {
         const makeNewTimeline = useGlobalStore.getState().makeNewTimeline;
         const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
         if (!response || response.status === "error") {
-          const errMessage = response?.message || "Unknown error occurred in timeline generation.";
-          console.error("Executing pending: Timeline generation failed:", errMessage);
+          const errMessage =
+            response?.message ||
+            "Unknown error occurred in timeline generation.";
+          console.error(
+            "Executing pending: Timeline generation failed:",
+            errMessage
+          );
           // TODO: Add error message
           return;
         }
-        console.log("Executing pending: 'HushCut Silences' process finished successfully.");
+        console.log(
+          "Executing pending: 'HushCut Silences' process finished successfully."
+        );
       }
     } catch (error) {
-      console.error("Executing pending: Error during 'HushCut Silences' process:", error);
+      console.error(
+        "Executing pending: Error during 'HushCut Silences' process:",
+        error
+      );
       // TODO: Add error message
     }
   };
@@ -596,7 +616,9 @@ function AppContent() {
 
     syncMouseUpListenerRef.current = executeSyncAndCleanup;
 
-    window.addEventListener('mouseup', syncMouseUpListenerRef.current, { capture: true });
+    window.addEventListener("mouseup", syncMouseUpListenerRef.current, {
+      capture: true,
+    });
 
     // Set a fallback timeout for non-mouse focus (e.g., Alt+Tab).
     syncTimeoutRef.current = setTimeout(() => {
@@ -609,11 +631,10 @@ function AppContent() {
     cancelPendingSync();
   };
 
-  useWindowFocus(
-    handleFocusWithDragDelay,
-    handleBlur,
-    { fireOnMount: false, throttleMs: 500 }
-  );
+  useWindowFocus(handleFocusWithDragDelay, handleBlur, {
+    fireOnMount: false,
+    throttleMs: 500,
+  });
 
   // Cleanup on unmount
   useEffect(() => {
@@ -621,7 +642,6 @@ function AppContent() {
       cancelPendingSync();
     };
   }, []);
-
 
   const handleAudioClipSelection = (selectedItemId: string) => {
     if (isBusy) {
@@ -643,35 +663,49 @@ function AppContent() {
       return (
         <div className="flex-1 flex top-40 h-min pointer-events-none absolute inset-0 z-50 opacity-0 animate-sync-box">
           <div className="bg-[#101012de] p-6 border-1 border-zinc-100/20 rounded-sm items-center mx-auto text-center text-sm text-zinc-400">
-            <LoaderCircleIcon size={32} className="text-teal-500/40 animate-spin mx-auto mb-3" />
+            <LoaderCircleIcon
+              size={32}
+              className="text-teal-500/40 animate-spin mx-auto mb-3"
+            />
             <p>Syncing with DaVinci.</p>
             <p> Please wait...</p>
           </div>
         </div>
-      )
-    }
-    else if (projectData && currentClipId && httpPort) {
-      return
-    }
-    else if (!projectData) {
+      );
+    } else if (projectData && currentClipId && httpPort) {
+      return;
+    } else if (!projectData) {
       return (
-        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-          <p className="text-gray-500">No active timeline.</p>
+        <div className="my-auto space-y-8 text-gray-500">
+          <div className="w-full gap-2 flex items-center justify-center rounded-sm">
+            <p className="text-gray-500">No active timeline.</p>
+          </div>
+          <div className="rounded-sm text-center text-sm">
+            <div>Own the free version of DaVinci?</div>
+            Make sure to open HushCut from DaVinci by navigating to
+            <div className="flex mx-auto gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
+              Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
+              Scripts <ChevronRightIcon size={16} className="text-zinc-700" />
+              Edit <ChevronRightIcon size={16} className="text-zinc-700" />
+              HushCut
+            </div>
+          </div>
         </div>
-      )
-    }
-    else if (!httpPort) {
+      );
+    } else if (!httpPort) {
       return (
-        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-          <p className="text-gray-500">There was a problem setting up the local http server.</p>
+        <div className="w-full h-full flex items-center justify-center rounded-sm">
+          <p className="text-gray-500">
+            There was a problem setting up the local http server.
+          </p>
         </div>
-      )
+      );
     }
     return (
       <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
         <p className="text-gray-500">No audio clips in timeline.</p>
       </div>
-    )
+    );
   };
   return (
     <>
@@ -703,35 +737,34 @@ function AppContent() {
           )}
           <div className="flex flex-col flex-1 space-y-1 px-3 flex-grow min-h-0 py-2">
             <div className="flex flex-row space-x-1 items-start flex-1 min-h-[200px] max-h-[600px]">
-              {currentActiveClip &&
-                projectData?.timeline && (
-                  <div className="flex w-min h-full">
-                    <ThresholdControl key={currentClipId} />
-                    <PeakMeter />
-                  </div>
-                )}
+              {currentActiveClip && projectData?.timeline && (
+                <div className="flex w-min h-full">
+                  <ThresholdControl key={currentClipId} />
+                  <PeakMeter />
+                </div>
+              )}
 
               <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                 {getStatusText()}
-                {currentActiveClip &&
-                  projectData?.timeline && httpPort && (
-                    <ErrorBoundary
-                      fallback={
-                        <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-                          <p className="text-gray-500">Failed to load waveform. Please try again.</p>
-                        </div>
-                      }
-                      maxRetries={3}
-                    >
-                      <WaveformPlayer
-                        key={currentActiveClip.id}
-                        activeClip={currentActiveClip}
-                        projectFrameRate={projectData.timeline.fps}
-                        httpPort={httpPort}
-                      />
-                    </ErrorBoundary>
-                  )
-                }
+                {currentActiveClip && projectData?.timeline && httpPort && (
+                  <ErrorBoundary
+                    fallback={
+                      <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+                        <p className="text-gray-500">
+                          Failed to load waveform. Please try again.
+                        </p>
+                      </div>
+                    }
+                    maxRetries={3}
+                  >
+                    <WaveformPlayer
+                      key={currentActiveClip.id}
+                      activeClip={currentActiveClip}
+                      projectFrameRate={projectData.timeline.fps}
+                      httpPort={httpPort}
+                    />
+                  </ErrorBoundary>
+                )}
               </div>
             </div>
             <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 shadow-xl h-min flex flex-col mx-auto">
@@ -739,16 +772,17 @@ function AppContent() {
                 <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
                   <SilenceControls key={currentClipId} />
                 </div>
-                {projectData && projectData.timeline?.audio_track_items?.length > 0 && (
-                  <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col-reverse [@media(width>=45rem)]:justify-start w-full justify-between">
-                    <DavinciSettings />
-                    <RemoveSilencesButton
-                      projectData={projectData}
-                      defaultDetectionParams={getDefaultDetectionParams()}
-                      onPendingAction={() => setPendingRemoveSilences(true)}
-                    />
-                  </div>
-                )}
+                {projectData &&
+                  projectData.timeline?.audio_track_items?.length > 0 && (
+                    <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col-reverse [@media(width>=45rem)]:justify-start w-full justify-between">
+                      <DavinciSettings />
+                      <RemoveSilencesButton
+                        projectData={projectData}
+                        defaultDetectionParams={getDefaultDetectionParams()}
+                        onPendingAction={() => setPendingRemoveSilences(true)}
+                      />
+                    </div>
+                  )}
               </div>
             </div>
           </div>
@@ -758,16 +792,21 @@ function AppContent() {
   );
 }
 
-
 interface FinalTimelineProps {
   open: boolean;
   progressPercentage: number | null;
   message: string;
-  totalTime: number
+  totalTime: number;
   onOpenChange: (open: boolean) => void; // <-- Add this to your interface
 }
 
-export function FinalTimelineProgress({ open, progressPercentage, message, totalTime, onOpenChange }: FinalTimelineProps) {
+export function FinalTimelineProgress({
+  open,
+  progressPercentage,
+  message,
+  totalTime,
+  onOpenChange,
+}: FinalTimelineProps) {
   const displayMessage = progressPercentage === 100 ? "Done" : message;
 
   const [internalOpen, setInternalOpen] = useState(false);
@@ -792,29 +831,33 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
     <Drawer open={internalOpen} onOpenChange={onOpenChange}>
       <DrawerContent
         className="maybe-glass"
-        style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
+        style={{
+          opacity: dialogOpacity,
+          transition: "opacity 150ms ease-in-out",
+        }}
         disableRadixAnimations={dialogOpacity === 0}
       >
         <div className="max-w-full p-4 px-8 md:p-12 space-y-4 sm:space-y-6 md:space-y-8">
-          <DrawerTitle className="text-2xl sm:text-4xl md:text-5xl mt-12 font-normal tracking-tighter">{displayMessage}</DrawerTitle>
+          <DrawerTitle className="text-2xl sm:text-4xl md:text-5xl mt-12 font-normal tracking-tighter">
+            {displayMessage}
+          </DrawerTitle>
           {Number.isFinite(progressPercentage) && (
             <Progress value={progressPercentage} className="h-0.5" />
           )}
           <DrawerDescription>
             {progressPercentage === 100 && (
               <>
-                Completed in: <span className="text-stone-200 mr-[2px]">{totalTime.toFixed(2)}</span><span>s</span>
+                Completed in:{" "}
+                <span className="text-stone-200 mr-[2px]">
+                  {totalTime.toFixed(2)}
+                </span>
+                <span>s</span>
               </>
             )}
 
-            {!progressPercentage || progressPercentage < 100 && (
-              <>
-                Please wait.
-              </>
-            )}
-
+            {!progressPercentage ||
+              (progressPercentage < 100 && <>Please wait.</>)}
           </DrawerDescription>
-
 
           <DrawerFooter className="flex flex-col sm:flex-row sm:justify-start gap-3 pt-6 px-0">
             {progressPercentage === 100 && (
@@ -835,15 +878,11 @@ export function FinalTimelineProgress({ open, progressPercentage, message, total
               </Button>
             </DrawerClose>
           </DrawerFooter>
-
-
-
         </div>
       </DrawerContent>
     </Drawer>
   );
 }
-
 
 interface ClientPortalProps {
   children: React.ReactNode;
@@ -851,7 +890,7 @@ interface ClientPortalProps {
 }
 
 const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === "undefined") return null;
 
   const container = document.getElementById(targetId);
   return container ? createPortal(children, container) : null;
@@ -860,31 +899,37 @@ const ClientPortal = ({ children, targetId }: ClientPortalProps) => {
 export default function App() {
   const isInfoDialogOpen = useUiStore((state) => state.isInfoDialogOpen);
   const setInfoDialogOpen = useUiStore((state) => state.setInfoDialogOpen);
-  const isSettingsDialogOpen = useUiStore((state) => state.isSettingsDialogOpen);
-  const setSettingsDialogOpen = useUiStore((state) => state.setSettingsDialogOpen);
+  const isSettingsDialogOpen = useUiStore(
+    (state) => state.isSettingsDialogOpen
+  );
+  const setSettingsDialogOpen = useUiStore(
+    (state) => state.setSettingsDialogOpen
+  );
 
   const [showFinalProgress, setShowFinalProgress] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [message, setMessage] = useState("");
-
 
   const timeStartedRef = useRef<number | null>(null);
   const timeFinishedRef = useRef<number | null>(null);
   const [totalTime, setTotalTime] = useState(0);
 
   useEffect(() => {
-    const off1 = EventsOn("taskProgressUpdate", (data: { message: string; progress: number }) => {
-      console.log("taskProgressUpdate", data);
+    const off1 = EventsOn(
+      "taskProgressUpdate",
+      (data: { message: string; progress: number }) => {
+        console.log("taskProgressUpdate", data);
 
-      if (data.progress != null) {
-        setProgress(prev => {
-          if (prev === null) return data.progress;
-          return data.progress < prev ? prev : data.progress;
-        });
+        if (data.progress != null) {
+          setProgress((prev) => {
+            if (prev === null) return data.progress;
+            return data.progress < prev ? prev : data.progress;
+          });
+        }
+
+        if (data.message) setMessage(data.message);
       }
-
-      if (data.message) setMessage(data.message);
-    });
+    );
 
     const off2 = EventsOn("showFinalTimelineProgress", () => {
       if (showFinalProgress) return;
@@ -898,7 +943,8 @@ export default function App() {
     const off3 = EventsOn("finished", () => {
       timeFinishedRef.current = Date.now();
       if (timeStartedRef.current) {
-        const elapsed = (timeFinishedRef.current! - timeStartedRef.current!) / 1000;
+        const elapsed =
+          (timeFinishedRef.current! - timeStartedRef.current!) / 1000;
         setTotalTime(elapsed);
       }
       setProgress(100);
@@ -907,16 +953,15 @@ export default function App() {
       }, 50);
     });
 
-
-    const off4 = EventsOn("ffmpeg:installed", () => {
-      toast.success("FFmpeg downloaded successfully!");
-    });
+    // const off4 = EventsOn("ffmpeg:installed", () => {
+    //   toast.success("FFmpeg downloaded successfully!");
+    // });
 
     return () => {
       off1();
       off2();
       off3();
-      off4();
+      //off4();
     };
   }, []);
 
@@ -925,6 +970,7 @@ export default function App() {
       <ClientPortal targetId="overlays">
         {/* <LicensePrompt /> */}
         <GlobalAlertDialog />
+        <DownloadPrompt />
         <FinalTimelineProgress
           open={showFinalProgress}
           progressPercentage={progress}
@@ -933,11 +979,16 @@ export default function App() {
           onOpenChange={setShowFinalProgress}
         />
         <InfoDialog open={isInfoDialogOpen} onOpenChange={setInfoDialogOpen} />
-        <SettingsDialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen} />
+        <SettingsDialog
+          open={isSettingsDialogOpen}
+          onOpenChange={setSettingsDialogOpen}
+        />
         <Toaster />
       </ClientPortal>
 
-      <ClientPortal targetId="title-bar-root"><TitleBar /></ClientPortal>
+      <ClientPortal targetId="title-bar-root">
+        <TitleBar />
+      </ClientPortal>
       <AppContent />
     </>
   );
