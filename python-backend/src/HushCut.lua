@@ -1566,13 +1566,20 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
     local track_items = bmd_timeline:GetItemListInTrack(track_type, i)
     if track_items then
       for _, item_bmd in ipairs(track_items) do
-        local start_frame = tonumber(item_bmd:GetStart(true)) + 0.0
+        local start_val = item_bmd:GetStart(true)
+        local start_frame = tonumber(start_val) or 0.0
+
         local item_name = item_bmd:GetName()
         local media_pool_item = item_bmd:GetMediaPoolItem()
-        local left_offset = tonumber(item_bmd:GetLeftOffset(true)) + 0.0
-        local duration = tonumber(item_bmd:GetDuration(true)) + 0.0
+
+        local left_val = item_bmd:GetLeftOffset(true)
+        local left_offset = left_val and tonumber(left_val) or 0.0
+
+        local duration_val = item_bmd:GetDuration(true)
+        local duration = duration_val and tonumber(duration_val) or 0.0
+
         local source_start_float = left_offset
-        local source_end_float = left_offset + duration
+        local source_end_float = (left_offset ~= 0.0) and (left_offset + duration) or duration
 
         local source_file_path = (media_pool_item and (media_pool_item:GetClipProperty("File Path") or "")) or ""
         local processed_file_name = nil
