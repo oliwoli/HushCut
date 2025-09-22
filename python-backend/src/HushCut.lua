@@ -1617,10 +1617,13 @@ local function get_items_by_tracktype(track_type, bmd_timeline)
           source_uuid = source_uuid,
           source_start_frame = source_start_float,
           source_end_frame = source_end_float,
-          source_channel = 0, -- Default value
+          source_channel = {
+            stream_idx = 1,
+            channel_idx = 0,
+          },
           link_group_id = nil,
           type = nil,
-          nested_clips = {},
+          nested_clips = nil,
         }
 
         if media_pool_item and source_file_path == "" then
@@ -1700,26 +1703,52 @@ local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_cont
   local normalized_source_start_frame = normalized_start_sec * timeline_fps
   local duration_frames = duration_sec * timeline_fps
 
-  local source_channel = 0
+  local source_channel = {
+    stream_idx = 1,
+    channel_idx = 0,
+  }
   local processed_file_name = source_uuid .. ".wav"
 
   local resolve_meta = safe_get(otio_clip, "metadata", "Resolve_OTIO") or {}
-  local channels_info = resolve_meta.Channels or {}
+  local mapping_str = resolve_meta.AudioMapping
 
-  if #channels_info == 1 then
-    local channel_num = channels_info[1]["Source Track ID"]
-    if type(channel_num) == 'number' and channel_num > 0 then
-      source_channel = channel_num
-      processed_file_name = source_uuid .. "_ch" .. tostring(source_channel) .. ".wav"
-      print("OTIO parser: Found mapping for clip '" ..
-        tostring(otio_clip.name) .. "' to source channel " .. tostring(source_channel))
+  if mapping_str and mapping_str ~= "" then
+    local ok, mapping = pcall(json.decode, mapping_str)
+    if ok and mapping and mapping.track_mapping then
+      local first_key
+      for k, _ in pairs(mapping.track_mapping) do
+        first_key = k
+        break
+      end
+
+      if first_key then
+        local clip_track_map = mapping.track_mapping[first_key] or {}
+        local clip_type = clip_track_map.type
+        local channel_indices = clip_track_map.channel_idx or {}
+
+        if clip_type and #channel_indices > 0 then
+          local resolve_channel = channel_indices[1] or 1
+          local ffmpeg_ch = resolve_channel - 1 -- 1-based → 0-based
+          local stream_idx = 0
+
+          source_channel = {
+            stream_idx = stream_idx,
+            channel_idx = ffmpeg_ch,
+          }
+          processed_file_name = source_uuid .. "_ch" .. tostring(ffmpeg_ch) .. ".wav"
+        end
+      end
+    else
+      print("Warning: Could not decode audio mapping for '" ..
+        tostring(otio_clip.name) ..
+        "'. Defaulting to mono mixdown.")
     end
   end
 
   local nested_item = {
     source_file_path = source_file_path,
     processed_file_name = processed_file_name,
-    source_channel = source_channel + 1,
+    source_channel = source_channel,
     start_frame = clip_start_in_container,
     end_frame = clip_start_in_container + duration_frames,
     source_start_frame = normalized_source_start_frame,
@@ -1928,30 +1957,57 @@ local function get_project_data(bmd_project, bmd_timeline)
   -- --- 2. Analyze Mappings & Define Streams ---
   print("Analyzing timeline items and audio channel mappings...")
   for _, item in ipairs(audio_track_items) do
-    if item.source_file_path and item.source_file_path ~= "" and item.type == json.null then
-      local source_uuid = item.source_uuid
-      item.source_channel = 0 -- Default
+    -- skip if no source_file_path
+    if not item.source_file_path or item.source_file_path == "" then
+      goto continue
+    end
 
-      local success, mapping_str = pcall(function() return item.bmd_item:GetSourceAudioChannelMapping() end)
-      if success and mapping_str and mapping_str ~= "" then
-        local ok, mapping = pcall(json.decode, mapping_str)
-        if ok and mapping then
-          local clip_track_map = mapping.track_mapping and mapping.track_mapping["1"] or {}
+    local source_uuid = uuid_from_path(item.source_file_path) -- you’ll need to wrap your UUID logic here
+    item.source_channel = {
+      stream_idx = 1,
+      channel_idx = 0,
+    }
+    item.processed_file_name = source_uuid .. ".wav"
+
+    local success, mapping_str = pcall(function()
+      return item.bmd_item:GetSourceAudioChannelMapping()
+    end)
+
+    if success and mapping_str and mapping_str ~= "" then
+      local ok, mapping = pcall(json.decode, mapping_str)
+      if ok and mapping and mapping.track_mapping then
+        -- get first key in mapping.track_mapping
+        local first_key
+        for k, _ in pairs(mapping.track_mapping) do
+          first_key = k
+          break
+        end
+
+        if first_key then
+          local clip_track_map = mapping.track_mapping[first_key] or {}
           local clip_type = clip_track_map.type
           local channel_indices = clip_track_map.channel_idx or {}
 
-          if clip_type and string.lower(clip_type) == "mono" and #channel_indices == 1 then
-            local channel_num = channel_indices[1]
-            print("Detected clip '" .. item.name .. "' using specific source channel: " .. channel_num)
-            item.source_channel = channel_num
-            item.processed_file_name = source_uuid .. "_ch" .. channel_num .. ".wav"
+          if clip_type and #channel_indices > 0 then
+            local resolve_channel = channel_indices[1]
+            local ffmpeg_ch = resolve_channel - 1 -- 1-based → 0-based
+            local stream_idx = 0                  -- only one stream exists
+
+            item.source_channel = {
+              stream_idx = stream_idx,
+              channel_idx = ffmpeg_ch,
+            }
+            item.processed_file_name = source_uuid .. "_ch" .. ffmpeg_ch .. ".wav"
           end
         end
-      else
-        print("Warning: Could not get audio mapping for '" ..
-          item.name .. "'. Defaulting to mono mixdown. Error: " .. tostring(mapping_str))
       end
+    else
+      print("Warning: Could not get audio mapping for '" ..
+        tostring(item.name) ..
+        "'. Defaulting to mono mixdown. Error: " .. tostring(mapping_str))
     end
+
+    ::continue::
   end
 
   -- --- 3. Populate the 'files' map ---
