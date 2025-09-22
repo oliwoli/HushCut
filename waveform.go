@@ -101,6 +101,22 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	clipEndSeconds float64,
 ) (*PrecomputedWaveformData, error) {
 
+	localFSPath, err := a.resolvePublicAudioPath(webInputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve web input path '%s' for pre-check: %w", webInputPath, err)
+	}
+	a.updateFileUsage(localFSPath)
+
+	if err := a.WaitForFile(localFSPath); err != nil {
+		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
+	}
+
+	if _, statErr := os.Stat(localFSPath); os.IsNotExist(statErr) {
+		return nil, fmt.Errorf("audio file does not exist at resolved path '%s' (from '%s')", localFSPath, webInputPath)
+	} else if statErr != nil {
+		return nil, fmt.Errorf("error stating file at resolved path '%s': %w", localFSPath, statErr)
+	}
+
 	key := WaveformCacheKey{
 		FilePath:        webInputPath,
 		SamplesPerPixel: samplesPerPixel,
@@ -141,7 +157,7 @@ func (a *App) GetOrGenerateWaveformWithCache(
 		return waveformData, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error during waveform processing for '%s': %w", webInputPath, err)
 	}
 
 	cachedData := v.(*PrecomputedWaveformData)
@@ -223,6 +239,12 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 		lastReportedPct float64 = -10.0
 	)
 
+	fileInfo, err := file.Stat() // Get stats ONCE here
+	if err != nil {
+		return nil, fmt.Errorf("could not get file info for '%s': %w", absPath, err)
+	}
+	totalBytes := fileInfo.Size()
+
 	for {
 		numSamples, readErr := decoder.PCMBuffer(pcmBuffer)
 		if numSamples == 0 {
@@ -231,23 +253,11 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 			}
 			break
 		}
-
-		file, err := os.Open(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open input file '%s': %w", absPath, err)
-		}
 		defer file.Close()
 
-		fileInfo, err := file.Stat()
-		if err != nil {
-			return nil, fmt.Errorf("could not get file info for '%s': %w", absPath, err)
-		}
-
 		// Optional progress
-		pos, err := file.Seek(0, io.SeekCurrent)
-		if err == nil {
-			totalBytes := fileInfo.Size()
-			if totalBytes > 0 {
+		if totalBytes > 0 {
+			if pos, err := file.Seek(0, io.SeekCurrent); err == nil {
 				pct := (float64(pos) / float64(totalBytes)) * 100
 				if pct-lastReportedPct >= 5 {
 					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
@@ -261,7 +271,7 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 
 		for i := 0; i < numSamples; i += inputChannels {
 			var maxFrameSample int32
-			for ch := 0; ch < inputChannels; ch++ {
+			for ch := range inputChannels {
 				val := int32(pcmBuffer.Data[i+ch])
 				if val < 0 {
 					val = -val
@@ -312,7 +322,7 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	if samplesInBlock > 0 {
 		normalized := float64(currentMaxAbs) / 32767.0
 		dB := minDisplayDb
-		if normalized > 0 {
+		if normalized > 0.000001 {
 			dB = 20 * math.Log10(normalized)
 		}
 		if dB < minDisplayDb {
@@ -321,10 +331,10 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 			dB = maxDisplayDb
 		}
 		visual := (dB - minDisplayDb) / (maxDisplayDb - minDisplayDb)
-		if visual < 0 {
-			visual = 0
-		} else if visual > 1 {
-			visual = 1
+		if visual < 0.0 {
+			visual = 0.0
+		} else if visual > 1.0 {
+			visual = 1.0
 		}
 		peaks = append(peaks, visual)
 	}
