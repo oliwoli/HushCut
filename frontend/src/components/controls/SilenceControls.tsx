@@ -214,48 +214,28 @@ const _MinContentControl = React.memo(() => {
 });
 
 
+
 export const SilenceControls = () => {
-    const [showAll, setShowAll] = useState(true);
-
-    const handleToggleClick = () => {
-        setShowAll(!showAll)
-    }
-
     return (
         <div className="w-full px-2 sm:px-3 xl:px-4 pt-4 sm:pt-5 flex flex-col gap-6 space-y-1">
             <div>
-                <div className='flex gap-2 items-center mb-2' onClick={handleToggleClick}>
-                    <Label className="block text-sm/tight leading-3 text-zinc-200 font-normal tracking-[-0.0125rem]">Silence Detection</Label>
-                    {showAll && (
-                        <ChevronUpIcon size={16} className='text-gray-500' />
-                    )}
-                </div>
+                <Label className="mb-2 block text-sm/tight leading-3 text-zinc-200 font-normal tracking-[-0.0125rem]">Silence Detection</Label>
                 <Separator aria-orientation="horizontal" className="h-px bg-zinc-700/80" />
             </div>
+
             <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-5 justify-between">
                 {/* Left column */}
                 <div className="flex flex-col gap-6">
                     <_MinDurationControl />
-                    {showAll && (
-                        <_PaddingControl />
-                    )}
+                    <_PaddingControl />
                 </div>
 
                 {/* Right column */}
-                {showAll && (
-                    <div className="flex flex-col gap-6">
-                        <_MinContentControl />
-                    </div>
-                )}
-
-                {!showAll && (
-                    <div onClick={handleToggleClick} className='text-sm ml-[-8px] flex gap-2 items-center mt-[-12px] mb-[-8px] text-gray-400 hover:text-zinc-200 w-32 p-2'>
-                        show all
-                        <ChevronDownIcon size={16} className='' />
-                    </div>
-                )}
+                <div className="flex flex-col gap-6">
+                    <_MinContentControl />
+                </div>
             </div>
-
         </div>
     );
+
 };
