@@ -90,20 +90,18 @@ export function ThresholdSlider({
               {...api.getThumbProps({ index })}
               tabIndex={-1}
               className={cn(
-                "h-9 w-5 flex items-center justify-items-center",
-                "disabled:pointer-events-none disabled:opacity-50",
-                "bg-[#252529]",
-                "border-2 border-neutral-600",
-                "rounded-[5px]"
+                "h-12 w-12 flex items-center justify-items-center",
+                "focus-visible:outline-none",
+                "disabled:pointer-events-none disabled:opacity-50"
               )}
             >
               <div
-                className="w-[10px] mx-auto h-2 relative border-t-[1.5px] border-b-[1.5px] border-neutral-600"
+                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-15.5px]"
+                style={{
+                  backgroundImage: `url(${faderImg})`,
+                }}
                 tabIndex={-1}
-              >
-                <div className="w-full h-[1.5px] top-[35%] bg-neutral-500 absolute" />
-
-              </div>
+              />
               <input {...api.getHiddenInputProps({ index })} tabIndex={-1} />
             </div>
           ))}
@@ -127,7 +125,7 @@ export function ThresholdSlider({
         </div>
       </div>
 
-      <div className="relative h-[calc(100%+5px)] bottom-0 bg-zinc-950/80 outline-1 outline-zinc-800 w-1 z-0 right-[18px] rounded-xs"></div>
+      <div className="relative h-[calc(100%+5px)] bottom-0 bg-zinc-950/80 outline-1 outline-zinc-800/80 w-1 z-0 right-[18px] rounded-xs"></div>
 
       <div className="relative h-full ml-0 top-0 mt-[3.2525%] right-3 font-mono px-1">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {

@@ -115,13 +115,12 @@ func (a *App) GetOrGenerateWaveformWithCache(
 		cachedData, found := a.waveformCache[key]
 		a.cacheMutex.RUnlock()
 		if found {
-			log.Println("CACHE HIT for key", key)
+			//log.Println("CACHE HIT for key", key)
 			return cachedData, nil
 		}
 
-		log.Println("CACHE MISS for key", key)
+		//log.Println("CACHE MISS for key", key)
 
-		// compute full waveform (semaphore optional if you still want to limit concurrency)
 		var waveformData *PrecomputedWaveformData
 		var err error
 		switch peakType {
