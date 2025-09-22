@@ -389,7 +389,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("ffmpeg not found at %s", a.ffmpegBinaryPath)
 		a.ffmpegStatus = StatusMissing
 		// TODO: figure out how to handle versions (accept locally installed ffmpeg if same minor version?)
-		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil && a.ffmpegStatus != StatusMissing {
+		if pathInSystem, lookupErr := exec.LookPath("ffmpeg"); lookupErr == nil {
 			a.ffmpegBinaryPath = pathInSystem
 			log.Printf("Found ffmpeg in system PATH: %s", a.ffmpegBinaryPath)
 			a.ffmpegStatus = StatusReady
