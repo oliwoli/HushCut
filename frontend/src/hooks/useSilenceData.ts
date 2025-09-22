@@ -11,7 +11,7 @@ import type { ActiveClip, DetectionParams, SilencePeriod, SilenceDataHookResult 
 export function useSilenceData(
   activeFile: ActiveClip | null,
   timelineFps: number | null,
-  debounceMs: number = 125,
+  debounceMs: number = 90,
 ): SilenceDataHookResult {
   const [silenceData, setSilenceData] = useState<SilencePeriod[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);

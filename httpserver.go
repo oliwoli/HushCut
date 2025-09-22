@@ -191,10 +191,9 @@ func (a *App) commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool)
 		// Set to true when you're ready to implement and test token auth.
 
 		if endpointRequiresAuth {
-			log.Printf("Middleware: Endpoint %s requires auth.", request.URL.Path)
+			//log.Printf("Middleware: Endpoint %s requires auth.", request.URL.Path)
 			if globalAuthEnabled {
-				// --- BEGIN FUTURE AUTH LOGIC (NEEDS a.authToken to be populated in App struct) ---
-				log.Printf("Middleware: Global auth is ENABLED. Performing token check for %s.", request.URL.Path)
+				//log.Printf("Middleware: Global auth is ENABLED. Performing token check for %s.", request.URL.Path)
 
 				if a.authToken == "" { // Assuming App struct has 'authToken string'
 					log.Printf("Auth Error: Auth token not configured on server for %s", request.URL.Path)
@@ -237,9 +236,8 @@ func (a *App) commonMiddleware(next http.HandlerFunc, endpointRequiresAuth bool)
 					http.Error(writer, "Unauthorized - Invalid token", http.StatusUnauthorized)
 					return
 				}
-				log.Printf("Auth: Token validated successfully for %s", request.URL.Path)
+				// log.Printf("Auth: Token validated successfully for %s", request.URL.Path)
 
-				// --- END FUTURE AUTH LOGIC ---
 			} else {
 				log.Printf("Middleware: Global auth is DISABLED. Token check skipped for %s (even though endpoint requires it).", request.URL.Path)
 			}
@@ -489,7 +487,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 		}
 		// Wait is still required to release the process resources from Go's perspective.
 		cmd.Wait()
-		log.Printf("RenderClip Cleanup: Successfully cleaned up ffmpeg process for %s", originalFilePath)
+		//log.Printf("RenderClip Cleanup: Successfully cleaned up ffmpeg process for %s", originalFilePath)
 	}()
 
 	// --- Pipe Setup ---

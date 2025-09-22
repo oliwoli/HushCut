@@ -46,13 +46,11 @@ type CacheKey struct {
 }
 
 type WaveformCacheKey struct {
-	FilePath         string // It's advisable to use an absolute/canonical path here if effectiveAudioFolderPath can change
-	SamplesPerPixel  int
-	PeakType         string // "logarithmic" or "linear"
-	MinDb            float64
-	MaxDb            float64 // maxDb is used by ProcessWavToLogarithmicPeaks
-	ClipStartSeconds float64
-	ClipEndSeconds   float64
+	FilePath        string // It's advisable to use an absolute/canonical path here if effectiveAudioFolderPath can change
+	SamplesPerPixel int
+	PeakType        string // "logarithmic" or "linear"
+	MinDb           float64
+	MaxDb           float64 // maxDb is used by ProcessWavToLogarithmicPeaks
 }
 
 type FileLoader struct {
