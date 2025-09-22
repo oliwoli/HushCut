@@ -96,7 +96,7 @@ export function ThresholdSlider({
               )}
             >
               <div
-                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-15.5px]"
+                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-15.8px]"
                 style={{
                   backgroundImage: `url(${faderImg})`,
                 }}
@@ -105,27 +105,10 @@ export function ThresholdSlider({
               <input {...api.getHiddenInputProps({ index })} tabIndex={-1} />
             </div>
           ))}
-
-          {/* Markings */}
-          {/* <div
-            {...api.getMarkerGroupProps()}
-            className="absolute inset-0 pointer-events-none left-[-8px]"
-          >
-            {marks.map((value, i) => (
-              <span
-                key={i}
-                {...api.getMarkerProps({ value })}
-                className={`absolute w-2 h-[1px] ${value === (actualMinDb + actualMaxDb) / 2
-                  ? "bg-zinc-300"
-                  : "bg-zinc-600"
-                  }`}
-              />
-            ))}
-          </div> */}
         </div>
       </div>
 
-      <div className="relative h-[calc(100%+5px)] bottom-0 bg-zinc-950/80 outline-1 outline-zinc-800/80 w-1 z-0 right-[18px] rounded-xs"></div>
+      <div className="relative h-[calc(100%+5px)] bottom-0 bg-neutral-950/80 outline-1 outline-zinc-800/80 w-1 z-0 right-[18px] rounded-xs"></div>
 
       <div className="relative h-full ml-0 top-0 mt-[3.2525%] right-3 font-mono px-1">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {
