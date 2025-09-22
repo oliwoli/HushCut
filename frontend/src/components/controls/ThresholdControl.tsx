@@ -1,6 +1,6 @@
 // ThresholdControl.tsx
 import React from 'react';
-import { ThresholdSlider } from "@/components/ui-custom/volumeSlider";
+import { ThresholdSlider } from "@/components/ui-custom/ThresholdSlider";
 import { useClipStore, useClipParameter, defaultParameters } from '@/stores/clipStore';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { Label } from '../ui/label';

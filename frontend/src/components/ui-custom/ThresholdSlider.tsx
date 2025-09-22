@@ -44,7 +44,7 @@ export function ThresholdSlider({
   const setIsThresholdDragging = useGlobalStore((s) => s.setIsThresholdDragging);
 
   const service = useMachine(slider.machine, {
-    id: "volume-slider",
+    id: "threshold-slider",
     value: [currentDbValue],
     defaultValue: [defaultDb],
     thumbAlignment: "center",
@@ -90,18 +90,20 @@ export function ThresholdSlider({
               {...api.getThumbProps({ index })}
               tabIndex={-1}
               className={cn(
-                "h-12 w-12 flex items-center justify-items-center",
-                "focus-visible:outline-none",
-                "disabled:pointer-events-none disabled:opacity-50"
+                "h-9 w-5 flex items-center justify-items-center",
+                "disabled:pointer-events-none disabled:opacity-50",
+                "bg-[#252529]",
+                "border-2 border-neutral-600",
+                "rounded-[5px]"
               )}
             >
               <div
-                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-15px]"
-                style={{
-                  backgroundImage: `url(${faderImg})`,
-                }}
+                className="w-[10px] mx-auto h-2 relative border-t-[1.5px] border-b-[1.5px] border-neutral-600"
                 tabIndex={-1}
-              />
+              >
+                <div className="w-full h-[1.5px] top-[35%] bg-neutral-500 absolute" />
+
+              </div>
               <input {...api.getHiddenInputProps({ index })} tabIndex={-1} />
             </div>
           ))}
@@ -171,7 +173,7 @@ export function ThresholdSlider({
               {isLabeled && (
                 <div
                   className={cn(
-                    "absolute left-[15px] top-1/2 -translate-y-1/2 text-xs text-zinc-400 select-none",
+                    "absolute left-[15px] top-1/2 -translate-y-1/2 text-xs text-zinc-400/90 select-none",
                     {
                       "[@media(max-height:920px)]:hidden [@container(max-height:508px)]:hidden":
                         dB === -5,
@@ -184,7 +186,7 @@ export function ThresholdSlider({
                 >
                   <span
                     className={cn(
-                      isMajor ? "font-bold" : "font-light",
+                      isMajor ? "font-normal" : "font-extralight text-zinc-400/80",
                       "[@media(max-height:750px)]:text-[11px]"
                     )}
                   >
