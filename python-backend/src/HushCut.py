@@ -1359,8 +1359,8 @@ def get_items_by_tracktype(
             media_pool_item = item_bmd.GetMediaPoolItem()
             left_offset = item_bmd.GetLeftOffset(True)
             duration = item_bmd.GetDuration(True)
-            source_start_float = left_offset
-            source_end_float = left_offset + duration
+            source_start_float = left_offset or 0
+            source_end_float = (left_offset + duration) if left_offset else duration
 
             source_file_path: str = (
                 media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
