@@ -1596,7 +1596,7 @@ def mixdown_compound_clips(
             tl_item["source_file_path"] = output_wav_path
 
 
-def build_stream_map(audio_mapping: dict):
+def _build_stream_map(audio_mapping: dict):
     """
     Build a list of streams with channel counts, based on Resolve's audio mapping.
     Returns: [{"id": "embedded", "channels": N}, {"id": "linked_1", "channels": M}, ...]
@@ -1635,9 +1635,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
     # --- 1. Initial Data Gathering ---
     timeline_name = timeline.GetName()
     timeline_fps = timeline.GetSetting("timelineFrameRate")
-    project_default_fps = project.GetSetting(
-        "timelineFrameRate"
-    )  # Get project's default FPS
+    project_default_fps = project.GetSetting("timelineFrameRate")
     video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
     audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
 
@@ -1660,9 +1658,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         print("Complex clips found. Analyzing timeline structure with OTIO...")
         input_otio_path = os.path.join(TEMP_DIR, "temp-timeline.otio")
         export_timeline_to_otio(timeline, file_path=input_otio_path)
-        populate_nested_clips(
-            input_otio_path
-        )  # This populates the 'nested_clips' array
+        populate_nested_clips(input_otio_path)
 
     # --- 2. Analyze Mappings & Define Streams (Runs for BOTH modes) ---
     print("Analyzing timeline items and audio channel mappings...")
@@ -1682,35 +1678,22 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         try:
             mapping_str = item["bmd_item"].GetSourceAudioChannelMapping()
             if mapping_str:
-                print(f"RAW MAPPING FOR '{item['name']}': {mapping_str}")
                 mapping = json.loads(mapping_str)
                 track_mappings = mapping.get("track_mapping", {})
                 if not track_mappings:
                     raise ValueError("No track mapping found in JSON.")
-                streams = build_stream_map(mapping)
-
-                print(f"STREAMS: {streams}")
+                # streams = _build_stream_map(mapping)
 
                 first_key = next(iter(track_mappings))
                 clip_track_map = track_mappings[first_key]
 
                 clip_type = clip_track_map.get("type")
                 channel_indices = clip_track_map.get("channel_idx", [])
-                print(
-                    f"PYTHON: Clip type: {clip_type} ... channel indices: {channel_indices}"
-                )
                 resolve_channel = channel_indices[0]
                 ffmpeg_ch = resolve_channel - 1  # 1-based → 0-based
                 stream_idx = 0  # only one stream exists
 
-                print(
-                    f"PYTHON: Resolve channel {resolve_channel} → ffmpeg stream #{stream_idx} channel {ffmpeg_ch}"
-                )
-
                 if clip_type and channel_indices:
-                    print(
-                        f"Detected clip '{item['name']}' using specific source channel: {ffmpeg_ch}"
-                    )
                     item["source_channel"] = {
                         "stream_idx": stream_idx,
                         "channel_idx": ffmpeg_ch,
@@ -1721,8 +1704,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
                 f"Warning: Could not get audio mapping for '{item['name']}'. Defaulting to mono mixdown. Error: {e}"
             )
 
-    # --- 3. [NEW] Populate the 'files' map for data consistency ---
-    # This ensures the Go backend and frontend have a complete data model, even if it's partly redundant.
+    # --- 3. Populate the 'files' map for data consistency ---
     for item in audio_track_items:
         source_path = item.get("source_file_path")
         if not source_path:
@@ -1740,8 +1722,6 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
                     "bmd_media_pool_item": item["bmd_mpi"],
                 },
                 "silenceDetections": None,
-                # Note: 'processed_audio_path' is no longer relevant in this map,
-                # as all processing is now per-timeline-item.
             }
 
     # --- 4. Handle Compound Clips ---
