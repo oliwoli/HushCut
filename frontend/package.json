@@ -45,7 +45,7 @@
     "use-sync-external-store": "^1.5.0",
     "vaul": "^1.1.2",
     "waveform-data": "^4.5.2",
-    "wavesurfer.js": "^7.10.1",
+    "wavesurfer.js": "^7.10.3",
     "zustand": "^5.0.7"
   },
   "devDependencies": {

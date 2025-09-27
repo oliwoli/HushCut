@@ -117,8 +117,8 @@ importers:
         specifier: ^4.5.2
         version: 4.5.2
       wavesurfer.js:
-        specifier: ^7.10.1
-        version: 7.10.1
+        specifier: ^7.10.3
+        version: 7.10.3
       zustand:
         specifier: ^5.0.7
         version: 5.0.7(@types/react@19.1.9)(react@19.1.1)(use-sync-external-store@1.5.0(react@19.1.1))
@@ -2188,8 +2188,8 @@ packages:
   waveform-data@4.5.2:
     resolution: {integrity: sha512-1wDQ2LmaCM76xXXkOamWui1dp7uS2UHVeNccuHDS/qnoOrczrXR6g7Q9m/UjlibHfukxBrceoRIVTKKY1tDLdA==}
 
-  wavesurfer.js@7.10.1:
-    resolution: {integrity: sha512-tF1ptFCAi8SAqKbM1e7705zouLC3z4ulXCg15kSP5dQ7VDV30Q3x/xFRcuVIYTT5+jB/PdkhiBRCfsMshZG1Ug==}
+  wavesurfer.js@7.10.3:
+    resolution: {integrity: sha512-UlRCl61tQjEt0guVj6oJjgsh28ZSleVIEcCnnUnSelgGGCpwCtLx5IjoBjyok5HwJjxUM6kF8UdTJO6U9CFd+g==}
 
   webpack-virtual-modules@0.6.2:
     resolution: {integrity: sha512-66/V2i5hQanC51vBQKPH4aI8NMAcBW59FVBs+rC7eGHupMyfn34q7rZIE+ETlJ+XTevqfUhVVBgSUNSW2flEUQ==}
@@ -4166,7 +4166,7 @@ snapshots:
 
   waveform-data@4.5.2: {}
 
-  wavesurfer.js@7.10.1: {}
+  wavesurfer.js@7.10.3: {}
 
   webpack-virtual-modules@0.6.2:
     optional: true
