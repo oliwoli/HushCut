@@ -847,7 +847,6 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		// If another goroutine is already working on this, just wait for its result.
 		log.Printf("StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
 		err := <-actualTracker.(*ProgressTracker).Done
-		log.Printf("StandardizeAudioToWav: Wait finished for %s.", filepath.Base(outputPath))
 		return err
 	}
 
@@ -907,13 +906,13 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	streamFound := false
 	ffmpegStream := 0
 	remaining := sourceChannel.ChannelIndex // 0-based index from Python
-	streamIndexInAudioStreams := 0
+	//streamIndexInAudioStreams := 0
 
 	for i, aStream := range audioStreams {
 		if remaining < aStream.Channels {
 			ffmpegStream = len(videoStreams) + i // absolute stream index in ffmpeg
 			streamFound = true
-			streamIndexInAudioStreams = i // save the index for later
+			//streamIndexInAudioStreams = i // save the index for later
 			break
 		}
 		remaining -= aStream.Channels
@@ -926,23 +925,19 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	args := []string{"-y", "-i", inputPath}
 
 	if sourceChannel != nil {
-		aStream := audioStreams[streamIndexInAudioStreams]
-		log.Printf("Mixing all %d channels from stream %d of '%s'", aStream.Channels, ffmpegStream, filepath.Base(inputPath))
+		//aStream := audioStreams[streamIndexInAudioStreams]
+		log.Printf("Extracting channel %d from stream %d of '%s'",
+			sourceChannel.ChannelIndex, ffmpegStream, filepath.Base(inputPath))
 
-		panExpr := ""
-		for ch := 0; ch < aStream.Channels; ch++ {
-			if ch > 0 {
-				panExpr += "+"
-			}
-			panExpr += fmt.Sprintf("%g*c%d", 1.0/float64(aStream.Channels), ch)
-		}
+		panExpr := fmt.Sprintf("c0=c%d", sourceChannel.ChannelIndex)
 
-		afArg := fmt.Sprintf("pan=mono|c0=%s", panExpr)
+		afArg := fmt.Sprintf("pan=mono|%s", panExpr)
 		args = append(args,
 			"-map", fmt.Sprintf("0:%d", ffmpegStream),
 			"-af", afArg,
 			"-vn",
 		)
+
 	} else {
 		log.Printf("Standardizing '%s' to mono", filepath.Base(inputPath))
 		args = append(args,
@@ -1088,7 +1083,6 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 	for _, item := range projectData.Timeline.AudioTrackItems {
 		// Case 1: This is a simple clip (not a compound clip).
 		if item.Type == "" {
-			// Use a guard clause to skip if there's no work to do.
 			if item.ProcessedFileName == nil || *item.ProcessedFileName == "" {
 				continue
 			}
