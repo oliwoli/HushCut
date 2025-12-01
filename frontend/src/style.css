@@ -145,6 +145,28 @@ body {
 #title-bar-root { z-index: 10; } /* The highest layer */
 
 
+#waveform ::part(cursor) {
+  height: 100%;
+  border-radius: 2px;
+  border: 1px solid #1c100d82;
+}
+
+#waveform ::part(cursor):after {
+  content: "";
+  width: 12px;
+  height: 8px;
+  background-image: url(assets/images/playhead.svg);
+  background-size: cover;
+  background-repeat: no-repeat;
+  font-size: 1.5em;
+  position: absolute;
+  left: 1px;
+  top: -1px;
+  transform: translateX(-50%);
+  z-index: 100;
+}
+
+
 /* silence region */
 ::part(region) {
   pointer-events: unset !important;
