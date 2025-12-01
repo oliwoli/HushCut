@@ -1062,10 +1062,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-grow min-h-0 min-w-0">
+      <div className="grow min-h-0 min-w-0">
         <div
           ref={waveformContainerRef}
-          className="h-full w-full bg-[#212126] border-1 border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative min-w-1 min-h-1"
+          id="waveform"
+          className="h-full w-full bg-[#212126] border border-b-0 rounded-tr-sm rounded-tl-sm box-border overflow-hidden relative min-w-1 min-h-1"
         >
           <canvas className="absolute inset-0 z-0" />
 
@@ -1104,10 +1105,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         </div>
       </div>
 
-      <div className="rounded-none border-0 mt-0 pt-1 overflow-hidden flex-shrink-0">
+      <div className="rounded-none border-0 mt-0 pt-1 overflow-hidden shrink-0">
         <div
           ref={minimapContainerRef}
-          className="max-h-[40px] w-full bg-[#131316] border-1 rounded-b-xs box-border overflow-hidden"
+          className="max-h-10 w-full bg-[#131316] border rounded-b-xs box-border overflow-hidden"
         ></div>
         <div className="flex items-center gap-1">
           <div className="w-full items-center flex justify-start py-2 gap-0.5 md:gap-2 p-1">

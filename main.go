@@ -175,10 +175,10 @@ func main() {
 		AlwaysOnTop: true,
 		Frameless:   true,
 		Mac: &mac.Options{
-			WebviewIsTransparent: true,
+			WebviewIsTransparent: false,
 		},
 		Windows: &windows.Options{
-			WebviewIsTransparent: true,
+			WebviewIsTransparent: false,
 		},
 		Linux: &linux.Options{
 			Icon:                icon,

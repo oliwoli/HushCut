@@ -661,9 +661,9 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 		runtime.EventsEmit(a.ctx, "showToast", data)
 
 	case "showAlert": // This is now for alerts NOT related to a SyncWithDavinci task
-		if !a.licenseValid {
-			return
-		}
+		// if !a.licenseValid {
+		// 	return
+		// }
 		if taskID != "" {
 			log.Printf("msgEndpoint: 'showAlert' with task_id '%s' received. This is likely an old Python flow. Emitting alert globally but not notifying task channel.", taskID)
 		}
@@ -782,9 +782,9 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 	if !a.pythonReady {
 		return nil, fmt.Errorf("python backend not ready")
 	}
-	if !a.licenseValid {
-		return nil, fmt.Errorf("invalid license. Action not permitted")
-	}
+	// if !a.licenseValid {
+	// 	return nil, fmt.Errorf("invalid license. Action not permitted")
+	// }
 	runtime.EventsEmit(a.ctx, "showFinalTimelineProgress")
 
 	// 1. Adopt the async task pattern
