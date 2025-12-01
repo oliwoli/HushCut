@@ -233,6 +233,33 @@ func getMacCacheTmpDir() string {
 	return filepath.Join(homeDir, "Library", "Caches", "HushCut", "tmp")
 }
 
+func parseWhereOutput(output string) (string, error) {
+
+	lines := strings.Split(output, "\n")
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+
+		// Remove optional quotes
+		line = strings.Trim(line, `"`)
+
+		// Check for valid drive-letter paths
+		if len(line) > 2 && line[1] == ':' && (line[2] == '\\' || line[2] == '/') {
+			return line, nil
+		}
+
+		// Check for UNC paths: \\server\share
+		if strings.HasPrefix(line, `\\`) {
+			return line, nil
+		}
+	}
+
+	return "", fmt.Errorf("no valid paths found in `where` output")
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
@@ -305,25 +332,6 @@ func (a *App) startup(ctx context.Context) {
 	}
 	if err := os.MkdirAll(a.tmpPath, 0755); err != nil {
 		log.Fatalf("Failed to create tmp folder: %v", err)
-	}
-
-	machineID, err := a.getMachineID()
-	if err != nil {
-		log.Println("Could not retrieve machine ID")
-		// alertData := AlertPayload{
-		// 	Title:    "Internal Error (no machine ID)",
-		// 	Message:  "Could not retrieve the machine ID",
-		// 	Severity: "Error",
-		// }
-		// runtime.EventsEmit(a.ctx, "showAlert", alertData)
-	}
-
-	a.machineID = machineID
-
-	a.licenseValid = a.HasAValidLicense()
-	if !a.licenseValid {
-		runtime.EventsEmit(a.ctx, "license:invalid", nil)
-		log.Println("Wails App: License is invalid or not found.")
 	}
 
 	a.checkForUpdate("v" + a.appVersion)
@@ -402,15 +410,14 @@ func (a *App) startup(ctx context.Context) {
 		if platform == "windows" {
 			cmd := exec.Command("cmd", "/c", "where", "ffmpeg")
 			out, err := cmd.Output()
-			if err == nil && len(out) > 0 {
-				cleanPath := strings.TrimSpace(string(out))
-				firstPath := strings.Fields(cleanPath)[0]
-
-				a.ffmpegBinaryPath = firstPath
-				log.Printf("Found and sanitized ffmpeg path: %s", a.ffmpegBinaryPath)
+			if err != nil || len(out) == 0 {
+				log.Println("ffmpeg could not be detected:", err)
+			} else if parsed, parseErr := parseWhereOutput(string(out)); parseErr == nil {
+				a.ffmpegBinaryPath = parsed
 				a.ffmpegStatus = StatusReady
+				log.Printf("Found ffmpeg via where: %s", parsed)
 			} else {
-				log.Println("ffmpeg could not be detected: ", err)
+				log.Printf("Invalid where output (%q): %v", out, parseErr)
 			}
 		}
 
