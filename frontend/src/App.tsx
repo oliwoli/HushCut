@@ -55,6 +55,14 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "./components/ui/drawer";
+
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+
 import { Button } from "./components/ui/button";
 import { Progress } from "./components/ui/progress";
 import { DavinciSettings } from "./components/controls/DavinciSettings";
@@ -66,8 +74,7 @@ import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
-import LicensePrompt from "./components/ui-custom/LicensePrompt";
-import { ChevronRightIcon, LoaderCircleIcon } from "lucide-react";
+import { ChevronRightIcon, LoaderCircleIcon, RefreshCwIcon } from "lucide-react";
 import DownloadPrompt from "./components/ui-custom/DownloadPrompt";
 
 const getDefaultDetectionParams = (): DetectionParams => ({
@@ -662,7 +669,7 @@ function AppContent() {
     if (syncing) {
       return (
         <div className="flex-1 flex top-40 h-min pointer-events-none absolute inset-0 z-50 opacity-0 animate-sync-box">
-          <div className="bg-[#101012de] p-6 border-1 border-zinc-100/20 rounded-sm items-center mx-auto text-center text-sm text-zinc-400">
+          <div className="bg-[#101012de] p-6 border border-zinc-100/20 rounded-sm items-center mx-auto text-center text-sm text-zinc-400">
             <LoaderCircleIcon
               size={32}
               className="text-teal-500/40 animate-spin mx-auto mb-3"
@@ -683,7 +690,7 @@ function AppContent() {
           <div className="rounded-sm text-center text-sm">
             <div>Own the free version of DaVinci?</div>
             Make sure to open HushCut from DaVinci by navigating to
-            <div className="flex mx-auto gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
+            <div className="flex mx-auto gap-1 items-center mt-2 border w-min px-4 py-2 rounded-md text-zinc-400">
               Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
               Scripts <ChevronRightIcon size={16} className="text-zinc-700" />
               Edit <ChevronRightIcon size={16} className="text-zinc-700" />
@@ -709,85 +716,92 @@ function AppContent() {
   };
   return (
     <>
-      <div
-        className="pt-3 bg-[#1b1b1f] border-t-0 border-1 border-zinc-950"
-        style={{
-          marginTop: titleBarHeight,
-          height: `calc(100vh - ${titleBarHeight})`,
-          overflowY: "auto", // Make this div scrollable
-        }}
-      >
-        <header className="flex items-center justify-between"></header>
-        <main className="flex flex-col max-w-screen select-none h-full">
-          {currentActiveClip?.id && httpPort && (
-            <div className="flex-shrink-0 px-3">
-              <ClipSelector
-                audioItems={projectData?.timeline.audio_track_items}
-                currentFileId={currentClipId}
-                onFileChange={handleAudioClipSelection}
-                fps={projectData?.timeline.fps}
-                disabled={
-                  !httpPort ||
-                  !projectData?.timeline?.audio_track_items ||
-                  projectData.timeline.audio_track_items.length === 0
-                }
-                className="w-full mt-1 overflow-visible"
-              />
-            </div>
-          )}
-          <div className="flex flex-col flex-1 space-y-1 px-3 flex-grow min-h-0 py-2">
-            <div className="flex flex-row space-x-1 items-start flex-1 min-h-[200px] max-h-[600px]">
-              {currentActiveClip && projectData?.timeline && (
-                <div className="flex w-min h-full">
-                  <ThresholdControl key={currentClipId} />
-                  <PeakMeter />
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <div
+            className="pt-3 bg-[#1b1b1f] border-t-0 border border-zinc-950"
+            style={{
+              marginTop: titleBarHeight,
+              height: `calc(100vh - ${titleBarHeight})`,
+              overflowY: "auto", // Make this div scrollable
+            }}
+          >
+            <header className="flex items-center justify-between"></header>
+            <main className="flex flex-col max-w-screen select-none h-full">
+              {currentActiveClip?.id && httpPort && (
+                <div className="shrink-0 px-3">
+                  <ClipSelector
+                    audioItems={projectData?.timeline.audio_track_items}
+                    currentFileId={currentClipId}
+                    onFileChange={handleAudioClipSelection}
+                    fps={projectData?.timeline.fps}
+                    disabled={
+                      !httpPort ||
+                      !projectData?.timeline?.audio_track_items ||
+                      projectData.timeline.audio_track_items.length === 0
+                    }
+                    className="w-full mt-1 overflow-visible"
+                  />
                 </div>
               )}
-
-              <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
-                {getStatusText()}
-                {currentActiveClip && projectData?.timeline && httpPort && (
-                  <ErrorBoundary
-                    fallback={
-                      <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-                        <p className="text-gray-500">
-                          Failed to load waveform. Please try again.
-                        </p>
-                      </div>
-                    }
-                    maxRetries={3}
-                  >
-                    <WaveformPlayer
-                      key={currentActiveClip.id}
-                      activeClip={currentActiveClip}
-                      projectFrameRate={projectData.timeline.fps}
-                      httpPort={httpPort}
-                    />
-                  </ErrorBoundary>
-                )}
-              </div>
-            </div>
-            <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border-1 shadow-xl h-min flex flex-col mx-auto">
-              <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between flex-grow">
-                <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
-                  <SilenceControls key={currentClipId} />
-                </div>
-                {projectData &&
-                  projectData.timeline?.audio_track_items?.length > 0 && (
-                    <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col-reverse [@media(width>=45rem)]:justify-start w-full justify-between">
-                      <DavinciSettings />
-                      <RemoveSilencesButton
-                        projectData={projectData}
-                        defaultDetectionParams={getDefaultDetectionParams()}
-                        onPendingAction={() => setPendingRemoveSilences(true)}
-                      />
+              <div className="flex flex-col flex-1 space-y-1 px-3 grow min-h-0 py-2">
+                <div className="flex flex-row space-x-1 items-start flex-1 min-h-[200px] max-h-[600px]">
+                  {currentActiveClip && projectData?.timeline && (
+                    <div className="flex w-min h-full">
+                      <ThresholdControl key={currentClipId} />
+                      <PeakMeter />
                     </div>
                   )}
+
+                  <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
+                    {getStatusText()}
+                    {currentActiveClip && projectData?.timeline && httpPort && (
+                      <ErrorBoundary
+                        fallback={
+                          <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+                            <p className="text-gray-500">
+                              Failed to load waveform. Please try again.
+                            </p>
+                          </div>
+                        }
+                        maxRetries={3}
+                      >
+                        <WaveformPlayer
+                          key={currentActiveClip.id}
+                          activeClip={currentActiveClip}
+                          projectFrameRate={projectData.timeline.fps}
+                          httpPort={httpPort}
+                        />
+                      </ErrorBoundary>
+                    )}
+                  </div>
+                </div>
+                <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border shadow-xl h-min flex flex-col mx-auto">
+                  <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between grow">
+                    <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
+                      <SilenceControls key={currentClipId} />
+                    </div>
+                    {projectData &&
+                      projectData.timeline?.audio_track_items?.length > 0 && (
+                        <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col-reverse [@media(width>=45rem)]:justify-start w-full justify-between">
+                          <DavinciSettings />
+                          <RemoveSilencesButton
+                            projectData={projectData}
+                            defaultDetectionParams={getDefaultDetectionParams()}
+                            onPendingAction={() => setPendingRemoveSilences(true)}
+                          />
+                        </div>
+                      )}
+                  </div>
+                </div>
               </div>
-            </div>
+            </main>
           </div>
-        </main>
-      </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onClick={handleSync} className="text-xs"><RefreshCwIcon className="w-[1.25em]" /> Sync with DaVinci</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </>
   );
 }
@@ -848,7 +862,7 @@ export function FinalTimelineProgress({
             {progressPercentage === 100 && (
               <>
                 Completed in:{" "}
-                <span className="text-stone-200 mr-[2px]">
+                <span className="text-stone-200 mr-0.5">
                   {totalTime.toFixed(2)}
                 </span>
                 <span>s</span>
