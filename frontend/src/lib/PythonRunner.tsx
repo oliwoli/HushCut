@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import deepEqual from "fast-deep-equal";
 import { AudioWaveformIcon } from "lucide-react";
 
-import { EventsOn } from "@wails/runtime/runtime";
 import {
   MakeFinalTimeline,
   CalculateAndStoreEditsForTimeline,
@@ -316,12 +315,12 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       disabled={buttonDisabled}
       className={
         cn(
-          "bg-stone-700/10 shadow-xl border-2 rounded-xl border-orange-400/60 hover:bg-gradient-to-b from-red-800/10 to-orange-800/20 text-white p-8 font-[200]",
+          "bg-stone-700/10 shadow-xl border-2 rounded-xl border-orange-400/60 hover:bg-gradient-to-b from-red-800/10 to-orange-800/20 text-white p-8 font-extralight",
           `${buttonDisabled ? "opacity-50 cursor-not-allowed" : ""}`,
-          "w-[12rem] md:w-3xs"
+          "w-42 md:w-3xs sm:w-48"
         )}
     >
-      <span className="items-center font-label align-middle flex text-base md:text-[23px] tracking-normal gap-4 font-[300]">
+      <span className="items-center font-label align-middle flex text-base md:text-[1.45rem] tracking-normal gap-4 font-light">
         <AudioWaveformIcon size={32} className="scale-125 md:scale-150 text-gray-500" />
         {currentButtonText}
       </span>

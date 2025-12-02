@@ -4,11 +4,22 @@ import { cn, frameToTimecode } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+
 import { Progress } from "../ui/progress";
-import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
+import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, Check, CheckIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
 import { useClipStore, useIsClipModified } from "@/stores/clipStore";
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
+import { ContextMenuLabel, ContextMenuSeparator, Separator } from "@radix-ui/react-context-menu";
+import { DropdownMenuSeparator } from "../ui/dropdown-menu";
+
+
 
 function downsamplePeaks(fullPeaks: number[], targetPeakCount: number) {
   const step = fullPeaks.length / targetPeakCount;
@@ -238,104 +249,125 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
   };
 
   return (
-    <div className={cn(
-      "flex flex-col flex-shrink-0 max-w-44 min-w-24",
-    )}>
-      <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
-        <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border-1 flex items-center")}>{index}</span>
-        <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
-        <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
-      </div>
-      <button
-        ref={forwardedRef} // ✨ Assign the forwarded ref here
-        type="button"
-        onClick={handleClipClick}
-        disabled={disabled}
-        className={cn(
-          "group",
-          "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400",
-          "border",
-          bypassed ? "bg-none" : "bg-gray-700/40",
-          {
-            "border-zinc-700 hover:border-zinc-600": !isSelected,
-            "border-orange-500 ": isSelected,
-            "cursor-not-allowed opacity-60": disabled,
-          }
-        )}
-      >
-        {/* Progress Bar / Error Overlay */}
-        {(isConverting || hasError) && (
-          <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center p-2">
-            {hasError ? (
-              <span className="text-xs text-red-400 font-semibold">Error</span>
-            ) : (
-              <Progress value={progress} />
-            )}
-          </div>
-        )}
 
-        {(!isConverting && isLoading) && (
-          <div className="absolute inset-0 bg-black/10 z-20 flex items-top justify-center p-0">
-            {hasError ? (
-              <span className="text-xs text-red-400 font-semibold">Error</span>
-            ) : (
-              <Progress value={waveformProgress} className="rounded-none h-[2px] max-h-[2px] p-0" indicatorClassName="shadow-1 shadow-indigo-500 bg-teal-500 h-full w-full flex-1 transition-all" />
-            )}
-          </div>
-        )}
-
-        <div className={cn(
-          bypassed ? "flex" : "group-hover:flex hidden",
-          "text-zinc-400 z-30 top-0 right-1.5 p-2 pl-4 absolute items-center space-x-1",
-          "hover:text-zinc-100"
-        )} role="button" onClick={handleBypassClick}>
-          {bypassed ? (
-            <PowerOffIcon size={15} className="text-orange-400/60 hover:text-orange-200" />
-          ) : (
-            <PowerIcon size={15} />
-          )}
+    <ContextMenu>
+      <div className={cn(
+        "flex flex-col shrink-0 max-w-44 min-w-24",
+      )}>
+        <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
+          <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border flex items-center")}>{index}</span>
+          <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
+          <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
         </div>
 
-
-        <div className={cn(
-          "absolute inset-0 flex items-center justify-center  p-1 bottom-6 [@media(max-height:800px)]:bottom-5",
-          bypassed ? "text-gray-600/50" : "text-teal-600",
-          isLoading && "animate-pulse")
-        }>
-
-          {isLoading ? <SimulatedWaveform /> : (
-            waveformPeaks ?
-              <LinearWaveform
-                peaks={waveformPeaks}
-              /> :
-              <SimulatedWaveform />
-          )}
-        </div>
-        <div className={cn(
-          bypassed ? "opacity-35" : "opacity-100",
-          "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-gradient-to-t from-black/50 via-black/20 to-transparent"
-        )}>
-          <div className="flex items-center space-x-1.5">
-            {isNested ? (
-              <LayersIcon className="text-sm h-[14px] text-stone-400 p-0 mr-1" />
-            ) : (
-              <AudioLinesIcon className={cn("text-sm h-[14px] text-stone-400 p-0 mr-1")} />
+        <ContextMenuTrigger className="flex">
+          <button
+            ref={forwardedRef}
+            type="button"
+            onClick={handleClipClick}
+            disabled={disabled}
+            className={cn(
+              "group",
+              "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
+              "focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400",
+              "border",
+              bypassed ? "bg-none" : "bg-gray-700/40",
+              {
+                "border-zinc-700 hover:border-zinc-600": !isSelected,
+                "border-orange-500 ": isSelected,
+                "cursor-not-allowed opacity-60": disabled,
+              }
+            )}          >
+            {/* Progress Bar / Error Overlay */}
+            {(isConverting || hasError) && (
+              <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center p-2">
+                {hasError ? (
+                  <span className="text-xs text-red-400 font-semibold">Error</span>
+                ) : (
+                  <Progress value={progress} />
+                )}
+              </div>
             )}
+
+            {(!isConverting && isLoading) && (
+              <div className="absolute inset-0 bg-black/10 z-20 flex items-top justify-center p-0">
+                {hasError ? (
+                  <span className="text-xs text-red-400 font-semibold">Error</span>
+                ) : (
+                  <Progress value={waveformProgress} className="rounded-none h-0.5 max-h-0.5 p-0" indicatorClassName="shadow-1 shadow-indigo-500 bg-teal-500 h-full w-full flex-1 transition-all" />
+                )}
+              </div>
+            )}
+
             <div className={cn(
-
-              "flex items-baseline space-x-1")}>
-              <p className={cn(
-                "font-normal text-xs truncate max-w-28",
-                isSelected ? "text-zinc-200/90" : "text-gray-400"
-              )}>
-                {item.name}</p>
-              <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="p-0 m-0 ml-[-4px] mb-[2px]" /></span>
+              bypassed ? "flex" : "group-hover:flex hidden",
+              "text-zinc-400 z-30 top-0 right-1.5 p-2 pl-4 absolute items-center space-x-1",
+              "hover:text-zinc-100"
+            )} role="button" onClick={handleBypassClick}>
+              {bypassed ? (
+                <PowerOffIcon size={15} className="text-orange-400/60 hover:text-orange-200" />
+              ) : (
+                <PowerIcon size={15} />
+              )}
             </div>
-          </div>
-        </div>
-      </button>
-    </div>
+
+
+            <div className={cn(
+              "absolute inset-0 flex items-center justify-center  p-1 bottom-6 [@media(max-height:800px)]:bottom-5",
+              bypassed ? "text-gray-600/50" : "text-teal-600",
+              isLoading && "animate-pulse")
+            }>
+
+              {isLoading ? <SimulatedWaveform /> : (
+                waveformPeaks ?
+                  <LinearWaveform
+                    peaks={waveformPeaks}
+                  /> :
+                  <SimulatedWaveform />
+              )}
+            </div>
+            <div className={cn(
+              bypassed ? "opacity-35" : "opacity-100",
+              "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-linear-to-t from-black/50 via-black/20 to-transparent"
+            )}>
+              <div className="flex items-center space-x-1.5">
+                {isNested ? (
+                  <LayersIcon className="text-sm h-3.5 text-stone-400 p-0 mr-1" />
+                ) : (
+                  <AudioLinesIcon className={cn("text-sm h-3.5 text-stone-400 p-0 mr-1")} />
+                )}
+                <div className={cn(
+
+                  "flex items-baseline space-x-1")}>
+                  <p className={cn(
+                    "font-normal text-xs truncate max-w-28",
+                    isSelected ? "text-zinc-200/90" : "text-gray-400"
+                  )}>
+                    {item.name}</p>
+                  <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="absolute left-0.5 top-0.5" /></span>
+                </div>
+              </div>
+            </div>
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="text-xs text-gray-300">
+          <ContextMenuItem className="text-xs" onClick={handleBypassClick}>
+            {(!bypassed) ? (
+              <CheckIcon className="w-[1.25em] h-[1.25em]" />
+            ) : (
+              <div className="w-2" />
+            )}
+            Enable/Disable Clip
+
+          </ContextMenuItem>
+          <DropdownMenuSeparator />
+          <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-500">{item.name}</ContextMenuLabel>
+        </ContextMenuContent>
+      </div>
+    </ContextMenu>
+
+
+
   );
 });
 
@@ -347,7 +379,7 @@ interface FileSelectorProps {
   fps?: number;
 }
 
-const _FileSelector: React.FC<FileSelectorProps> = ({
+const _ClipSelector: React.FC<FileSelectorProps> = ({
   audioItems,
   currentFileId,
   onFileChange,
@@ -386,7 +418,7 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   const columnVirtualizer = useVirtualizer({
     count: sortedItems.length,
     getScrollElement: () => scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null,
-    estimateSize: () => 150,
+    estimateSize: () => 150, //TODO: multiply by UI scale
     horizontal: true,
     overscan: 10,
     isScrollingResetDelay: 200,
@@ -440,8 +472,8 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
       <div
         className={cn(
-          "relative h-[112px]",
-          "[@media(max-height:800px)]:h-[95px]"
+          "relative h-28",
+          "[@media(max-height:800px)]:h-26"
         )}
         style={{
           width: `${columnVirtualizer.getTotalSize()}px`,
@@ -476,6 +508,8 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
                 fps={fps}
                 allClipIds={allClipIds}
               />
+
+
             </div>
           );
         })}
@@ -485,5 +519,5 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   );
 };
 
-const FileSelector = React.memo(_FileSelector);
-export default FileSelector
+const ClipSelector = React.memo(_ClipSelector);
+export default ClipSelector
