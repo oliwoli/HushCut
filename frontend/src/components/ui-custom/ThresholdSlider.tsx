@@ -63,7 +63,7 @@ export function ThresholdSlider({
   const api = slider.connect(service, normalizeProps);
 
   return (
-    <div className="flex items-center h-[calc(100%-91px)] select-none pb-[5px] pt-0 px-5">
+    <div className="flex items-center h-[calc(100%-5.688rem)] select-none pb-[0.313rem] pt-0 px-5">
       <div
         {...api.getRootProps()}
         onDoubleClick={onDoubleClick}
@@ -96,7 +96,7 @@ export function ThresholdSlider({
               )}
             >
               <div
-                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-15.8px]"
+                className="w-full h-full bg-contain bg-center bg-no-repeat relative left-[-0.988rem]"
                 style={{
                   backgroundImage: `url(${faderImg})`,
                 }}
@@ -108,7 +108,7 @@ export function ThresholdSlider({
         </div>
       </div>
 
-      <div className="relative h-[calc(100%+5px)] bottom-0 bg-neutral-950/80 outline-1 outline-zinc-800/80 w-1 z-0 right-[18px] rounded-xs"></div>
+      <div className="relative h-[calc(100%+0.313rem)] bottom-0 bg-neutral-950/80 outline-1 outline-zinc-800/80 w-1 z-0 right-4.5 rounded-xs"></div>
 
       <div className="relative h-full ml-0 top-0 mt-[3.2525%] right-3 font-mono px-1">
         {Array.from({ length: actualMaxDb - actualMinDb + 1 }, (_, i) => {
@@ -129,10 +129,10 @@ export function ThresholdSlider({
           const isSmall = !isMajor && !isMedium;
 
           const tickWidth = isMajor
-            ? "w-[12px]"
+            ? "w-[0.75rem]"
             : isMedium || isLabeled
-              ? "w-[8px]"
-              : "w-[4px]";
+              ? "w-[0.5rem]"
+              : "w-[0.25rem]";
           const tickOpacity = isLabeled ? "opacity-80" : "opacity-80";
 
           return (
@@ -148,19 +148,19 @@ export function ThresholdSlider({
               style={{ bottom: `${pct}%` }}
             >
               <div
-                className={`h-[1px] bg-zinc-400 ${tickWidth} ${tickOpacity}`}
+                className={`h-px bg-zinc-400 ${tickWidth} ${tickOpacity}`}
               />
 
               {isLabeled && (
                 <div
                   className={cn(
-                    "absolute left-[15px] top-1/2 -translate-y-1/2 text-xs text-zinc-400/90 select-none",
+                    "absolute left-[0.938rem] top-1/2 -translate-y-1/2 text-xs text-zinc-400/90 select-none",
                     {
-                      "[@media(max-height:920px)]:hidden [@container(max-height:508px)]:hidden":
+                      "[@media(max-height:57.5rem)]:hidden [@container(max-height:31.75rem)]:hidden":
                         dB === -5,
                     },
                     {
-                      "[@media(max-height:750px)]:hidden [@container(max-height:100px)]:hidden":
+                      "[@media(max-height:46.875rem)]:hidden [@container(max-height:6.25rem)]:hidden":
                         !isMajor,
                     }
                   )}
@@ -168,7 +168,7 @@ export function ThresholdSlider({
                   <span
                     className={cn(
                       isMajor ? "font-normal" : "font-extralight text-zinc-400/80",
-                      "[@media(max-height:750px)]:text-[11px]"
+                      "[@media(max-height:750px)]:text-[0.688rem]"
                     )}
                   >
                     {absVal}

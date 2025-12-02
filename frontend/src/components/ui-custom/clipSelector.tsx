@@ -1,5 +1,5 @@
 // ./components/ui/fileSelector.tsx
-import React, { useState, useEffect, useMemo, useRef, memo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef, memo, useCallback, useLayoutEffect } from "react";
 import { cn, frameToTimecode } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
@@ -18,6 +18,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
 import { ContextMenuLabel, ContextMenuSeparator, Separator } from "@radix-ui/react-context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
+import { useUiStore } from "@/stores/uiStore";
 
 
 
@@ -415,10 +416,11 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
       </div>
     );
   }
+  const currUiScale = useUiStore(s => s.uiScale);
   const columnVirtualizer = useVirtualizer({
     count: sortedItems.length,
     getScrollElement: () => scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null,
-    estimateSize: () => 150, //TODO: multiply by UI scale
+    estimateSize: () => 150 * currUiScale, //TODO: multiply by UI scale
     horizontal: true,
     overscan: 10,
     isScrollingResetDelay: 200,
@@ -426,7 +428,14 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
     useAnimationFrameWithResizeObserver: true,
   });
 
+  // Re-measure when uiScale or item count changes
+  useLayoutEffect(() => {
+    columnVirtualizer.measure?.();
+
+  }, [currUiScale, sortedItems.length]);
+
   useEffect(() => {
+    if (!columnVirtualizer) return;
     if (!currentFileId) return;
 
     const selectedIndex = sortedItems.findIndex(item => item.id === currentFileId);

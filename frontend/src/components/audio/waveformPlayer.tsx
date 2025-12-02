@@ -1030,7 +1030,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           className={`p-1.5 rounded flex items-center text-xs whitespace-nowrap gap-1`}
           title={skipTitle}
         >
-          <RedoDotIcon size={21} className={`mr-1 ${skipClass}`} />
+          <RedoDotIcon className={`mr-1 ${skipClass} w-5 h-5`} />
           <span className={`hidden [@media(min-width:30rem)]:flex ${skipRegionsEnabled ? "text-stone-300" : "text-stone-500"} w-12 `}>
             {skipRegionsEnabled ? (
               <div><span className="text-stone-400 font-light">Skip</span> <span className="font-medium text-stone-300">ON</span></div>
@@ -1092,7 +1092,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           {/* Threshold overlay line */}
           {isThresholdDragging && (
             <div
-              className="absolute w-full h-[1px] rounded-full bg-teal-500 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.9)]"
+              className="absolute w-full h-px rounded-full bg-teal-500 z-20 opacity-100 shadow-[0_0_10px_rgba(61,191,251,0.9)]"
               style={{ top: `${(Math.abs(threshold) / 60) * 100}%` }}
             />
           )}
@@ -1118,9 +1118,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
               className="text-gray-400 hover:text-amber-50 focus-visible:outline-0 focus-visible:text-amber-50"
             >
               {isPlaying ? (
-                <PauseIcon size={34} className="p-1.5" />
+                <PauseIcon className="p-1.5 w-8 h-8" />
               ) : (
-                <PlayIcon size={34} className="p-1.5" />
+                <PlayIcon className="p-1.5 w-8 h-8" />
               )}
             </button>
             {!isLoading && duration > 0 && <SkipButton />}
@@ -1135,8 +1135,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           {!isLoading && playbackRate !== 1 && (
             <div className="p-1.5 gap-1 rounded flex items-center text-xs font-mono text-zinc-400" title="Playback Speed">
               {playbackRate > 1 ?
-                (<FastForwardIcon className="text-amber-500" size={18} />) :
-                (<FastForwardIcon className="text-teal-500 rotate-180" size={18} />)
+                (<FastForwardIcon className="text-amber-500 w-4 h-4" />) :
+                (<FastForwardIcon className="text-teal-500 rotate-180 w-4 h-4" />)
               }
 
               <span>{playbackRate.toFixed(2)}x</span>
@@ -1151,17 +1151,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                     className="text-gray-500 hover:text-zinc-300"
                     title="Jump to previous silence point"
                   >
-                    <ChevronLeftIcon size={18} />
+                    <ChevronLeftIcon className="w-4 h-4" />
                   </button>
                 )}
-                <AudioWaveformIcon size={21} className="text-gray-500" />
+                <AudioWaveformIcon className="text-gray-500 w-5 h-5" />
                 {silenceData && silenceData.length > 0 && (
                   <button
                     onClick={handleJumpToNextSilencePoint}
                     className="text-gray-500 hover:text-zinc-300"
                     title="Jump to next silence point"
                   >
-                    <ChevronRightIcon size={18} />
+                    <ChevronRightIcon className="w-4 h-4" />
                   </button>
                 )}
               </div>

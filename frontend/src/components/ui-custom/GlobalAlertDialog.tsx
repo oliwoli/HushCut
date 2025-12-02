@@ -22,11 +22,11 @@ import { Separator } from "@radix-ui/react-dropdown-menu";
 const getAlertIcon = (type: AlertData["severity"]) => {
   switch (type) {
     case "error":
-      return <XCircle className="w-6 h-6 ml-[2px] text-red-700 mb-[1px]" />;
+      return <XCircle className="w-6 h-6 ml-0.5 text-red-700 mb-px" />;
     case "important":
-      return <CircleAlert className="w-6 h-6 ml-[2px] text-red-700 mb-[1px]" />;
+      return <CircleAlert className="w-6 h-6 ml-0.5 text-red-700 mb-px" />;
     case "warning":
-      return <AlertTriangle className="w-6 h-6 ml-[2px] text-yellow-700 mb-[1px]" />;
+      return <AlertTriangle className="w-6 h-6 ml-0.5 text-yellow-700 mb-px" />;
     case "info":
       return <Info className="fill-teal-950/60 w-7 h-7 text-teal-700 mb-1 text-center" />;
     default:
@@ -42,7 +42,7 @@ const davinciNotConnectedMessage = (msg: AlertData["message"]) => {
     <div className="mt-8 space-y-2 text-gray-400 text-xs">
       <div>Own the free version of DaVinci?</div>
       Make sure to open HushCut from DaVinci by navigating to
-      <div className="flex gap-1 items-center mt-2 border-1 w-min px-4 py-2 rounded-md text-zinc-400">
+      <div className="flex gap-1 items-center mt-2 border w-min px-4 py-2 rounded-md text-zinc-400">
         Workspace <ChevronRightIcon size={16} className="text-zinc-700" />
         Scripts <ChevronRightIcon size={16} className="text-zinc-700" />
         Edit <ChevronRightIcon size={16} className="text-zinc-700" />
@@ -120,7 +120,7 @@ const GlobalAlertDialog = () => {
       if (alertEvent) alertEvent();
     };
 
-  }, []); // The handler no longer needs dependencies
+  }, []);
 
   // Dialog open/close logic
   const handleOpenChange = (isOpen: boolean) => {
@@ -144,7 +144,7 @@ const GlobalAlertDialog = () => {
         className="overflow-hidden rounded-sm"
       >
         <div
-          className={`absolute top-0 w-full h-[4px] ${{
+          className={`absolute top-0 w-full h-1 ${{
             error: "bg-red-700",
             important: "bg-red-700",
             warning: "bg-amber-700",

@@ -47,7 +47,7 @@ const _MinDurationControl = React.memo(() => {
                         value={[minDuration]}
                         onChange={(vals) => setMinDuration(vals[0])}
                         onDoubleClick={resetMinDuration}
-                        className="w-[128px] max-w-[128px] min-w-[128px]"
+                        className="w-32 max-w-32 min-w-32"
                         disabled={isDisabled}
                     />
                     <span className="text-sm text-zinc-100 font-mono tracking-tighter">
@@ -119,7 +119,7 @@ const _PaddingControl = React.memo(() => {
                                     <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[200px]'>
-                                    <h1 className='font-[600] tracking-tight'>Padding Left</h1>
+                                    <h1 className='font-semibold tracking-tight'>Padding Left</h1>
                                     <p>Trims the start of the silence.</p>
                                     <p>Content before the detected silence extends.</p>
                                 </TooltipContent>
@@ -136,7 +136,7 @@ const _PaddingControl = React.memo(() => {
                                 value={[paddingRight]}
                                 onChange={(vals) => handlePaddingChange("right", vals[0])}
                                 onDoubleClick={() => handlePaddingChange("right", defaultParameters.paddingRight)}
-                                className="w-[128px] max-w-[128px] min-w-[128px]"
+                                className="w-32 max-w-32 min-w-32"
                                 disabled={isDisabled}
                                 dir='rtl'
                             />
@@ -149,7 +149,7 @@ const _PaddingControl = React.memo(() => {
                                     <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[200px]'>
-                                    <h1 className='font-[600] tracking-tight'>Padding Right</h1>
+                                    <h1 className='font-semibold tracking-tight'>Padding Right</h1>
                                     <p>Trims the end of the silence.</p>
                                     <p>The content after the detected silence starts sooner.</p>
                                 </TooltipContent>
@@ -199,7 +199,7 @@ const _MinContentControl = React.memo(() => {
                         value={[minContent]}
                         onChange={(vals) => setMinContent(vals[0])}
                         onDoubleClick={resetMinDuration}
-                        className="w-[128px] max-w-[128px] min-w-[128px]"
+                        className="w-32 max-w-32 min-w-32"
                         disabled={isDisabled}
                     />
                     <span className="text-sm text-zinc-100 font-mono tracking-tighter">

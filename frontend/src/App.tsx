@@ -18,6 +18,7 @@ import {
   SyncWithDavinci,
   MakeFinalTimeline,
   HasAValidLicense,
+  GetSettings,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
@@ -978,6 +979,13 @@ export default function App() {
       //off4();
     };
   }, []);
+
+  const currSettings = GetSettings()
+  const uiScale = useUiStore((s) => s.uiScale);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--ui-scale", String(uiScale));
+  }, [uiScale]);
 
   return (
     <>

@@ -95,19 +95,19 @@ export default function SliderZag({
           <div
             key={index}
             {...api.getThumbProps({ index })}
-            className="absolute top-1/2 -translate-y-1/2 size-[18px] bg-zinc-300 rounded-full z-10 border-2 border-zinc-800"
+            className="absolute top-1/2 -translate-y-1/2 size-4.5 bg-zinc-300 rounded-full z-10 border-2 border-zinc-800"
           >
             <input {...api.getHiddenInputProps({ index })} />
           </div>
         ))}
         {showMarkers && (
-          <div {...api.getMarkerGroupProps()} className="absolute inset-0 pointer-events-none top-[-8px]">
+          <div {...api.getMarkerGroupProps()} className="absolute inset-0 pointer-events-none -top-2">
             {(markings ?? Array.from({ length: 11 }, (_, i) => min + ((max - min) / 10) * i)).map(
               (value, i) => (
                 <span
                   key={i}
                   {...api.getMarkerProps({ value })}
-                  className={`absolute h-2 w-[1px] ${value === (min + max) / 2 ? "bg-zinc-300" : "bg-zinc-600"
+                  className={`absolute h-2 w-px ${value === (min + max) / 2 ? "bg-zinc-300" : "bg-zinc-600"
                     }`}
                 />
               )

@@ -180,12 +180,10 @@ const _TitleBar = () => {
             </label>
             {showSuccess ? (
               <CheckIcon
-                size={12}
-                className="text-teal-400 animate-in fade-in duration-500"
+                className="text-teal-400 animate-in fade-in duration-500 w-3 h-3"
               />
             ) : (
               <CircleIcon
-                size={8}
                 className={clsx(
                   "stroke-0", // always applied
                   !hasProjectData && "fill-red-600",
@@ -194,7 +192,8 @@ const _TitleBar = () => {
                   "fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50",
                   hasProjectData && !isBusy && "fill-teal-600",
                   "mx-0.5",
-                  "animate-in fade-in duration-500"
+                  "animate-in fade-in duration-500",
+                  "w-2 h-2"
                 )}
               />
 
@@ -231,7 +230,7 @@ const _TitleBar = () => {
                   size="icon"
                   className="bg-transparent hover:bg-transparent text-zinc-400 opacity-80 hover:text-zinc-300 hover:opacity-100"
                 >
-                  <Ellipsis className="h-8 w-8 text-xl scale-150 " />
+                  <Ellipsis className="h-8 w-8 text-xl scale-150 stroke-zinc-400 fill-zinc-400 hover:fill-zinc-300 hover:stroke-zinc-300" />
                 </Button>
               </DropdownMenuTrigger>
               {dropdownVisible && (

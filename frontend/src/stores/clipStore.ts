@@ -131,11 +131,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           ...state.parameters,
           [clipId]: newClipParams,
         },
-        // --- FIX ---
-        // When updating live defaults, create them from the new clip params,
-        // but explicitly preserve the existing `bypassed` value from the
-        // previous live defaults. This prevents the clip's specific bypass
-        // state from "leaking" into the global defaults.
         liveDefaultParameters: shouldUpdateLiveDefaults
           ? { ...newClipParams, bypassed: state.liveDefaultParameters.bypassed }
           : state.liveDefaultParameters,
@@ -165,9 +160,6 @@ export const useClipStore = create<ClipStore>((set, get) => ({
           ...state.parameters,
           [clipId]: newClipParams,
         },
-        // --- FIX (Applied here for consistency) ---
-        // The same logic is applied here to prevent a bulk update from
-        // unintentionally changing the global default bypass state.
         liveDefaultParameters: shouldUpdateLiveDefaults
           ? { ...newClipParams, bypassed: state.liveDefaultParameters.bypassed }
           : state.liveDefaultParameters,

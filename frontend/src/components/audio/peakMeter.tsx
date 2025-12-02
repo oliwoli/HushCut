@@ -140,7 +140,7 @@ export const PeakMeter: React.FC = () => {
 
     return (
         <div className="h-full w-2">
-            <div className="relative h-[calc(100%-95px)] w-1 overflow-hidden bg-zinc-800 right-0 sm:right-1 rounded-sm">
+            <div className="relative h-[calc(100%-5.711rem)] w-1 overflow-hidden bg-zinc-800 right-0 sm:right-1 rounded-sm">
                 <div
                     ref={peakHoldRef}
                     className="pointer-events-none absolute z-10 h-full w-full border-t-2 bg-none"

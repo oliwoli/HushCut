@@ -27,15 +27,15 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                 }}
 
             />
-            <div className="h-[40px] flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300 pl-2 pt-3 pr-0">
+            <div className="h-10 flex flex-col items-center text-center mt-0 text-base/tight text-zinc-400 hover:text-zinc-300 pl-2 pt-3 pr-0">
                 <Tooltip delayDuration={950}>
                     <TooltipTrigger asChild>
                         <Label className="font-[185] text-stone-300 flex text-center gap-2 text-sm/tight">
                             Silence Threshold
                         </Label>
                     </TooltipTrigger>
-                    <TooltipContent className='max-w-[200px]'>
-                        <h1 className='font-[600] tracking-tight'>Silence Threshold</h1>
+                    <TooltipContent className='max-w-[20rem]'>
+                        <h1 className='font-semibold tracking-tight'>Silence Threshold</h1>
                         <p>Audio louder than this threshold is considered <b>content</b>.</p>
                         <p>Anything below is considered <b>silence</b>.</p>
                         <Separator className='text-gray-800 h-px w-full bg-zinc-300 mb-1 mt-2 rounded-full' />
