@@ -53,9 +53,6 @@ jobs:
         with:
           go-version: '1.25.0'
 
-      - name: Run Go tests
-        run: go test ./... -v
-
       - name: Authenticate Private Go Modules
         run: git config --global url."https://user:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
@@ -151,6 +148,9 @@ jobs:
           build-platform: ${{ matrix.platform }}
           package: false
 
+      - name: Run Go tests
+        run: go test ./... -v
+      
       - name: Add macOS Resources folder and cleanup
         if: matrix.label == 'macos'
         run: |
