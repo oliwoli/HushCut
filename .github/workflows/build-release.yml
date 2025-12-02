@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -52,6 +52,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.0'
+
+      - name: Run Go tests
+        run: go test ./... -v
 
       - name: Authenticate Private Go Modules
         run: git config --global url."https://user:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -121,8 +124,7 @@ jobs:
           choco install nsis -y
           $env:PATH += ";C:\Program Files (x86)\NSIS"
           echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-
+      
       - name: Build Wails App (Windows)
         if: matrix.label == 'windows'
         uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2

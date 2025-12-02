@@ -5,6 +5,10 @@
 @custom-variant dark (&:is(.dark *));
 
 
+:root {
+  --ui-scale: 1.0;
+}
+
 body,
 html {
   background-color: #1b1b1f;
@@ -14,6 +18,7 @@ html {
 html, body, #root {
   height: 100%;
   margin: 0;
+  font-size: calc(100% * var(--ui-scale));
 }
 
 
@@ -342,7 +347,7 @@ div[part="minimap-overlay"] {
     100% { transform: rotate(-359deg) scale(0.95); }
   }
 
-  --animate-sync-box: 125ms fade-in-and-fly-up 500ms cubic-bezier(0, 0.99, 0.99, 1) forwards;
+  --animate-sync-box: 125ms fade-in-and-fly-up 2000ms cubic-bezier(0, 0.99, 0.99, 1) forwards;
 
   
   @keyframes fade-in-and-fly-up {
