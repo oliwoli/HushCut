@@ -747,7 +747,7 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 	finalResponse := <-respCh // Wait for Python's actual processing response
 	log.Printf("Go: Received final Python response for task %s", taskID)
 
-	if finalResponse.ShouldShowAlert && a.licenseValid {
+	if finalResponse.ShouldShowAlert {
 		log.Printf("Go: Python requested an alert. Title: '%s', Message: '%s', Severity: '%s'",
 			finalResponse.AlertTitle, finalResponse.AlertMessage, finalResponse.AlertSeverity)
 
