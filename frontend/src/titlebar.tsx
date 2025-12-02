@@ -8,6 +8,7 @@ import {
   CircleIcon,
   Settings2Icon,
   RefreshCwIcon,
+  CheckIcon,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
@@ -19,7 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import { memo, useState, useEffect } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 
 import { useUiStore } from "@/stores/uiStore";
 import { useAppState } from "./stores/appSync";
@@ -93,8 +94,22 @@ const _TitleBar = () => {
   }, [dropdownOpen]);
 
   const isBusy = useAppState((s) => s.isBusy);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const prevIsBusyRef = useRef(isBusy);
+
   const hasProjectData = useAppState((s) => s.hasProjectData);
   const timelineName = useAppState((s) => s.timelineName);
+
+  useEffect(() => {
+    if (prevIsBusyRef.current === true && isBusy === false) {
+      // Trigger success indicator
+      setShowSuccess(true);
+      const t = setTimeout(() => setShowSuccess(false), 1500);
+      return () => clearTimeout(t);
+    }
+
+    prevIsBusyRef.current = isBusy;
+  }, [isBusy]);
 
   // This function will handle the logic
   const handlePinClick = () => {
@@ -132,7 +147,7 @@ const _TitleBar = () => {
   return (
     <div className="select-none">
       <div id="draggable" className="select-none">
-        <div className="fixed top-0 select-none left-0 w-full draggable h-9 border-1 border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-[10]">
+        <div className="fixed top-0 select-none left-0 w-full draggable h-9 border border-zinc-950 bg-[#212126] flex items-center justify-between px-1 z-10">
           <div className="flex items-center space-x-2">
             <Button
               size={"sm"}
@@ -163,17 +178,29 @@ const _TitleBar = () => {
             <label className="text-sm font-normal text-neutral-200 flex gap-1.5 items-baseline select-none">
               HushCut
             </label>
-            <CircleIcon
-              size={8}
-              className={clsx(
-                "stroke-0", // always applied
-                !hasProjectData && "fill-red-600",
-                hasProjectData &&
-                isBusy &&
-                "fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50",
-                hasProjectData && !isBusy && "fill-teal-600"
-              )}
-            />
+            {showSuccess ? (
+              <CheckIcon
+                size={12}
+                className="text-teal-400 animate-in fade-in duration-500"
+              />
+            ) : (
+              <CircleIcon
+                size={8}
+                className={clsx(
+                  "stroke-0", // always applied
+                  !hasProjectData && "fill-red-600",
+                  hasProjectData &&
+                  isBusy &&
+                  "fill-yellow-200/80 drop-shadow-[0_0_5px_rgba(251,191,36,0.1)] drop-shadow-red-300/50",
+                  hasProjectData && !isBusy && "fill-teal-600",
+                  "mx-0.5",
+                  "animate-in fade-in duration-500"
+                )}
+              />
+
+            )}
+
+
             {timelineName && (
               <label className="text-neutral-500 text-xs select-none">
                 {timelineName}
@@ -190,7 +217,7 @@ const _TitleBar = () => {
                 <div className="relative w-full h-max animate-update-label overflow-hidden opacity-0">
                   <span className="text-xs flex gap-2 items-center text-teal-500 hover:text-teal-100">
                     <RefreshCwIcon
-                      className="relative pt-[1px] pb-[1px]"
+                      className="relative pt-px pb-px"
                       strokeWidth={2.5}
                     />
                     {updateInfo.update_label}
@@ -231,7 +258,7 @@ const _TitleBar = () => {
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={handleDonateClick}>
                     <Heart className="mr-2 h-4 w-4" />
-                    <span className="flex-grow">Donate</span>
+                    <span className="grow">Donate</span>
                     <ExternalLink className="ml-4 h-4 w-4 opacity-70" />
                   </DropdownMenuItem>
                 </DropdownMenuContent>

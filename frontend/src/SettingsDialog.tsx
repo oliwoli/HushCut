@@ -67,7 +67,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     return (
         <Dialog open={internalOpen} onOpenChange={onOpenChange}>
             <DialogContent
-                className="w-screen h-full min-w-full min-h-full pt-20 border-1 border-zinc-950 rounded-none"
+                className="w-screen h-full min-w-full min-h-full pt-20 border border-zinc-950 rounded-none"
                 style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
                 disableRadixAnimations={dialogOpacity === 0}
                 hideCloseButton={true}
@@ -112,8 +112,8 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                                 <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
                                     <span className="block text-left">Delete after</span>
                                 </Label>
-                                <div className="flex gap-4 w-full min-w-128">
-                                    <SliderZag className="w-[128px]" value={[cleanupThreshold]} min={0} max={30} step={1} onChange={(values) => setCleanupThreshold(values[0])} disabled={!enableCleanup} />
+                                <div className="flex gap-4 w-full min-w-lg">
+                                    <SliderZag className="w-32" value={[cleanupThreshold]} min={0} max={30} step={1} onChange={(values) => setCleanupThreshold(values[0])} disabled={!enableCleanup} />
                                     {cleanupThreshold} days</div>
                             </div>
                         </div>
