@@ -31,7 +31,7 @@ import RemoveSilencesButton, {
 } from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
 import { usePrevious, useWindowFocus } from "./hooks/hooks";
-import FileSelector from "./components/ui-custom/fileSelector";
+import ClipSelector from "./components/ui-custom/clipSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
 import { createPortal } from "react-dom";
 import { ThresholdControl } from "./components/controls/ThresholdControl";
@@ -721,7 +721,7 @@ function AppContent() {
         <main className="flex flex-col max-w-screen select-none h-full">
           {currentActiveClip?.id && httpPort && (
             <div className="flex-shrink-0 px-3">
-              <FileSelector
+              <ClipSelector
                 audioItems={projectData?.timeline.audio_track_items}
                 currentFileId={currentClipId}
                 onFileChange={handleAudioClipSelection}

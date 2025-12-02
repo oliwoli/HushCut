@@ -347,7 +347,7 @@ interface FileSelectorProps {
   fps?: number;
 }
 
-const _FileSelector: React.FC<FileSelectorProps> = ({
+const _ClipSelector: React.FC<FileSelectorProps> = ({
   audioItems,
   currentFileId,
   onFileChange,
@@ -485,5 +485,5 @@ const _FileSelector: React.FC<FileSelectorProps> = ({
   );
 };
 
-const FileSelector = React.memo(_FileSelector);
-export default FileSelector
+const ClipSelector = React.memo(_ClipSelector);
+export default ClipSelector
