@@ -14,7 +14,7 @@ import {
 import { Progress } from "../ui/progress";
 import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, Check, CheckIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
 import { useClipStore, useIsClipModified } from "@/stores/clipStore";
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useVirtualizer, VirtualItem, Virtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
 import { ContextMenuLabel, ContextMenuSeparator, Separator } from "@radix-ui/react-context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
@@ -253,7 +253,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
 
     <ContextMenu>
       <div className={cn(
-        "flex flex-col shrink-0 max-w-44 min-w-24",
+        "flex flex-col shrink-0 max-w-44 min-w-24 w-full",
       )}>
         <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
           <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border flex items-center")}>{index}</span>
@@ -272,6 +272,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
               "h-20 [@media(max-height:800px)]:h-16 text-left rounded-sm transition-all duration-150 ease-in-out overflow-hidden relative",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400",
               "border",
+              "w-full",
               bypassed ? "bg-none" : "bg-gray-700/40",
               {
                 "border-zinc-700 hover:border-zinc-600": !isSelected,
@@ -372,6 +373,31 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
   );
 });
 
+
+function isPartiallyVisibleHorizontal(
+  v: Virtualizer<any, any>,
+  index: number
+): boolean {
+  const scrollEl = v.scrollElement;
+  if (!scrollEl) return false;
+
+  const items: VirtualItem[] = v.getVirtualItems();
+  const item = items.find(i => i.index === index);
+  if (!item) return false;
+
+  const viewLeft = scrollEl.scrollLeft;
+  const viewRight = viewLeft + scrollEl.clientWidth;
+
+  const fullyLeft = item.end <= viewLeft;
+  const fullyRight = item.start >= viewRight;
+
+  const fullyInside =
+    item.start >= viewLeft && item.end <= viewRight;
+
+  return !fullyLeft && !fullyRight && !fullyInside;
+}
+
+
 interface FileSelectorProps {
   audioItems: main.TimelineItem[] | null | undefined; currentFileId: string | null;
   onFileChange: (selectedItemId: string) => void;
@@ -434,13 +460,31 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
 
   }, [currUiScale, sortedItems.length]);
 
+
+
   useEffect(() => {
     if (!columnVirtualizer) return;
     if (!currentFileId) return;
 
     const selectedIndex = sortedItems.findIndex(item => item.id === currentFileId);
+    if (selectedIndex === -1) return;
 
-    if (selectedIndex !== -1) {
+    const range = columnVirtualizer.range;
+    if (!range) return;
+
+    const { startIndex, endIndex } = range;
+
+    const inRange =
+      selectedIndex >= startIndex && selectedIndex <= endIndex;
+
+    const partially = isPartiallyVisibleHorizontal(
+      columnVirtualizer,
+      selectedIndex
+    );
+    const shouldScroll = !inRange || partially;
+
+
+    if (shouldScroll) {
       columnVirtualizer.scrollToIndex(selectedIndex, { align: 'center', behavior: 'smooth' });
 
       setTimeout(() => {
