@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Activity } from "react";
 import { scan } from "react-scan";
 scan({
   enabled: false,
@@ -730,20 +730,22 @@ function AppContent() {
             <header className="flex items-center justify-between"></header>
             <main className="flex flex-col max-w-screen select-none h-full">
               {currentActiveClip?.id && httpPort && (
-                <div className="shrink-0 px-3">
-                  <ClipSelector
-                    audioItems={projectData?.timeline.audio_track_items}
-                    currentFileId={currentClipId}
-                    onFileChange={handleAudioClipSelection}
-                    fps={projectData?.timeline.fps}
-                    disabled={
-                      !httpPort ||
-                      !projectData?.timeline?.audio_track_items ||
-                      projectData.timeline.audio_track_items.length === 0
-                    }
-                    className="w-full mt-1 overflow-visible"
-                  />
-                </div>
+                <Activity>
+                  <div className="shrink-0 px-3">
+                    <ClipSelector
+                      audioItems={projectData?.timeline.audio_track_items}
+                      currentFileId={currentClipId}
+                      onFileChange={handleAudioClipSelection}
+                      fps={projectData?.timeline.fps}
+                      disabled={
+                        !httpPort ||
+                        !projectData?.timeline?.audio_track_items ||
+                        projectData.timeline.audio_track_items.length === 0
+                      }
+                      className="w-full mt-1 overflow-visible"
+                    />
+                  </div>
+                </Activity>
               )}
               <div className="flex flex-col flex-1 space-y-1 px-3 grow min-h-0 py-2">
                 <div className="flex flex-row space-x-1 items-start flex-1 min-h-[200px] max-h-[600px]">
@@ -757,23 +759,25 @@ function AppContent() {
                   <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                     {getStatusText()}
                     {currentActiveClip && projectData?.timeline && httpPort && (
-                      <ErrorBoundary
-                        fallback={
-                          <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-                            <p className="text-gray-500">
-                              Failed to load waveform. Please try again.
-                            </p>
-                          </div>
-                        }
-                        maxRetries={3}
-                      >
-                        <WaveformPlayer
-                          key={currentActiveClip.id}
-                          activeClip={currentActiveClip}
-                          projectFrameRate={projectData.timeline.fps}
-                          httpPort={httpPort}
-                        />
-                      </ErrorBoundary>
+                      <Activity>
+                        <ErrorBoundary
+                          fallback={
+                            <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
+                              <p className="text-gray-500">
+                                Failed to load waveform. Please try again.
+                              </p>
+                            </div>
+                          }
+                          maxRetries={3}
+                        >
+                          <WaveformPlayer
+                            key={currentActiveClip.id}
+                            activeClip={currentActiveClip}
+                            projectFrameRate={projectData.timeline.fps}
+                            httpPort={httpPort}
+                          />
+                        </ErrorBoundary>
+                      </Activity>
                     )}
                   </div>
                 </div>
