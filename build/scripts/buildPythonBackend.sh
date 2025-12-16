@@ -24,6 +24,11 @@ MAIN_FILE_NAME="python_backend"
 MAIN_FILE="src/HushCut.py"   # adjust if your entrypoint is elsewhere
 
 echo "Activating Python virtual environment from: $PROJECT_ROOT/python-backend/venv/bin/activate"
+
+PYTHON_PATH=$(which python3.11 )
+
+$PYTHON_PATH -m venv python-backend/venv
+
 source python-backend/venv/bin/activate
 
 echo "Installing/updating Python dependencies..."

@@ -527,7 +527,7 @@ function AppContent() {
     };
   }, []);
 
-  const syncTimeoutRef = useRef<number | null>(null);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout>  | null>(null);
   const syncMouseUpListenerRef = useRef<(() => void) | null>(null);
 
   const cancelPendingSync = () => {
