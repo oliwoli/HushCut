@@ -123,16 +123,14 @@ const createActiveFileFromTimelineItem = (
   };
 };
 
-function supportsRealBackdrop() {
-  const el = document.createElement("div");
-  el.style.position = "absolute";
-  el.style.width = el.style.height = "10px";
-  el.style.backdropFilter = "blur(5px)";
-  el.style.visibility = "hidden";
-  document.body.appendChild(el);
-  const applied = window.getComputedStyle(el).backdropFilter;
-  document.body.removeChild(el);
-  return applied && applied !== "none";
+function supportsBackdropFilter() {
+  const ua = navigator.userAgent;
+  const isWebKitGTK = ua.includes("Linux") && ua.includes("WebKit") && !ua.includes("Chrome");
+  console.log("user agent: ", ua);
+  console.log("is webkit: ", isWebKitGTK);
+  if (isWebKitGTK) return false;
+
+  return CSS.supports("backdrop-filter", "blur(5px)");
 }
 
 const Status = {
@@ -192,6 +190,8 @@ function AppContent() {
 
   const isBusy = useAppState((s) => s.isBusy);
   const setBusy = useAppState((s) => s.setBusy);
+  const isSyncPaused = useAppState((s) => s.isSyncPaused);
+  const setSyncPaused = useAppState((s) => s.setSyncPaused);
 
   const syncing = useAppState((s) => s.syncing);
   const setSyncing = useAppState((s) => s.setSyncing);
@@ -275,6 +275,10 @@ function AppContent() {
   const handleSync = async () => {
     if (isBusy) {
       console.log("Sync skipped: App is busy.");
+      return;
+    }
+    if (isSyncPaused) {
+      console.log("Sync paused. Skipping sync.");
       return;
     }
     console.log("syncing...");
@@ -420,7 +424,7 @@ function AppContent() {
   }, [ffmpegStatus, prevFfmpegStatus]);
 
   useEffect(() => {
-    const hasBlur = supportsRealBackdrop();
+    const hasBlur = supportsBackdropFilter();
     document.body.classList.add(hasBlur ? "has-blur" : "no-blur");
     initializeProgressListeners();
   }, []);
@@ -527,7 +531,7 @@ function AppContent() {
     };
   }, []);
 
-  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout>  | null>(null);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncMouseUpListenerRef = useRef<(() => void) | null>(null);
 
   const cancelPendingSync = () => {
@@ -577,6 +581,8 @@ function AppContent() {
     const keepSilence = useGlobalStore.getState().keepSilence;
 
     try {
+      setSyncPaused(true);
+      setBusy(true);
       const dataToSend = await prepareProjectDataWithEdits(
         projectData,
         currentClipParams,
@@ -603,7 +609,9 @@ function AppContent() {
           "Executing pending: 'HushCut Silences' process finished successfully."
         );
       }
+      setBusy(false);
     } catch (error) {
+      setBusy(false);
       console.error(
         "Executing pending: Error during 'HushCut Silences' process:",
         error
@@ -686,7 +694,7 @@ function AppContent() {
       return (
         <div className="my-auto space-y-8 text-gray-500">
           <div className="w-full gap-2 flex items-center justify-center rounded-sm">
-            <p className="text-gray-500">No active timeline.</p>
+            <p className="text-gray-500 text-xl">No active timeline.</p>
           </div>
           <div className="rounded-sm text-center text-sm">
             <div>Own the free version of DaVinci?</div>
@@ -748,7 +756,7 @@ function AppContent() {
                 </Activity>
               )}
               <div className="flex flex-col flex-1 space-y-1 px-3 grow min-h-0 py-2">
-                <div className="flex flex-row space-x-1 items-start flex-1 min-h-[200px] max-h-[600px]">
+                <div className="flex flex-row space-x-1 items-start flex-1 min-h-50 max-h-[600px]">
                   {currentActiveClip && projectData?.timeline && (
                     <div className="flex w-min h-full">
                       <ThresholdControl key={currentClipId} />
@@ -830,6 +838,8 @@ export function FinalTimelineProgress({
 
   const [internalOpen, setInternalOpen] = useState(false);
   const [dialogOpacity, setDialogOpacity] = useState(1);
+  const setSyncPaused = useAppState((s) => s.setSyncPaused);
+
 
   useEffect(() => {
     if (open) {
@@ -845,6 +855,11 @@ export function FinalTimelineProgress({
   }, [open]);
 
   if (!internalOpen) return null;
+
+  const handleContinueButton = () => {
+    setSyncPaused(false);
+    onOpenChange(false);
+  }
 
   return (
     <Drawer open={internalOpen} onOpenChange={onOpenChange}>
@@ -881,7 +896,7 @@ export function FinalTimelineProgress({
           <DrawerFooter className="flex flex-col sm:flex-row sm:justify-start gap-3 pt-6 px-0">
             {progressPercentage === 100 && (
               <Button
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleContinueButton()}
                 className="rounded-2xl text-base px-6 py-2 shadow transition-colors"
               >
                 Continue

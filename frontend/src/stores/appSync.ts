@@ -6,6 +6,8 @@ type AppState = {
   setSyncing: (value: boolean) => void;
   isBusy: boolean;
   setBusy: (value: boolean) => void;
+  isSyncPaused: boolean;
+  setSyncPaused: (value: boolean) => void;
   hasProjectData: boolean;
   setHasProjectData: (value: boolean) => void;
   timelineName: string | null;
@@ -15,10 +17,12 @@ type AppState = {
 };
 
 export const useAppState = create<AppState>((set) => ({
-  isBusy: false, // default value
-  setBusy: (value) => set({ isBusy: value }),
   syncing: false,
   setSyncing: (value) => set({ syncing: value }),
+  isBusy: false, // default value
+  setBusy: (value) => set({ isBusy: value }),
+  isSyncPaused: false,
+  setSyncPaused: (value) => set({ isSyncPaused: value}),
   hasProjectData: false, // default value
   setHasProjectData: (value) => set({ hasProjectData: value }),
   timelineName: "",

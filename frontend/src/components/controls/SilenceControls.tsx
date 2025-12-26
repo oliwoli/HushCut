@@ -31,15 +31,15 @@ const _MinDurationControl = React.memo(() => {
                 <Label className="font-normal text-sm w-52 text-stone-400  flex text-center gap-2">
                     Minimum Duration
                     <TooltipTrigger asChild>
-                        <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
+                        <InfoIcon className='text-zinc-600/60 hover:text-teal-600 w-3.5' />
                     </TooltipTrigger>
                 </Label>
-                <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-[600] tracking-tight'>Minimum Silence Duration</h1>
+                <TooltipContent className='max-w-50'>
+                    <h1 className='font-semibold tracking-tight'>Minimum Silence Duration</h1>
                     <p>Minimum Duration for a segment to be considered silent.</p>
                 </TooltipContent>
             </Tooltip>
-            <div className="flex items-center space-x-5">
+            <div className="flex items-center space-x-5 h-10">
                 <div className="flex w-64 items-center space-x-2" aria-disabled={isDisabled}>
                     <SliderZag
                         id={`min-duration-${currentClipId}`}
@@ -90,11 +90,11 @@ const _PaddingControl = React.memo(() => {
     const isDisabled = !currentClipId;
 
     return (
-        <div className='space-y-1'>
+        <div className='space-y-1 h-20'>
             <Label className="font-normal text-sm w-52 text-stone-400 flex text-center gap-2">
                 Padding
             </Label>
-            <div className="flex items-baseline space-x-5">
+            <div className="flex items-baseline space-x-5 h-14">
                 <div className="flex items-start space-x-0" aria-disabled={isDisabled}>
                     {/* Left Padding */}
                     <div className="flex flex-col space-y-1 w-full">
@@ -116,9 +116,9 @@ const _PaddingControl = React.memo(() => {
                             <span className="text-sm tracking-normal text-zinc-400 text-center">Left: <span className="text-zinc-100 text-sm font-normal font-mono tracking-tighter">{paddingLeft.toFixed(2)}<span className="text-zinc-400 ml-1 lowercase">s</span></span></span>
                             <Tooltip delayDuration={350}>
                                 <TooltipTrigger asChild>
-                                    <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
+                                    <InfoIcon className='text-zinc-600/60 hover:text-teal-600 w-3.5' />
                                 </TooltipTrigger>
-                                <TooltipContent className='max-w-[200px]'>
+                                <TooltipContent className='max-w-50'>
                                     <h1 className='font-semibold tracking-tight'>Padding Left</h1>
                                     <p>Trims the start of the silence.</p>
                                     <p>Content before the detected silence extends.</p>
@@ -140,15 +140,15 @@ const _PaddingControl = React.memo(() => {
                                 disabled={isDisabled}
                                 dir='rtl'
                             />
-                            <span className='relative left-4'><ResetButton onClick={resetPadding} disabled={isDisabled} /></span>
+                            <span className='flex left-4'><ResetButton onClick={resetPadding} disabled={isDisabled} /></span>
                         </div>
                         <div className='flex gap-2 text-center items-center'>
                             <span className="text-sm tracking-normal text-zinc-400 text-center">Right: <span className="text-zinc-100 text-sm font-normal font-mono tracking-tighter">{paddingRight.toFixed(2)}<span className="text-zinc-400 ml-1 lowercase">s</span></span></span>
                             <Tooltip delayDuration={350}>
                                 <TooltipTrigger asChild>
-                                    <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
+                                    <InfoIcon className='text-zinc-600/60 hover:text-teal-600 w-3.5' />
                                 </TooltipTrigger>
-                                <TooltipContent className='max-w-[200px]'>
+                                <TooltipContent className='max-w-50'>
                                     <h1 className='font-semibold tracking-tight'>Padding Right</h1>
                                     <p>Trims the end of the silence.</p>
                                     <p>The content after the detected silence starts sooner.</p>
@@ -181,17 +181,17 @@ const _MinContentControl = React.memo(() => {
                 <Label className="font-normal text-sm w-52 text-stone-400 flex text-center gap-2">
                     Silence Merge
                     <TooltipTrigger asChild>
-                        <InfoIcon size={16} className='text-zinc-600/60 hover:text-teal-600' />
+                        <InfoIcon className='text-zinc-600/60 hover:text-teal-600 w-3.5' />
                     </TooltipTrigger>
                 </Label>
-                <TooltipContent className='max-w-[200px]'>
-                    <h1 className='font-[600] tracking-tight'>Silence Merge</h1>
+                <TooltipContent className='max-w-50'>
+                    <h1 className='font-semibold tracking-tight'>Silence Merge</h1>
                     <p>Content segments shorter than this will be considered as silence and merged with surrounding silences.</p>
                     <p>Use this to remove mic bumps, lip smacks, etc.</p>
 
                 </TooltipContent>
             </Tooltip>
-            <div className="flex items-center space-x-5">
+            <div className="flex items-center space-x-5 h-10">
                 <div className="flex w-56 items-center gap-2" aria-disabled={isDisabled}>
                     <SliderZag
                         id={`min-content-${currentClipId}`}
@@ -206,7 +206,7 @@ const _MinContentControl = React.memo(() => {
                         {minContent.toFixed(2)}
                         <span className="text-zinc-400 ml-1">s</span>
                     </span>
-                    <span className='relative'><ResetButton onClick={resetMinDuration} disabled={isDisabled} /></span>
+                    <span className='flex'><ResetButton onClick={resetMinDuration} disabled={isDisabled} /></span>
                 </div>
             </div>
         </div>
@@ -223,7 +223,7 @@ export const SilenceControls = () => {
                 <Separator aria-orientation="horizontal" className="h-px bg-zinc-700/80" />
             </div>
 
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-5 justify-between">
+            <div className="flex flex-wrap gap-6 lg:flex-row lg:items-start lg:gap-5 justify-between">
                 {/* Left column */}
                 <div className="flex flex-col gap-6">
                     <_MinDurationControl />

@@ -187,6 +187,8 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const keepSilence = useGlobalStore(s => s.keepSilence);
   const setBusy = useAppState(s => s.setBusy);
 
+  const setSyncPaused = useAppState((s) => s.setSyncPaused);
+
   // Single ref to manage the entire cache. No more duplicating Zustand state.
   const cacheRef = useRef<ProcessedDataCache | null>(null);
 
@@ -256,7 +258,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       if (isClick) setIsProcessingClick(false);
       else setIsProcessingHover(false);
     }
-  }, [initialProjectData, keepSilence, defaultDetectionParams]); // Dependencies are now simpler
+  }, [initialProjectData, keepSilence, defaultDetectionParams]);
 
   const handleMouseEnter = () => {
     if (isProcessingHover || isProcessingClick) return;
@@ -272,6 +274,8 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       return;
     }
     setBusy(true);
+    setSyncPaused(true);
+    console.log("sync paused!")
 
     try {
       const dataToSend = await handleAction(true);
