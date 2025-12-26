@@ -63,7 +63,7 @@ function DialogOverlay({
       data-slot="dialog-overlay"
       className={cn(
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
-        "top-[2.25rem]", // Exclude titlebar area
+        "top-9", // Exclude titlebar area
         "pointer-events-none", // Allow clicks to pass through
         className
       )}
