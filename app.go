@@ -912,13 +912,13 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	}
 
 	streamFound := false
-	ffmpegStream := 0
+	audioStreamIndex := 0
 	remaining := sourceChannel.ChannelIndex // 0-based index from Python
 	//streamIndexInAudioStreams := 0
 
 	for i, aStream := range audioStreams {
 		if remaining < aStream.Channels {
-			ffmpegStream = len(videoStreams) + i // absolute stream index in ffmpeg
+			audioStreamIndex = i // absolute stream index in ffmpeg
 			streamFound = true
 			//streamIndexInAudioStreams = i // save the index for later
 			break
@@ -935,13 +935,13 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	if sourceChannel != nil {
 		//aStream := audioStreams[streamIndexInAudioStreams]
 		log.Printf("Extracting channel %d from stream %d of '%s'",
-			sourceChannel.ChannelIndex, ffmpegStream, filepath.Base(inputPath))
+			sourceChannel.ChannelIndex, audioStreamIndex, filepath.Base(inputPath))
 
 		panExpr := fmt.Sprintf("c0=c%d", sourceChannel.ChannelIndex)
 
 		afArg := fmt.Sprintf("pan=mono|%s", panExpr)
 		args = append(args,
-			"-map", fmt.Sprintf("0:%d", ffmpegStream),
+			"-map", fmt.Sprintf("0:a:%d", audioStreamIndex),
 			"-af", afArg,
 			"-vn",
 		)
