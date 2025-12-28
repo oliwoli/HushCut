@@ -90,8 +90,8 @@ func NewApp() *App {
 		pythonReady:       false,
 		tmpPath:           "", // Will be initialized in startup
 		pendingTasks:      make(map[string]chan PythonCommandResponse),
-		ffmpegSemaphore:   make(chan struct{}, 8),
-		waveformSemaphore: make(chan struct{}, 3),
+		ffmpegSemaphore:   make(chan struct{}, 4),
+		waveformSemaphore: make(chan struct{}, 2),
 		progressTracker:   sync.Map{},
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
