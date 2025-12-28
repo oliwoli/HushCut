@@ -223,9 +223,9 @@ export const SilenceControls = () => {
                 <Separator aria-orientation="horizontal" className="h-px bg-zinc-700/80" />
             </div>
 
-            <div className="flex flex-wrap gap-6 lg:flex-row lg:items-start lg:gap-5 justify-between">
+            <div className="flex flex-wrap gap-6 lg:flex-row lg:items-start lg:gap-6 justify-between">
                 {/* Left column */}
-                <div className="flex flex-col gap-6">
+                <div className="flex flex-col gap-4 pb-2">
                     <_MinDurationControl />
                     <_PaddingControl />
                 </div>
