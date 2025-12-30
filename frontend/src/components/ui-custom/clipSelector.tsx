@@ -1,6 +1,6 @@
 // ./components/ui/fileSelector.tsx
 import React, { useState, useEffect, useMemo, useRef, memo, useCallback, useLayoutEffect } from "react";
-import { cn, frameToTimecode } from "@/lib/utils";
+import { cn, frameToTimecode, truncateFilename } from "@/lib/utils";
 import { main } from "@wails/go/models";
 import { GetWaveform } from "@wails/go/main/App";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -16,10 +16,9 @@ import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, Check, CheckIcon, Layer
 import { useClipStore, useIsClipModified } from "@/stores/clipStore";
 import { useVirtualizer, VirtualItem, Virtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
-import { ContextMenuLabel, ContextMenuSeparator, Separator } from "@radix-ui/react-context-menu";
+import { ContextMenuLabel } from "@radix-ui/react-context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { useUiStore } from "@/stores/uiStore";
-
 
 
 function downsamplePeaks(fullPeaks: number[], targetPeakCount: number) {
@@ -31,6 +30,7 @@ function downsamplePeaks(fullPeaks: number[], targetPeakCount: number) {
   }
   return out;
 }
+
 
 // Icon for the empty state
 const AudioFileIcon = ({ className }: { className?: string }) => (
@@ -345,7 +345,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
                     "font-normal text-xs truncate max-w-28",
                     isSelected ? "text-zinc-200/90" : "text-gray-400"
                   )}>
-                    {item.name}</p>
+                    {truncateFilename(item.name)}</p>
                   <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="absolute left-0.5 top-0.5" /></span>
                 </div>
               </div>
@@ -414,6 +414,8 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   disabled,
   className,
 }) => {
+  const currentClipId = useClipStore((s) => s.currentClipId);
+
   const sortedItems = useMemo(() => {
     if (!audioItems || audioItems.length === 0) return [];
     return [...audioItems]
@@ -446,7 +448,7 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   const columnVirtualizer = useVirtualizer({
     count: sortedItems.length,
     getScrollElement: () => scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null,
-    estimateSize: () => 150 * currUiScale, //TODO: multiply by UI scale
+    estimateSize: () => 150 * currUiScale,
     horizontal: true,
     overscan: 10,
     isScrollingResetDelay: 200,
@@ -461,63 +463,116 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   }, [currUiScale, sortedItems.length]);
 
 
-
   useEffect(() => {
     if (!columnVirtualizer) return;
-    if (!currentFileId) return;
+    if (!currentClipId) return;
 
-    const selectedIndex = sortedItems.findIndex(item => item.id === currentFileId);
+    const selectedIndex = sortedItems.findIndex(item => item.id === currentClipId);
     if (selectedIndex === -1) return;
 
-    const range = columnVirtualizer.range;
-    if (!range) return;
+    const viewport =
+      scrollAreaRef.current?.querySelector<HTMLDivElement>(
+        '[data-slot="scroll-area-viewport"]'
+      );
 
-    const { startIndex, endIndex } = range;
+    const buttonEl = itemRefs.current.get(currentClipId);
 
-    const inRange =
-      selectedIndex >= startIndex && selectedIndex <= endIndex;
+    if (!viewport || !buttonEl) return;
 
-    const partially = isPartiallyVisibleHorizontal(
-      columnVirtualizer,
-      selectedIndex
-    );
-    const shouldScroll = !inRange || partially;
+    const viewportRect = viewport.getBoundingClientRect();
+    const buttonRect = buttonEl.getBoundingClientRect();
 
+    const fullyVisible =
+      buttonRect.left >= viewportRect.left &&
+      buttonRect.right <= viewportRect.right;
 
-    if (shouldScroll) {
-      columnVirtualizer.scrollToIndex(selectedIndex, { align: 'center', behavior: 'smooth' });
-
-      setTimeout(() => {
-        const buttonEl = itemRefs.current.get(currentFileId);
-        buttonEl?.focus({ preventScroll: true });
-      }, 150);
+    if (!fullyVisible) {
+      columnVirtualizer.scrollToIndex(selectedIndex, {
+        align: 'center',
+        behavior: 'smooth',
+      });
     }
-  }, [currentFileId, sortedItems, columnVirtualizer]);
+
+  }, [currentClipId, sortedItems, columnVirtualizer]);
 
   const virtualItems = columnVirtualizer.getVirtualItems();
 
+  // scroll via mouse wheel
   useEffect(() => {
-    const element = scrollAreaRef.current;
-    if (!element) return;
+    const viewport =
+      scrollAreaRef.current?.querySelector<HTMLDivElement>(
+        '[data-slot="scroll-area-viewport"]'
+      );
 
-    const handleWheel = (e: globalThis.WheelEvent) => {
-      const viewport = element.querySelector<HTMLDivElement>('[data-slot="scroll-area-viewport"]');
-      if (!viewport || e.deltaY === 0) return;
+    if (!viewport) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      if (e.ctrlKey) return;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
 
       e.preventDefault();
 
-      viewport.scrollBy({
-        left: e.deltaY,
-        behavior: 'auto',
-      });
+      viewport.scrollLeft += e.deltaY * 1.1;
     };
 
-    element.addEventListener('wheel', handleWheel, { passive: false });
+    viewport.addEventListener('wheel', handleWheel, { passive: false });
 
     return () => {
-      element.removeEventListener('wheel', handleWheel);
+      viewport.removeEventListener('wheel', handleWheel);
     };
   }, []);
+
+  // middle mouse button click and drag
+  useEffect(() => {
+    const viewport =
+      scrollAreaRef.current?.querySelector<HTMLDivElement>(
+        '[data-slot="scroll-area-viewport"]'
+      );
+
+    if (!viewport) return;
+
+    let isDragging = false;
+    let startX = 0;
+    let startScrollLeft = 0;
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button !== 1) return; // middle mouse button only
+
+      e.preventDefault();
+
+      isDragging = true;
+      startX = e.clientX;
+      startScrollLeft = viewport.scrollLeft;
+
+      viewport.style.cursor = 'grabbing';
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+
+      const dx = e.clientX - startX;
+      viewport.scrollLeft = startScrollLeft - dx;
+    };
+
+    const onMouseUp = () => {
+      if (!isDragging) return;
+
+      isDragging = false;
+      viewport.style.cursor = '';
+    };
+
+    viewport.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+
+    return () => {
+      viewport.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, []);
+
 
   const allClipIds = useMemo(() => sortedItems.map(item => item.id), [sortedItems]);
 
@@ -555,7 +610,7 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
                 forwardedRef={(el) => { itemRefs.current.set(item.id, el); }}
                 index={String(virtualItem.index + 1).padStart(String(sortedItems.length).length, '0')}
                 item={item}
-                isSelected={currentFileId === itemUniqueIdentifier}
+                isSelected={currentClipId === itemUniqueIdentifier}
                 onClipClick={handleFileChange}
                 disabled={disabled}
                 fps={fps}
