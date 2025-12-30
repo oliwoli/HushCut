@@ -1,0 +1,18 @@
+[project]
+name = "hushcut-python-backend"
+version = "0.1.0"
+description = "Python backend to communicate between wails app (go) and DaVinci Resolve Scripting API (Python)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "altgraph>=0.17.5",
+    "certifi>=2025.11.12",
+    "charset-normalizer>=3.4.4",
+    "idna>=3.11",
+    "packaging>=25.0",
+    "pyinstaller>=6.17.0",
+    "pyinstaller-hooks-contrib>=2025.11",
+    "requests>=2.32.5",
+    "setuptools>=80.9.0",
+    "urllib3>=2.6.2",
+]

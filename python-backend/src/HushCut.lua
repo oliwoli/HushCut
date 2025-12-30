@@ -2975,6 +2975,11 @@ local function append_and_link_timeline_items(create_new, task_id)
 
   if not success then
     print("❌ Operation failed after all retries.")
+    local alert_title = "Append / Link Error"
+    local alert_message = "Operation failed after all retries."
+    send_result_with_alert(
+      alert_title, alert_message
+    )
   end
 end
 
@@ -3039,7 +3044,8 @@ local function main(sync, task_id)
     if project_data and sync then
       local payload = {
         status = "success",
-        message = "sync successful!",
+        taskID = task_id,
+        message = "Sync successful!",
         data = project_data
       }
       send_message_to_go("taskResult", payload, task_id)
@@ -3063,7 +3069,11 @@ local function main(sync, task_id)
     append_and_link_timeline_items(make_new_timeline, task_id)
     TRACKER:complete_task("append")
 
-    local response_payload = { status = "success", message = "Edit successful!" }
+    local response_payload = {
+      status = "success",
+      taskID = task_id,
+      message = "Edit successful!"
+    }
     send_message_to_go("taskResult", response_payload, task_id)
   end
 end
@@ -3194,6 +3204,7 @@ if go_app_path and free_port then
       local command = json_data.command
       print("Command detected: " .. command)
       if command == "sync" then
+        send_message_to_go("taskAck", { message = "started sync" }, task_id)
         main(true, task_id)
       elseif command == "makeFinalTimeline" then
         print("Make final timeline command detected.")
@@ -3207,6 +3218,7 @@ if go_app_path and free_port then
           end
           make_new_timeline = params.makeNewTimeline or false
           print("Creating final timeline with makeNewTimeline = " .. tostring(make_new_timeline))
+          send_message_to_go("taskAck", { message = "started makeFinalTimeline" }, task_id)
           main(false, task_id) -- Call main to execute the timeline creation
         else
           send_result_with_alert("Data Error", "makeFinalTimeline command received without projectData.", task_id)
@@ -3231,8 +3243,8 @@ if go_app_path and free_port then
               status = "success",
               message = "Playhead set to " .. time_value,
             }
-            -- #TODO: send ack or result to Go afterwards (ack doesn't work atm because it's not the same http request)
-            -- send_message_to_go("taskResult", payload, task_id)
+            -- ack serves as result, final response here
+            send_message_to_go("taskAck", { message = "set playhead" }, task_id)
           end
         end
       end

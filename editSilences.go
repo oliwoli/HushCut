@@ -228,8 +228,6 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		return projectData, fmt.Errorf("invalid FPS values: timeline=%.2f, project=%.2f", timelineFPS, projectFPS)
 	}
 
-	log.Printf("timelineFPS is %f - projectFPS is %f\n", timelineFPS, projectFPS)
-
 	for i := range projectData.Timeline.AudioTrackItems {
 		item := &projectData.Timeline.AudioTrackItems[i]
 		//log.Printf("sourceFPS is %f", item.SourceFPS)

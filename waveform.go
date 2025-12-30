@@ -3,13 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
@@ -43,13 +41,9 @@ func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 
 func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
 	maxDb := 0.0
-	start := time.Now()
-
 	if err := a.WaitForFile(filePath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
 	}
-	log.Printf("WaitForFile took: %s (file: %s)", time.Since(start), filePath)
-
 	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
 	if err != nil {
 		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))

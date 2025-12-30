@@ -17,8 +17,8 @@ import { SetDavinciPlayhead } from "@wails/go/main/App";
 import { secToFrames, formatDuration } from "@/lib/utils";
 import { useResizeObserver } from "@/hooks/hooks";
 import { ZoomSlider } from "@/components/ui/zoomSlider";
-import { useWaveformData } from "@/hooks/useWaveformData";
 import { useWaveformStore } from "@/stores/waveformStore";
+import { useWaveformData } from "@/hooks/useWaveformData";
 
 function usePlaybackControls({
   wavesurfer,
@@ -375,7 +375,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const dimensions = useResizeObserver(waveformContainerRef)
 
   useEffect(() => {
-    if (!cutAudioSegmentUrl) return;
+    // if (!cutAudioSegmentUrl) return;
     if (!peakData) return;
 
     const audioUrlChanged = prevAudioUrlRef.current !== audioUrl;
@@ -414,6 +414,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       else if (!audioUrl) setIsLoading(false); // No URL, not loading
       return;
     }
+
+    if (wavesurferRef.current) { return }
 
     console.log("WS Init: Initializing WaveSurfer with precomputed peaks.");
     setIsLoading(true);

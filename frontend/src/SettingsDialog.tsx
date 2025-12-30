@@ -98,73 +98,93 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     return (
         <Dialog open={internalOpen} onOpenChange={onOpenChange}>
             <DialogContent
-                className="w-screen h-full min-w-full min-h-full pt-20 border border-zinc-950 rounded-none"
+                className="w-screen h-screen min-w-full max-w-2xl pt-12 [@media(min-height:32rem)_and_(min-width:25rem)]:pt-20 border border-zinc-950 rounded-none"
                 style={{ opacity: dialogOpacity, transition: 'opacity 150ms ease-in-out' }}
                 disableRadixAnimations={dialogOpacity === 0}
                 hideCloseButton={true}
                 disableOutsideClick={true}
             >
-                <DialogHeader className="">
-                    <DialogTitle className="text-gray-200 pointer-events-none select-none">Settings</DialogTitle>
-                    <DialogDescription>
-                    </DialogDescription>
-                </DialogHeader>
 
+                <div className="flex-1 overflow-y-auto pr-2">
+                    <div className="grid gap-4 h-max max-w-6xl mx-auto select-none text-sm">
+                        <DialogHeader className="max-w-2xl">
+                            <DialogTitle className="text-gray-200 pointer-events-none select-none font-extralight text-base [@media(min-height:32rem)_and_(min-width:25rem)]:text-xl">Settings</DialogTitle>
+                            <DialogDescription>
+                            </DialogDescription>
+                        </DialogHeader>
+                        <h2 className="font-medium tracking-tight text-base">General</h2>
 
-                <div className="grid gap-4 h-max max-w-6xl mx-auto select-none text-sm">
-                    <h2 className="font-medium tracking-tight text-base">General</h2>
-                    <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
-                            <span className="block truncate">DaVinci Path</span>
-                        </Label>
-                        <div
-                            className="col-span-2 w-full overflow-hidden border px-4 py-2 rounded-md text-gray-400"
-                        >
-                            <span className="block truncate pointer-events-auto select-text text-sm">{davinciFolderPath || "(default path)"}</span>
+                        {/* DAVINCI PATH */}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                            <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground w-24 shrink-0 sm:text-right">
+                                DaVinci Path
+                            </Label>
+                            <div className="flex flex-1 min-w-[200px] gap-2">
+                                <div
+                                    className="flex-1 max-w-xs overflow-hidden border px-4 py-2 rounded-md text-gray-400"
+                                >
+                                    <span className="block truncate pointer-events-auto select-text text-sm">{davinciFolderPath || "(default path)"}</span>
+                                </div>
+                                <Button
+                                    onClick={handleSelectFolder}
+                                    className="text-center whitespace-normal wrap-break-word leading-tight p-2 py-2.5 h-auto gap-1"
+                                    variant={"secondary"}
+                                >
+                                    Select<span className="hidden sm:inline">Folder</span>
+
+                                </Button>
+                            </div>
                         </div>
-                        <Button
-                            onClick={handleSelectFolder}
-                            className="col-span-1 text-center whitespace-normal wrap-break-word leading-tight p-2 py-2.5 h-auto gap-1"
-                            variant={"secondary"}
-                        >
-                            Select<span className="hidden sm:inline">Folder</span>
+                        <Separator className="h-px w-full bg-gray-700 my-2" />
+                        {/* UI SCALE */}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                            <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground w-24">
+                                <span className="flex truncate w-xl">UI Scale</span>
+                            </Label>
+                            <div className="flex gap-4 items-center">
+                                <SquareMinusIcon className="w-5" onClick={zoomOut} />
+                                {currUiScale}
+                                <SquarePlusIcon className="w-5" onClick={zoomIn} />
+                            </div>
+                        </div>
 
-                        </Button>
-                    </div>
-                    <Separator className="relative block w-full min-h-full h-px bg-gray-700" />
-                    <div className={cn(
-                        "space-y-4",
-                        enableCleanup ? "opacity-100" : "opacity-30"
-                    )}>
-                        <div className="flex gap-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
-                                    <span className="block text-left">UI Scale</span>
+                        <Separator className="h-px w-full bg-gray-700 my-2" />
+
+                        {/* CLEAN TEMP FILES */}
+                        <Label> <Switch checked={enableCleanup} onCheckedChange={setEnableCleanup} />Clean up Temp Files</Label>
+                        <div className={cn(
+                            "space-y-4",
+                            enableCleanup ? "opacity-100" : "opacity-30"
+                        )}>
+                            <p className="text-zinc-400 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been accessed in a while will automatically get deleted before the app exits.</p>
+
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                                {/* Label: Fixed width on larger screens, auto on tiny screens */}
+                                <Label
+                                    htmlFor="cleanup-slider"
+                                    className="text-muted-foreground w-24 shrink-0 sm:text-right"
+                                >
+                                    Delete after
                                 </Label>
-                                <div className="flex gap-4 w-full min-w-lg items-center">
-                                    <SquareMinusIcon className="w-5" onClick={zoomOut} />
-                                    {currUiScale}
-                                    <SquarePlusIcon className="w-5" onClick={zoomIn} />
+
+                                {/* Slider Container: flex-1 allows it to scale; min-w ensures it doesn't get too tiny */}
+                                <div className="flex items-center gap-4 flex-1 min-w-48">
+                                    <SliderZag
+                                        id="cleanup-slider"
+                                        className="flex-1 max-w-48" // flex-1 makes it scale down horizontally
+                                        value={[cleanupThreshold]}
+                                        min={0}
+                                        max={30}
+                                        step={1}
+                                        onChange={(values) => setCleanupThreshold(values[0])}
+                                        disabled={!enableCleanup}
+                                    />
+                                    <span className="whitespace-nowrap tabular-nums">
+                                        {cleanupThreshold} days
+                                    </span>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                    <Separator className="relative block w-full min-h-full h-px bg-gray-700" />
-                    <Label> <Switch checked={enableCleanup} onCheckedChange={setEnableCleanup} />Clean up Temp Files</Label>
-                    <div className={cn(
-                        "space-y-4",
-                        enableCleanup ? "opacity-100" : "opacity-30"
-                    )}>
-                        <p className="text-zinc-400 text-sm text-balance">HushCut creates temp wav files to extract silence data and display the waveform preview. Files that haven't been accessed in a while will automatically get deleted before the app exits.</p>
-                        <div className="flex gap-4">
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="davinci-folder-path" className="text-right text-muted-foreground">
-                                    <span className="block text-left">Delete after</span>
-                                </Label>
-                                <div className="flex gap-4 w-full min-w-lg">
-                                    <SliderZag className="w-32" value={[cleanupThreshold]} min={0} max={30} step={1} onChange={(values) => setCleanupThreshold(values[0])} disabled={!enableCleanup} />
-                                    {cleanupThreshold} days</div>
-                            </div>
+
                         </div>
                     </div>
                 </div>

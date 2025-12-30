@@ -34,7 +34,7 @@ try {
     . ".\python-backend\venv\Scripts\Activate.ps1"
 
     Write-Host "Installing/updating Python dependencies..."
-    pip install -r python-backend\requirements.txt
+    pip install .\python-backend
 
     Write-Host "Running PyInstaller in onefile mode..."
     pyinstaller --onefile --name "$MainFileName" --optimize=2 `

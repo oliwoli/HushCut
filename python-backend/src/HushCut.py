@@ -1956,6 +1956,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
         response_payload = {
             "status": "success",
+            "taskID": task_id,
             "message": "Sync successful!",
             "data": PROJECT_DATA,
         }
@@ -1992,7 +1993,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     TRACKER.update_task_progress("prepare", 50.0, message="Preparing")
     unify_linked_items_in_project_data(input_otio_path)
-    print(f"project data after unify: {PROJECT_DATA}")
+    # print(f"project data after unify: {PROJECT_DATA}")
 
     TRACKER.complete_task("prepare")
     TRACKER.update_task_progress("append", 1.0, "Adding Clips to Timeline")
@@ -2007,6 +2008,7 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
 
     response_payload = {
         "status": "success",
+        "taskID": task_id,
         "message": "Edit successful!",
     }
 
@@ -2063,14 +2065,14 @@ def _append_clips_to_timeline(
         if link_id is None:
             continue
         media_type = 1 if item["track_type"] == "video" else 2
-        for i, edit in enumerate(item.get("edit_instructions", [])):
+        for i, edit in enumerate(item.get("edit_instructions") or []):
             record_frame = edit.get("start_frame", 0)
             end_frame = edit.get("end_frame", 0)
             duration_frames = end_frame - record_frame
             if duration_frames < 1:
                 continue
             source_start = edit.get("source_start_frame", 0)
-            source_end = source_start + (duration_frames * fps_ratio)
+            # source_end = source_start + (duration_frames * fps_ratio)
 
             if not item.get("bmd_mpi"):
                 item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
@@ -2141,7 +2143,7 @@ def _append_clips_to_timeline(
     print(f"Appending {len(final_api_batch)} total clip instructions to timeline...")
     BATCH_SIZE = 100
     appended_bmd_items: List[Any] = []
-    print(f"FINAL API BATCH: {final_api_batch}")
+    # print(f"FINAL API BATCH: {final_api_batch}")
 
     for i in range(0, len(final_api_batch), BATCH_SIZE):
         chunk = final_api_batch[i : i + BATCH_SIZE]
@@ -2501,7 +2503,7 @@ def append_and_link_timeline_items(
             success = True
             break
         else:
-            print(f"Attempt {attempt} failed. Rolling back changes...")
+            print(f"Attempt {attempt} failed.")
             # if bmd_items_from_api:
             #     TIMELINE.DeleteClips(bmd_items_from_api, delete_gaps=False)
             if attempt < num_retries:
@@ -2510,6 +2512,12 @@ def append_and_link_timeline_items(
 
     if not success:
         print("❌ Operation failed after all retries. Please check the logs.")
+        send_result_with_alert(
+            task_id=task_id,
+            alert_message="Operation failed after all retries.",
+            alert_title="Append / Link Error",
+        )
+        return
 
 
 # Add this new global event
@@ -2593,7 +2601,9 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
         self.send_header("Content-type", "application/json")
         self.send_header("Authorization", value=AUTH_TOKEN)
         self.end_headers()
-        self.wfile.write(json.dumps(data_dict).encode("utf-8"))
+        body_bytes = json.dumps(data_dict).encode("utf-8")
+        self.wfile.write(body_bytes)
+        self.wfile.flush()
 
     def do_POST(self):
         """Routes POST requests to the appropriate handler based on the URL path."""
@@ -2663,11 +2673,12 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                 command = data.get("command")
                 params = data.get("params", {})
                 task_id = params.get("taskId")
-
-                # Your existing command handling logic
+                self._send_json_response(200, {"status": "accepted"})
                 if command == "sync":
-                    self._send_json_response(
-                        200, {"status": "success", "message": "Sync command received."}
+                    send_message_to_go(
+                        message_type="taskAck",
+                        payload={"message": "started"},
+                        task_id=task_id,
                     )
                     main(sync=True, task_id=task_id)
                     return  # Important: return after handling a command
@@ -2684,14 +2695,11 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                         return
 
                     project_data_from_go = ProjectData(**project_data_from_go_raw)
-                    self._send_json_response(
-                        200,
-                        {
-                            "status": "success",
-                            "message": "Final timeline generation started.",
-                        },
+                    send_message_to_go(
+                        message_type="taskAck",
+                        payload={"message": "started"},
+                        task_id=task_id,
                     )
-
                     if PROJECT_DATA:
                         PROJECT_DATA = apply_edits_from_go(
                             PROJECT_DATA, project_data_from_go
@@ -2703,24 +2711,20 @@ class PythonCommandHandler(BaseHTTPRequestHandler):
                     return
 
                 elif command == "saveProject":
-                    self._send_json_response(
-                        200,
-                        {
-                            "status": "success",
-                            "message": "Project save command received.",
-                        },
+                    send_message_to_go(
+                        message_type="taskAck",
+                        payload={"message": "started"},
+                        task_id=task_id,
                     )
                     return
 
                 elif command == "setPlayhead":
                     time_value = params.get("time")
                     if time_value is not None and set_timecode(time_value, task_id):
-                        self._send_json_response(
-                            200,
-                            {
-                                "status": "success",
-                                "message": f"Playhead set to {time_value}.",
-                            },
+                        send_message_to_go(
+                            message_type="taskAck",
+                            payload={"message": "started"},
+                            task_id=task_id,
                         )
                     else:
                         self._send_json_response(

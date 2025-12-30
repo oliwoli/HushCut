@@ -1,6 +1,5 @@
 import { usePlaybackStore } from '@/stores/clipStore';
 import { useWaveformStore } from '@/stores/waveformStore';
-import { main } from '@wails/go/models';
 import React, { useEffect, useRef } from 'react';
 
 // Helper functions can live in this file or a shared utils file
