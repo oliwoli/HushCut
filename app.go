@@ -33,6 +33,10 @@ const (
 	StatusMissing                     // 2
 )
 
+type ackWaiter struct {
+	ch chan struct{}
+}
+
 type App struct {
 	ctx     context.Context
 	isDev   bool
@@ -58,24 +62,29 @@ type App struct {
 	resourcesPath     string
 	userResourcesPath string
 	tmpPath           string
-	pendingMu         sync.Mutex
-	pendingTasks      map[string]chan PythonCommandResponse
-	ffmpegBinaryPath  string
-	ffmpegStatus      FfmpegStatus
-	ffmpegSemaphore   chan struct{}
 	waveformSemaphore chan struct{}
 	progressTracker   sync.Map
 	fileUsage         map[string]time.Time
 	mu                sync.Mutex
+	isApplyingEdits   bool
 
 	// -- HTTP -- //
 	httpClient *http.Client
 	authToken  string
 
+	// - Python/Lua tasks - //
+	pendingMu    sync.Mutex
+	pendingTasks map[string]chan PythonCommandResponse
+	ackMutex     sync.Mutex
+	ackTasks     map[string]ackWaiter
+
 	// --- FFmpeg STATE ---
-	ffmpegMutex     sync.RWMutex
-	ffmpegReadyChan chan struct{}
-	ffmpegOnce      sync.Once // Ensures the ready channel is closed only once
+	ffmpegMutex      sync.RWMutex
+	ffmpegReadyChan  chan struct{}
+	ffmpegOnce       sync.Once // Ensures the ready channel is closed only once
+	ffmpegBinaryPath string
+	ffmpegStatus     FfmpegStatus
+	ffmpegSemaphore  chan struct{}
 	// ----- //
 
 }
@@ -89,6 +98,7 @@ func NewApp() *App {
 		pythonReadyChan:   make(chan bool, 1),
 		pythonReady:       false,
 		tmpPath:           "", // Will be initialized in startup
+		ackTasks:          make(map[string]ackWaiter),
 		pendingTasks:      make(map[string]chan PythonCommandResponse),
 		ffmpegSemaphore:   make(chan struct{}, 4),
 		waveformSemaphore: make(chan struct{}, 2),
@@ -853,7 +863,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	if loaded {
 		// If another goroutine is already working on this, just wait for its result.
-		log.Printf("StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
+		runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
 		err := <-actualTracker.(*ProgressTracker).Done
 		return err
 	}
@@ -861,7 +871,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	defer func() {
 		close(tracker.Done)
 		a.progressTracker.Delete(outputPath)
-		log.Printf("StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
+		runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
 
 	if err := a.waitForFfmpeg(); err != nil {
@@ -1246,7 +1256,6 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 }
 
 func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
-	log.Println("Starting mixdown of compound clips...")
 	contentMap := make(map[string]*TimelineItem)
 	for i, item := range projectData.Timeline.AudioTrackItems {
 		if item.Type == "" || len(item.NestedClips) == 0 || item.ProcessedFileName == nil {
@@ -1257,10 +1266,9 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 		}
 	}
 	if len(contentMap) == 0 {
-		log.Println("No compound clips found to mixdown.")
 		return nil
 	}
-
+	log.Println("Starting mixdown of compound clips...")
 	for processedName, representativeItem := range contentMap {
 		outputPath := filepath.Join(a.tmpPath, processedName)
 
@@ -1268,7 +1276,6 @@ func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {
 
 		a.ExecuteAndTrackMixdown(projectData.Timeline.ProjectFPS, outputPath, representativeItem.NestedClips)
 	}
-
 	log.Println("All mixdown jobs have been dispatched.")
 	return nil
 }

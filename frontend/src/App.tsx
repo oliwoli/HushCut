@@ -1,4 +1,4 @@
-import React, { Activity } from "react";
+import React, { Activity, startTransition } from "react";
 import { scan } from "react-scan";
 scan({
   enabled: false,
@@ -17,8 +17,6 @@ import {
   ProcessProjectAudio,
   SyncWithDavinci,
   MakeFinalTimeline,
-  HasAValidLicense,
-  GetSettings,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
@@ -77,6 +75,7 @@ import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ChevronRightIcon, LoaderCircleIcon, RefreshCwIcon } from "lucide-react";
 import DownloadPrompt from "./components/ui-custom/DownloadPrompt";
+import { sanitizeProjectDataForComparison } from "./lib/utils";
 
 const getDefaultDetectionParams = (): DetectionParams => ({
   loudnessThreshold: defaultParameters.threshold,
@@ -142,7 +141,7 @@ const Status = {
 function AppContent() {
   const [ffmpegStatus, setFFmpegReady] = useState(Status.Unknown);
   const prevFfmpegStatus = usePrevious(ffmpegStatus);
-  const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
+  // const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
   const [pythonReady, setPythonReady] = useState<boolean | null>(null);
   const prevPythonReady = usePrevious(pythonReady);
 
@@ -163,12 +162,6 @@ function AppContent() {
     checkInitialStatus();
   }, []);
 
-  useEffect(() => {
-    if (pythonReady && !prevPythonReady) {
-      console.log("Python backend is now ready, triggering a re-sync.");
-      handleSyncRef.current();
-    }
-  }, [pythonReady, prevPythonReady]);
 
   useEffect(() => {
     const checkInitialStatus = async () => {
@@ -180,6 +173,10 @@ function AppContent() {
       if (data && typeof data.isReady === "boolean") {
         console.log(`Event: Python status changed to ${data.isReady}`);
         setPythonReady(data.isReady);
+        if (pythonReady && !prevPythonReady) {
+          console.log("Python backend is now ready, triggering a re-sync.");
+          handleSyncRef.current();
+        }
       }
     });
 
@@ -188,6 +185,11 @@ function AppContent() {
     };
   }, []); // runs once on mount
 
+  const [httpPort, setHttpPort] = useState<number | null>(null);
+  const setToken = useAppState((s) => s.setToken);
+
+  const syncTaskIDRef = useRef<string | null>(null);
+  const finalTimelineTaskID = useRef<string | null>(null);
   const isBusy = useAppState((s) => s.isBusy);
   const setBusy = useAppState((s) => s.setBusy);
   const isSyncPaused = useAppState((s) => s.isSyncPaused);
@@ -201,27 +203,23 @@ function AppContent() {
 
   const currentClipId = useClipStore((s) => s.currentClipId);
   const setCurrentClipId = useClipStore((s) => s.setCurrentClipId);
-  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const pendingSelectionRef = useRef<string | null>(null);
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
-  const [httpPort, setHttpPort] = useState<number | null>(null);
-  const setToken = useAppState((s) => s.setToken);
-
-  const [projectData, setProjectData] =
-    useState<main.ProjectDataPayload | null>(null);
+  const projectDataRef =
+    useRef<main.ProjectDataPayload | null>(null);
 
   const setTimecode = useTimecodeStore((s) => s.setTimecode);
-  //const setProjectData = useTimecodeStore((s) => s.setProjectData);
   const currTimecode = useTimecodeStore((s) => s.timecode);
-  const audioItems = projectData?.timeline?.audio_track_items || [];
-  const timelineFps = projectData?.timeline?.fps || 30;
+  const audioItems = projectDataRef.current?.timeline?.audio_track_items || [];
+  const timelineFps = projectDataRef.current?.timeline?.fps || 30;
 
   useEffect(() => {
     if (audioItems.length === 0) {
       setCurrentClipId(null);
       return;
     }
-    if (currTimecode) {
+    if (currTimecode && !pendingSelectionRef.current) {
       const currentFrame = currTimecode.frameCount;
 
       const clipAtTimecode = audioItems.find(
@@ -249,7 +247,10 @@ function AppContent() {
   }, [currTimecode, audioItems, timelineFps]);
 
   const currentActiveClip = useMemo(() => {
-    if (!projectData || !httpPort || !projectData.timeline?.audio_track_items) {
+    if (!projectDataRef.current) {
+      return null;
+    }
+    if (!httpPort || !projectDataRef.current.timeline?.audio_track_items) {
       return null;
     }
     if (audioItems.length === 0) return null;
@@ -268,9 +269,9 @@ function AppContent() {
     return createActiveFileFromTimelineItem(
       itemToDisplay,
       httpPort,
-      projectData.timeline.fps
+      projectDataRef.current.timeline.fps
     );
-  }, [projectData, httpPort, currentClipId]);
+  }, [projectDataRef.current, httpPort, currentClipId]);
 
   const handleSync = async () => {
     if (isBusy) {
@@ -319,23 +320,23 @@ function AppContent() {
           newData.timeline.fps as FRAMERATE
         );
         setTimecode(timecode);
-
-        // remove the curr timecode from it to not trigger unnecessary re-renders
-        newData.timeline.curr_timecode = "";
       }
-      if (!deepEqual(projectData, newData)) {
-        setProjectData(newData);
+      const newProjectDataSanitized = sanitizeProjectDataForComparison(newData);
+      const currentProjectDataSanitized = sanitizeProjectDataForComparison(projectDataRef?.current)
+
+      if (!deepEqual(currentProjectDataSanitized, newProjectDataSanitized)) {
+        projectDataRef.current = newData;;
         setHasProjectData(!!newData);
+        console.log("task result: Project data updated.");
 
         if (!newData) return;
         await Promise.all([
           ProcessProjectAudio(newData),
           MixdownCompoundClips(newData),
         ]);
-        console.log("handleSync: Project data updated.");
       } else {
         console.log(
-          "handleSync: New project data is identical to current; skipping state update for projectData."
+          "task result: New project data is identical to current; skipping state update for projectData."
         );
       }
     };
@@ -351,17 +352,18 @@ function AppContent() {
           response.message
         );
         conditionalSetProjectData(response.data || null);
-        // toast.dismiss(loadingToastId);
       } else if (response && response.status !== "success") {
         console.error(
           "Sync failed (Python reported error, no global alert by Go):",
           response.message
         );
-        setProjectData(null);
+        projectDataRef.current = null;
         setHasProjectData(false);
         setBusy(false);
         setSyncing(false);
       } else if (response && response.status === "success") {
+        syncTaskIDRef.current = response.taskID;
+        console.log("syncing started with task ID", response.taskID);
         await conditionalSetProjectData(response.data);
         setBusy(false);
         setSyncing(false);
@@ -371,7 +373,7 @@ function AppContent() {
           "SyncWithDavinci: Unexpected response structure from Go",
           response
         );
-        setProjectData(null);
+        projectDataRef.current = null;
         setHasProjectData(false);
         setTimelineName(null);
         setBusy(false);
@@ -379,15 +381,18 @@ function AppContent() {
       }
     } catch (err: any) {
       console.error("Error calling SyncWithDavinci or Go-level error:", err);
-      setProjectData(null);
+      projectDataRef.current = null;
       setHasProjectData(false);
       setTimelineName(null);
-
-      if (err && err.alertIssued) {
-      } else {
+      if (!err.alertIssued) {
         const errorMessage =
-          err?.message ||
+          err.message ||
           (typeof err === "string" ? err : "An unknown error occurred.");
+        EventsEmit("showAlert", {
+          title: "Sync Error",
+          message: `Error during Sync operation:\n${errorMessage}`,
+          severity: "error",
+        });
       }
       setBusy(false);
       setSyncing(false);
@@ -398,9 +403,35 @@ function AppContent() {
 
   useEffect(() => {
     handleSyncRef.current = handleSync;
-    if (projectData?.timeline?.name)
-      setTimelineName(projectData?.timeline?.name);
+    if (projectDataRef.current?.timeline?.name)
+      setTimelineName(projectDataRef.current?.timeline?.name);
   }, [handleSync]);
+
+
+  // // TASK RESULT
+  // useEffect(() => {
+  //   const handler = async (data: any) => {
+  //     // SYNC RESULT
+  //     if (data.taskID === syncTaskIDRef.current) {
+  //       cancelPendingSync();
+  //     }
+
+  //     // REMOVE SILENCES ACTION RESULT
+  //     if (data.taskID === finalTimelineTaskID.current) {
+  //       console.log("got a result for remove silences action. - ", data.taskID);
+  //       setPendingRemoveSilences(false);
+  //       setBusy(false);
+  //       setSyncPaused(false);
+  //     }
+  //   }
+
+  //   const taskResultEvent = EventsOn("taskResult", handler);
+
+  //   return () => {
+  //     if (taskResultEvent) taskResultEvent();
+  //   }
+  // }, [])
+
 
   useEffect(() => {
     console.count("ffmpegReady useEffect ran");
@@ -497,24 +528,6 @@ function AppContent() {
     };
   }, []);
 
-  // License check
-  useEffect(() => {
-    const checkLicenseValidity = async () => {
-      if (hasValidLicense !== null) return; // Already checked
-      const hasLicense = await HasAValidLicense();
-      console.log("App.tsx: License validity check result:", hasLicense);
-      setHasValidLicense(hasLicense);
-      if (!hasLicense) {
-        console.log("App.tsx: License is invalid.");
-        EventsEmit("license:invalid", {
-          title: "License Invalid",
-          message: "Please enter your license key.",
-          status: "warning",
-        });
-      }
-    };
-    checkLicenseValidity();
-  }, []);
 
   useEffect(() => {
     const handleProjectData = (data: main.ProjectDataPayload) => {
@@ -522,7 +535,7 @@ function AppContent() {
         "Event: projectDataReceived in App.tsx, setting state.",
         data
       );
-      setProjectData(data);
+      projectDataRef.current = data;
     };
     const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
 
@@ -548,12 +561,12 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (!isBusy && pendingSelection) {
-      setCurrentClipId(pendingSelection);
-      console.log("Applying pending selection:", pendingSelection);
-      setPendingSelection(null);
+    if (!isBusy && pendingSelectionRef.current) {
+      setCurrentClipId(pendingSelectionRef.current);
+      console.log("Applying pending selection:", pendingSelectionRef.current);
+      pendingSelectionRef.current = null;
     }
-  }, [isBusy, pendingSelection, setCurrentClipId]);
+  }, [isBusy, pendingSelectionRef.current, setCurrentClipId]);
 
   useEffect(() => {
     if (!isBusy && pendingRemoveSilences) {
@@ -565,7 +578,7 @@ function AppContent() {
   }, [isBusy, pendingRemoveSilences]);
 
   const handleRemoveSilencesAction = async () => {
-    if (!projectData) {
+    if (!projectDataRef.current) {
       console.error("Cannot run Remove Silences: projectData is null.");
       return;
     }
@@ -573,7 +586,7 @@ function AppContent() {
     // It's necessary here because App.tsx is responsible for triggering the action
     // after a pending state.
     const clipStoreState = useClipStore.getState();
-    const timelineItems = projectData?.timeline?.audio_track_items ?? [];
+    const timelineItems = projectDataRef.current?.timeline?.audio_track_items ?? [];
     const currentClipParams = deriveAllClipDetectionParams(
       timelineItems,
       clipStoreState
@@ -584,7 +597,7 @@ function AppContent() {
       setSyncPaused(true);
       setBusy(true);
       const dataToSend = await prepareProjectDataWithEdits(
-        projectData,
+        projectDataRef.current,
         currentClipParams,
         keepSilence,
         getDefaultDetectionParams()
@@ -660,16 +673,24 @@ function AppContent() {
   }, []);
 
   const handleAudioClipSelection = (selectedItemId: string) => {
+    // immediately set the current clip id for instant ui update
+    setCurrentClipId(selectedItemId);
     if (isBusy) {
-      setPendingSelection(selectedItemId);
+      // if the app is currently syncing, the selection might change,
+      // so we make sure to change the selection again after it's finished syncing
+      pendingSelectionRef.current = selectedItemId;
       console.log("App is busy, pending selection set to:", selectedItemId);
       return;
     }
-    setCurrentClipId(selectedItemId);
     console.log(
       "FileSelector onFileChange: currentClipId set to:",
       selectedItemId
     );
+
+    startTransition(() => {
+      // anything that eventually leads to waveform update
+      // (often nothing else is needed — React will deprioritize renders)
+    });
   };
 
   const titleBarHeight = "2.25rem";
@@ -688,9 +709,9 @@ function AppContent() {
           </div>
         </div>
       );
-    } else if (projectData && currentClipId && httpPort) {
+    } else if (projectDataRef && currentClipId && httpPort) {
       return;
-    } else if (!projectData) {
+    } else if (!projectDataRef) {
       return (
         <div className="my-auto space-y-8 text-gray-500">
           <div className="w-full gap-2 flex items-center justify-center rounded-sm">
@@ -738,26 +759,24 @@ function AppContent() {
             <header className="flex items-center justify-between"></header>
             <main className="flex flex-col max-w-screen select-none h-full">
               {currentActiveClip?.id && httpPort && (
-                <Activity>
-                  <div className="shrink-0 px-3">
-                    <ClipSelector
-                      audioItems={projectData?.timeline.audio_track_items}
-                      currentFileId={currentClipId}
-                      onFileChange={handleAudioClipSelection}
-                      fps={projectData?.timeline.fps}
-                      disabled={
-                        !httpPort ||
-                        !projectData?.timeline?.audio_track_items ||
-                        projectData.timeline.audio_track_items.length === 0
-                      }
-                      className="w-full mt-1 overflow-visible"
-                    />
-                  </div>
-                </Activity>
+                <div className="shrink-0 px-3">
+                  <ClipSelector
+                    audioItems={projectDataRef.current?.timeline.audio_track_items}
+                    currentFileId={currentClipId}
+                    onFileChange={handleAudioClipSelection}
+                    fps={projectDataRef.current?.timeline.fps}
+                    disabled={
+                      !httpPort ||
+                      !projectDataRef.current?.timeline?.audio_track_items ||
+                      projectDataRef.current.timeline.audio_track_items.length === 0
+                    }
+                    className="w-full mt-1 overflow-visible"
+                  />
+                </div>
               )}
               <div className="flex flex-col flex-1 space-y-1 px-3 grow min-h-0 py-2">
-                <div className="flex flex-row space-x-1 items-start flex-1 min-h-50 max-h-[600px]">
-                  {currentActiveClip && projectData?.timeline && (
+                <div className="flex flex-row space-x-1 items-start flex-1 min-h-50 max-h-150">
+                  {currentActiveClip && projectDataRef.current?.timeline && (
                     <div className="flex w-min h-full">
                       <ThresholdControl key={currentClipId} />
                       <PeakMeter />
@@ -766,7 +785,7 @@ function AppContent() {
 
                   <div className="flex flex-col space-y-2 w-full min-w-0 p-0 overflow-visible h-full">
                     {getStatusText()}
-                    {currentActiveClip && projectData?.timeline && httpPort && (
+                    {currentActiveClip && projectDataRef.current?.timeline && httpPort && (
                       <Activity>
                         <ErrorBoundary
                           fallback={
@@ -779,9 +798,9 @@ function AppContent() {
                           maxRetries={3}
                         >
                           <WaveformPlayer
-                            key={currentActiveClip.id}
+                            key={`${currentActiveClip.id}-${currentActiveClip.startFrame}-${currentActiveClip.sourceStartFrame}-${currentActiveClip.duration}`}
                             activeClip={currentActiveClip}
-                            projectFrameRate={projectData.timeline.fps}
+                            projectFrameRate={projectDataRef.current.timeline.fps}
                             httpPort={httpPort}
                           />
                         </ErrorBoundary>
@@ -794,12 +813,12 @@ function AppContent() {
                     <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
                       <SilenceControls key={currentClipId} />
                     </div>
-                    {projectData &&
-                      projectData.timeline?.audio_track_items?.length > 0 && (
+                    {projectDataRef.current &&
+                      projectDataRef.current.timeline?.audio_track_items?.length > 0 && (
                         <div className="pt-5 pr-5 pl-5 [@media(width>=45rem)]:pl-0 flex gap-4 [@media(width>=45rem)]:w-min [@media(width>=45rem)]:flex-col-reverse [@media(width>=45rem)]:justify-start w-full justify-between">
                           <DavinciSettings />
                           <RemoveSilencesButton
-                            projectData={projectData}
+                            projectData={projectDataRef.current}
                             defaultDetectionParams={getDefaultDetectionParams()}
                             onPendingAction={() => setPendingRemoveSilences(true)}
                           />
@@ -975,6 +994,7 @@ export default function App() {
     });
 
     const off3 = EventsOn("finished", () => {
+      console.log("App.tsx: received finish event!")
       timeFinishedRef.current = Date.now();
       if (timeStartedRef.current) {
         const elapsed =
@@ -999,7 +1019,6 @@ export default function App() {
     };
   }, []);
 
-  const currSettings = GetSettings()
   const uiScale = useUiStore((s) => s.uiScale);
 
   useEffect(() => {
