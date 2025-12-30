@@ -282,6 +282,10 @@ function AppContent() {
       console.log("Sync paused. Skipping sync.");
       return;
     }
+    if (!pythonReady) {
+      console.log("python backend not yet ready. Skipping sync.");
+      return;
+    }
     console.log("syncing...");
     if (ffmpegStatus == Status.Unknown) {
       return;
