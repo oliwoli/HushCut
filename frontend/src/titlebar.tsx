@@ -41,8 +41,6 @@ const _TitleBar = () => {
   );
 
   useEffect(() => {
-    // EventsOn returns a function that unsubscribes the listener.
-    // We'll call this in the cleanup phase of useEffect.
     const unsubscribe = EventsOn(
       "updateAvailable",
       (info: main.UpdateResponseV1) => {
@@ -51,7 +49,6 @@ const _TitleBar = () => {
           setUpdateInfo(info);
 
           if (info.show_alert) {
-            // You can still emit your internal showAlert event here
             EventsEmit("showAlert", {
               severity: info.alert_severity,
               title: info.alert_content.title,
@@ -67,7 +64,6 @@ const _TitleBar = () => {
         }
       }
     );
-    // This cleanup function is called when the component unmounts.
     return () => {
       unsubscribe();
     };
@@ -165,7 +161,6 @@ const _TitleBar = () => {
               onClick={handlePinClick}
             >
               <PinIcon
-                // 2. Apply dynamic classes for styling
                 className={`${alwaysOnTop
                   ? "fill-teal-600 group-hover:fill-teal-200" // Pinned style
                   : "" // Default style
@@ -179,9 +174,14 @@ const _TitleBar = () => {
               HushCut
             </label>
             {showSuccess ? (
-              <CheckIcon
-                className="text-teal-400 animate-in fade-in duration-500 w-3 h-3"
-              />
+              hasProjectData ? (
+                <CheckIcon
+                  className="text-teal-400 animate-in fade-in duration-500 w-3 h-3"
+                />
+
+              ) : (
+                <XIcon className="text-red-600 animate-in fade-in duration-500 w-3 h-3" />
+              )
             ) : (
               <CircleIcon
                 className={clsx(

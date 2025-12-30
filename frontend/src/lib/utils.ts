@@ -1,3 +1,4 @@
+import { main } from "@wails/go/models";
 import { clsx, type ClassValue } from "clsx"
 import Timecode, { FRAMERATE } from "smpte-timecode";
 import { twMerge } from "tailwind-merge"
@@ -15,6 +16,23 @@ export function clamp(value: number, min?: number, max?: number): number {
   }
   return value;
 }
+
+export function sanitizeProjectDataForComparison(data: main.ProjectDataPayload | null): unknown {
+  if (data == null) {
+    return null
+  }
+  
+  return {
+  project_name: data.project_name,
+  timeline: {
+    ...data.timeline,
+    curr_timecode: "",
+  },
+  files: data.files
+}
+}
+
+
 
 export function frameToTimecode(
   frame: number,
@@ -74,7 +92,6 @@ export function frameToTimecode(
 
   return tc;
 }
-
 
 export function timecodeToFrame(timecode: string, fps: number = 30): number {
   if (!timecode || typeof timecode !== 'string') {
@@ -144,3 +161,34 @@ export const formatDuration = (totalSeconds: number): DurationPart[] => {
 
   return parts.slice(0, 2);
 };
+
+export function truncateFilename(
+  name: string,
+  maxChars = 19
+): string {
+  const separator = " - ";
+
+  if (name.length <= maxChars) return name;
+
+  const parts = name.split(separator);
+
+  // If structure doesn't match, let css handle truncation
+  if (parts.length !== 2) {
+    return name;
+  }
+
+  const [left, right] = parts;
+  const reserved = right.length + separator.length + 3; // "..." + " - track3"
+
+  if (reserved >= maxChars) {
+    // Edge case: right side too long
+    return "..." + right.slice(-maxChars + 3);
+  }
+
+  const leftChars = maxChars - reserved;
+  return (
+    left.slice(0, leftChars) +
+    "... " +
+    right
+  );
+}

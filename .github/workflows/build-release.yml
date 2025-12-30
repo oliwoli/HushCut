@@ -59,8 +59,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -r python-backend/requirements.txt
-          python -m pip install pyinstaller
+          python -m pip install ./python-backend
       
       - name: Import Code-Signing Certificates for macOS
         if: matrix.label == 'macos'

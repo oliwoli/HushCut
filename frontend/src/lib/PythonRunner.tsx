@@ -45,13 +45,6 @@ export function deriveAllClipDetectionParams(
   return detectionParams;
 }
 
-
-interface PythonRunnerProps {
-  projectData: main.ProjectDataPayload;
-  defaultDetectionParams: DetectionParams; // Renamed for clarity
-  onPendingAction: () => void; // New prop for pending action
-}
-
 // Helper function
 export async function prepareProjectDataWithEdits(
   projectDataInput: main.ProjectDataPayload,
@@ -176,6 +169,12 @@ type ProcessedDataCache = {
   };
 };
 
+interface PythonRunnerProps {
+  projectData: main.ProjectDataPayload;
+  defaultDetectionParams: DetectionParams;
+  onPendingAction: () => void;
+}
+
 const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const {
     projectData: initialProjectData,
@@ -186,6 +185,9 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
   const makeNewTimeline = useGlobalStore(s => s.makeNewTimeline);
   const keepSilence = useGlobalStore(s => s.keepSilence);
   const setBusy = useAppState(s => s.setBusy);
+
+  const setSyncPaused = useAppState((s) => s.setSyncPaused);
+  const isBusy = useAppState.getState().isBusy;
 
   // Single ref to manage the entire cache. No more duplicating Zustand state.
   const cacheRef = useRef<ProcessedDataCache | null>(null);
@@ -200,26 +202,24 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     cacheRef.current = null;
   }, [initialProjectData]);
 
-  // useCallback is still useful, but its dependencies are simpler.
   const handleAction = useCallback(async (isClick: boolean) => {
     if (!initialProjectData) {
       console.error("Action: Initial project data is not available.");
       return;
     }
 
-    // 1. Get current state of all inputs
+    // Get current state of all inputs
     const clipStoreState = useClipStore.getState();
     const timelineItems = initialProjectData?.timeline?.audio_track_items ?? [];
     const currentClipParams = deriveAllClipDetectionParams(timelineItems, clipStoreState);
 
-    // 2. Create the "key" for the current state
     const currentKey = {
       projectData: initialProjectData,
       clipParams: currentClipParams,
       keepSilence: keepSilence,
     };
 
-    // 3. Check if the cache is valid by comparing keys
+    // Check if the cache is valid by comparing keys
     if (cacheRef.current && deepEqual(cacheRef.current.key, currentKey)) {
       console.log(`Action (${isClick ? 'Click' : 'Hover'}): Using existing pre-processed data.`);
       // If it's a click, proceed to use the cached data. If it's just a hover, do nothing.
@@ -256,7 +256,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       if (isClick) setIsProcessingClick(false);
       else setIsProcessingHover(false);
     }
-  }, [initialProjectData, keepSilence, defaultDetectionParams]); // Dependencies are now simpler
+  }, [initialProjectData, keepSilence, defaultDetectionParams]);
 
   const handleMouseEnter = () => {
     if (isProcessingHover || isProcessingClick) return;
@@ -265,14 +265,13 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
 
   const handleClick = async () => {
     if (isProcessingClick) return;
-    const isBusy = useAppState.getState().isBusy;
     if (isBusy) {
-      props.onPendingAction();
+      onPendingAction();
       console.log("App is busy, deferring Remove Silences action.");
       return;
     }
     setBusy(true);
-
+    setSyncPaused(true);
     try {
       const dataToSend = await handleAction(true);
 
