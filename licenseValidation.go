@@ -17,18 +17,18 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/denisbrodbeck/machineid"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) signalLicenseOk() {
 	log.Println("Signaling that license is now valid.")
 	a.licenseValid = true
 	a.licenseOkChan <- true
-	runtime.EventsEmit(a.ctx, "license:valid", nil)
+	a.emitEvent("license:valid", nil)
 }
 
 func (a *App) waitForValidLicense() error {
@@ -124,7 +124,7 @@ func (a *App) loadAndVerifyLocalLicense() (*SignedLicenseData, error) {
 			}
 		}
 		if licenseKey != "" {
-			runtime.EventsEmit(a.ctx, "licenseKeyMismatch", licenseKey)
+			a.emitEvent("licenseKeyMismatch", licenseKey)
 		}
 		return nil, fmt.Errorf("machine ID does not match %w", err)
 	}
@@ -282,9 +282,7 @@ func (a *App) getMachineID() (string, error) {
 	}
 
 	// fallback
-	env := runtime.Environment(a.ctx)
-
-	switch env.Platform {
+	switch runtime.GOOS {
 	case "windows":
 		return getWindowsUUID()
 	case "darwin":
@@ -292,7 +290,7 @@ func (a *App) getMachineID() (string, error) {
 	case "linux":
 		return getLinuxMachineID()
 	default:
-		return "", fmt.Errorf("unsupported platform: %s", env.Platform)
+		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 }
 

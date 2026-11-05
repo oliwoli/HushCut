@@ -15,13 +15,7 @@ import (
 	"time"
 
 	"github.com/oliwoli/hushcut/internal/luahelperlogic"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/logger"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/linux"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
+    "github.com/wailsapp/wails/v3/pkg/application"
 )
 
 //go:embed all:frontend/dist
@@ -130,16 +124,16 @@ func main() {
 	}
 
 	// Create an instance of the app structure
-	app := NewApp()
-	app.licenseVerifyKey = PublicKeyPEM
+	appInstance := NewApp()
+	appInstance.licenseVerifyKey = PublicKeyPEM
 	if *pythonPort != 0 {
-		app.pythonCommandPort = *pythonPort
+		appInstance.pythonCommandPort = *pythonPort
 	}
-	app.testApi = testApi
+	appInstance.testApi = testApi
 
 	if token := os.Getenv("HUSHCUT_AUTH_TOKEN"); token != "" {
 		log.Printf("Received HushCut Token from environment variable.")
-		app.authToken = strings.TrimSpace(token)
+		appInstance.authToken = strings.TrimSpace(token)
 	} else {
 		log.Printf("No HUSHCUT_AUTH_TOKEN provided in environment.")
 	}
@@ -147,47 +141,56 @@ func main() {
 	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)
 	if pythonPortStr := os.Getenv("WAILS_PYTHON_PORT"); pythonPortStr != "" {
 		if p, err := strconv.Atoi(pythonPortStr); err == nil {
-			app.pythonCommandPort = p
-			log.Printf("Go App: Received Python port from environment variable: %d", app.pythonCommandPort)
+			appInstance.pythonCommandPort = p
+			log.Printf("Go App: Received Python port from environment variable: %d", appInstance.pythonCommandPort)
 		} else {
 			log.Printf("Go App: Could not parse WAILS_PYTHON_PORT environment variable: %v", err)
 		}
 	}
 
 	// Create application with options
-	err := wails.Run(&options.App{
-		Title:     "HushCut",
-		Width:     1024,
-		Height:    801,
-		MinWidth:  500,
-		MinHeight: 550,
-		AssetServer: &assetserver.Options{
-			Assets:  assets,
-			Handler: NewFileLoader(),
+	app := application.New(application.Options{
+		Name:        "HushCut",
+		Description: "HushCut",
+		Icon:        icon,
+		Services: []application.Service{
+			application.NewService(appInstance),
 		},
-		BackgroundColour: &options.RGBA{R: 40, G: 40, B: 46, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Bind: []interface{}{
-			app,
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
 		},
-		LogLevel:    logger.INFO,
-		AlwaysOnTop: true,
-		Frameless:   true,
-		Mac: &mac.Options{
-			WebviewIsTransparent: false,
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-		},
-		Linux: &linux.Options{
-			Icon:                icon,
-			WindowIsTranslucent: false,
-			WebviewGpuPolicy:    linux.WebviewGpuPolicyNever,
-			ProgramName:         "HushCut",
+		Linux: application.LinuxOptions{
+			ProgramName: "HushCut",
 		},
 	})
 
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "HushCut",
+		Width:            1024,
+		Height:           801,
+		MinWidth:         500,
+		MinHeight:        550,
+		AlwaysOnTop:      true,
+		Frameless:        true,
+		BackgroundColour: application.NewRGBA(40, 40, 46, 255),
+		URL:              "/",
+		DevToolsEnabled:  true,
+		Mac: application.MacWindow{
+			TitleBar:   application.MacTitleBarHidden,
+			Appearance: application.NSAppearanceNameDarkAqua,
+		},
+		Linux: application.LinuxWindow{
+			Icon:             icon,
+			WebviewGpuPolicy: application.WebviewGpuPolicyNever,
+		},
+	})
+
+	appInstance.SetApplication(app, win)
+
+	err := app.Run()
 	if err != nil {
 		log.Println("Error:", err.Error())
 	}
