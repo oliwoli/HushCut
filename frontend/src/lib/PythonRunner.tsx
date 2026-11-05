@@ -278,7 +278,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
       if (dataToSend) {
         console.log("Click: Making final timeline...");
         const response = await MakeFinalTimeline(dataToSend, makeNewTimeline);
-        if (response.alertIssued) {
+        if (response?.alertIssued) {
           console.warn(
             "Sync operation resulted in an alert (issued by Go). Message:",
             response.message

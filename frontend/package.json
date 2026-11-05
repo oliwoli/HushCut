@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:dev": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tailwindcss/vite": "^4.1.17",
     "@tanstack/react-virtual": "^3.13.12",
+    "@wailsio/runtime": "3.0.0",
     "@zag-js/react": "^1.30.0",
     "@zag-js/slider": "^1.30.0",
     "class-variance-authority": "^0.7.1",

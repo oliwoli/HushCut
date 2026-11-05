@@ -200,8 +200,8 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           startSeconds,
           endSeconds
         );
-        const downsampledPeakData = downsamplePeaks(fullResPeakData.peaks, TARGET_PEAK_COUNT)
         if (!cancelled && fullResPeakData?.peaks) {
+          const downsampledPeakData = downsamplePeaks(fullResPeakData.peaks, TARGET_PEAK_COUNT);
           waveformCache.set(jobKey, downsampledPeakData);
           setWaveformPeaks(downsampledPeakData);
         }
