@@ -1,16 +1,22 @@
-build/*
-!build/windows
-!build/scripts
+bin/
+.task/
+build/bin/
+build/darwin/Assets.car
+build/darwin/*.icns
+build/darwin/*.png
+build/darwin/*.plist
 build/windows/installer/tmp
 node_modules
 frontend/dist
 frontend/wailsjs
+frontend/bindings/
 
 lua-helper/lua-helper
 lua-helper/lua-helper.exe
 
 __pycache__
 venv
+.venv
 typings
 
 temp

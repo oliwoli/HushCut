@@ -30,26 +30,29 @@ uv run pyinstaller --onefile --name "$MAIN_FILE_NAME" --optimize=2 \
     --distpath "$PROJECT_ROOT/dist/python_backend" \
     "$MAIN_FILE"
 
-TARGET_WAILS_BIN_DIR="$PROJECT_ROOT/build/bin/python_backend"
+TARGET_WAILS_BIN="$PROJECT_ROOT/bin/python_backend"
+LEGACY_WAILS_BIN="$PROJECT_ROOT/build/bin/python_backend"
 
-echo "Copying PyInstaller output to Wails build directory..."
+echo "Copying PyInstaller output to Wails bin directories..."
 
-if [ -f "$TARGET_WAILS_BIN_DIR" ]; then
-    echo "Removing existing file: $TARGET_WAILS_BIN_DIR"
-    rm "$TARGET_WAILS_BIN_DIR"
-fi
+mkdir -p "$(dirname "$TARGET_WAILS_BIN")"
+cp -f "$PROJECT_ROOT/dist/python_backend/$MAIN_FILE_NAME" "$TARGET_WAILS_BIN"
+chmod +x "$TARGET_WAILS_BIN"
 
-mkdir -p "$(dirname "$TARGET_WAILS_BIN_DIR")"
-mv -f "$PROJECT_ROOT/dist/python_backend/$MAIN_FILE_NAME" "$TARGET_WAILS_BIN_DIR"
-chmod +x "$TARGET_WAILS_BIN_DIR"
+mkdir -p "$(dirname "$LEGACY_WAILS_BIN")"
+cp -f "$PROJECT_ROOT/dist/python_backend/$MAIN_FILE_NAME" "$LEGACY_WAILS_BIN"
+chmod +x "$LEGACY_WAILS_BIN"
 
-MACAPP_DIR="$PROJECT_ROOT/build/bin/HushCut.app"
-if [ -d "$MACAPP_DIR" ]; then
-    echo "Detected macOS app bundle. Copying backend into Resources..."
-    RESOURCES_DIR="$MACAPP_DIR/Contents/Resources"
-    rm -f "$RESOURCES_DIR/python_backend"
-    cp "$TARGET_WAILS_BIN_DIR" "$RESOURCES_DIR/python_backend"
-fi
+# Copy to any existing macOS app bundles
+for app_bundle in "$PROJECT_ROOT/bin/HushCut.app" "$PROJECT_ROOT/bin/HushCut.dev.app" "$PROJECT_ROOT/build/bin/HushCut.app"; do
+    if [ -d "$app_bundle" ]; then
+        echo "Detected macOS app bundle at $app_bundle. Copying backend into Resources..."
+        resources_dir="$app_bundle/Contents/Resources"
+        mkdir -p "$resources_dir"
+        cp -f "$TARGET_WAILS_BIN" "$resources_dir/python_backend"
+        chmod +x "$resources_dir/python_backend"
+    fi
+done
 
 echo "Cleaning up PyInstaller temporary directories..."
 rm -rf "$PROJECT_ROOT/dist"
