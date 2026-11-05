@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type AlertContent struct {
@@ -90,11 +88,11 @@ func (a *App) checkForUpdate(currentVersion string) {
 
 	a.updateInfo = &updateResp
 	log.Printf("Update available: %+v", updateResp)
-	runtime.EventsEmit(a.ctx, "updateAvailable", updateResp)
+	a.emitEvent("updateAvailable", updateResp)
 }
 
 func (a *App) GetUpdateInfo() *UpdateResponseV1 {
-	runtime.EventsEmit(a.ctx, "updateAvailable", a.updateInfo)
+	a.emitEvent("updateAvailable", a.updateInfo)
 	return a.updateInfo
 
 }
