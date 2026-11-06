@@ -1,0 +1,33 @@
+version: '3'
+
+vars:
+  APP_NAME: "HushCut"
+  BIN_DIR: "bin"
+  PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "pnpm"}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  GOOS: darwin
+
+includes:
+  common: ./build/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+
+tasks:
+  build:
+    summary: Builds the application for macOS
+    cmds:
+      - task: darwin:build
+
+  package:
+    summary: Packages a production build of the application for macOS
+    cmds:
+      - task: darwin:package
+
+  run:
+    summary: Runs the application
+    cmds:
+      - task: darwin:run
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

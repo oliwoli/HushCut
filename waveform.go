@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -46,7 +45,7 @@ func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string,
 	}
 	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
 	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Error getting or generating waveform data for %s: %v", filePath, err))
+		log.Printf("Error getting or generating waveform data for %s: %v", filePath, err)
 		return nil, fmt.Errorf("failed to get/generate waveform for '%s': %v", filePath, err)
 	}
 	return data, nil
@@ -254,7 +253,7 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 			if pos, err := file.Seek(0, io.SeekCurrent); err == nil {
 				pct := (float64(pos) / float64(totalBytes)) * 100
 				if pct-lastReportedPct >= 5 {
-					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
+					a.emitEvent("waveform:progress", WaveformProgress{
 						FilePath:   webInputPath,
 						Percentage: pct,
 					})
@@ -335,7 +334,7 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 
 	finalDuration := float64(totalFrames) / float64(sampleRate)
 
-	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{FilePath: webInputPath})
+	a.emitEvent("waveform:done", WaveformProgress{FilePath: webInputPath})
 
 	return &PrecomputedWaveformData{
 		Duration: finalDuration,
@@ -432,7 +431,7 @@ func (a *App) ProcessWavToLinearPeaks(
 			if pos, err := file.Seek(0, io.SeekCurrent); err == nil {
 				pct := (float64(pos) / float64(totalBytes)) * 100
 				if pct-lastReportedPct >= 5 {
-					runtime.EventsEmit(a.ctx, "waveform:progress", WaveformProgress{
+					a.emitEvent("waveform:progress", WaveformProgress{
 						FilePath:   webInputPath,
 						Percentage: pct,
 					})
@@ -481,7 +480,7 @@ func (a *App) ProcessWavToLinearPeaks(
 
 	finalDuration := float64(totalFrames) / float64(sampleRate)
 
-	runtime.EventsEmit(a.ctx, "waveform:done", WaveformProgress{
+	a.emitEvent("waveform:done", WaveformProgress{
 		FilePath: webInputPath,
 	})
 

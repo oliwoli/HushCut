@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed frontend/src/assets/images/hc-512.png
@@ -475,7 +474,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	runtime.LogDebugf(a.ctx, "RenderClip: BUFFERING request for %s, segment %f to %f", originalFilePath, startSeconds, endSeconds)
+	log.Printf("RenderClip: BUFFERING request for %s, segment %f to %f", originalFilePath, startSeconds, endSeconds)
 
 	// --- FFMPEG Command Setup ---
 	cmd := ExecCommand(a.ffmpegBinaryPath,
@@ -598,7 +597,7 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 
 			// Emit an event to the frontend with the progress update.
 			// The frontend will listen for "taskProgressUpdate".
-			runtime.EventsEmit(a.ctx, "taskProgressUpdate", map[string]interface{}{
+			a.emitEvent("taskProgressUpdate", map[string]interface{}{
 				"taskID":   taskID,
 				"message":  updateData.Message,
 				"progress": updateData.Progress,
@@ -630,7 +629,7 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 					// However, this implies SyncWithDavinci might have timed out or errored earlier.
 					if taskData.ShouldShowAlert && a.licenseValid {
 						log.Printf("msgEndpoint: SyncWithDavinci listener gone for task %s, but Python requested alert. Emitting globally.", taskID)
-						runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+						a.emitEvent("showAlert", map[string]interface{}{
 							"title":    taskData.AlertTitle,
 							"message":  taskData.AlertMessage,
 							"severity": taskData.AlertSeverity,
@@ -642,7 +641,7 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 				// Similar to above, if no pending task, but Python wanted an alert for this orphaned task_id.
 				if taskData.ShouldShowAlert && a.licenseValid {
 					log.Printf("msgEndpoint: No pending task for %s, but Python requested alert. Emitting globally.", taskID)
-					runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+					a.emitEvent("showAlert", map[string]interface{}{
 						"title":    taskData.AlertTitle,
 						"message":  taskData.AlertMessage,
 						"severity": taskData.AlertSeverity,
@@ -710,7 +709,7 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 		log.Printf("Go: Python requested an alert. Title: '%s', Message: '%s', Severity: '%s'",
 			finalResponse.AlertTitle, finalResponse.AlertMessage, finalResponse.AlertSeverity)
 
-		runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+		a.emitEvent("showAlert", map[string]interface{}{
 			"title":    finalResponse.AlertTitle,
 			"message":  finalResponse.AlertMessage,
 			"severity": finalResponse.AlertSeverity,
@@ -751,7 +750,7 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 		a.isApplyingEdits = false
 	}()
 
-	runtime.EventsEmit(a.ctx, "showFinalTimelineProgress")
+	a.emitEvent("showFinalTimelineProgress")
 
 	// Adopt the async task pattern
 	taskID := uuid.NewString()
@@ -786,7 +785,7 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 
 	// Process the final response (handle alerts, errors, etc.)
 	if finalResponse.ShouldShowAlert {
-		runtime.EventsEmit(a.ctx, "showAlert", map[string]interface{}{
+		a.emitEvent("showAlert", map[string]interface{}{
 			"title": finalResponse.AlertTitle, "message": finalResponse.AlertMessage, "severity": finalResponse.AlertSeverity,
 		})
 		finalResponse.AlertIssued = true
@@ -806,7 +805,7 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 		log.Printf("Final response status is not success. TaskID: %s", taskID)
 		return &finalResponse, nil
 	}
-	runtime.EventsEmit(a.ctx, "finished")
+	a.emitEvent("finished")
 	log.Print("finished making final timeline.")
 	return &finalResponse, nil
 }
