@@ -1974,6 +1974,7 @@ local function get_project_data(bmd_project, bmd_timeline)
     end)
 
     if success and mapping_str and mapping_str ~= "" then
+      item.source_audio_mapping = mapping_str
       local ok, mapping = pcall(json.decode, mapping_str)
       if ok and mapping and mapping.track_mapping then
         -- get first key in mapping.track_mapping
@@ -2135,8 +2136,10 @@ local function process_track_items(items, pd_timeline, pd_timeline_key, timeline
             tostring(record_frame_float) .. " on track " .. tostring(track_index))
         else
           local link_group_id = nil
+          local audio_mapping = nil
           if item.metadata and item.metadata.Resolve_OTIO then
             link_group_id = item.metadata.Resolve_OTIO["Link Group ID"]
+            audio_mapping = item.metadata.Resolve_OTIO["AudioMapping"]
           end
           print("Processing item '" .. tostring(item.name) .. "' on track " .. tostring(track_index) ..
             " with link group ID: " .. tostring(link_group_id))
@@ -2146,6 +2149,14 @@ local function process_track_items(items, pd_timeline, pd_timeline_key, timeline
               corresponding_item.link_group_id = link_group_id
             end
             max_id = math.max(max_id, link_group_id)
+          end
+
+          if audio_mapping and audio_mapping ~= "" then
+            for _, corresponding_item in ipairs(corresponding_items) do
+              if not corresponding_item.source_audio_mapping then
+                corresponding_item.source_audio_mapping = audio_mapping
+              end
+            end
           end
         end
         playhead_frames = playhead_frames + duration_val
@@ -2649,14 +2660,92 @@ end
 -- @param timeline_items (table) A list of all timeline items to process.
 -- @return (table, table) A tuple: (all_processed_clips, final_api_batch)
 --
-local function _prepare_clips_for_append(timeline_items)
+local function get_mpi_audio_channels_count(mpi, cache)
+  if not mpi then return 0 end
+  local mpi_id = mpi:GetClipProperty("File Path") or mpi:GetName() or tostring(mpi)
+  if cache[mpi_id] then return cache[mpi_id] end
+  local count = 0
+  local val = mpi:GetClipProperty("Audio Ch")
+  if val and val ~= "" and val ~= "None" then
+    count = tonumber(val) or 0
+  end
+  cache[mpi_id] = count
+  return count
+end
+
+local function is_group_auto_appendable(group, audio_channels_cache)
+  if #group < 2 then return false end
+  local first_clip = group[1].clip_info
+  local mpi = first_clip.mediaPoolItem
+  if not mpi then return false end
+
+  local rec_frame = math.floor(first_clip.recordFrame + 0.5)
+  local start_frame = math.floor(first_clip.startFrame + 0.5)
+  local end_frame = math.floor(first_clip.endFrame + 0.5)
+
+  for _, c in ipairs(group) do
+    local ci = c.clip_info
+    if ci.mediaPoolItem ~= mpi then return false end
+    if math.floor(ci.recordFrame + 0.5) ~= rec_frame or
+       math.floor(ci.startFrame + 0.5) ~= start_frame or
+       math.floor(ci.endFrame + 0.5) ~= end_frame then
+      return false
+    end
+  end
+
+  local video_clips, audio_clips = {}, {}
+  for _, c in ipairs(group) do
+    if c.clip_info.mediaType == 1 then
+      table.insert(video_clips, c)
+    elseif c.clip_info.mediaType == 2 then
+      table.insert(audio_clips, c)
+    end
+  end
+
+  if #video_clips > 1 then return false end
+  if #video_clips == 1 and video_clips[1].clip_info.trackIndex ~= 1 then return false end
+  if #audio_clips == 0 then return false end
+
+  local num_channels = get_mpi_audio_channels_count(mpi, audio_channels_cache)
+  if num_channels <= 0 or #audio_clips ~= num_channels then return false end
+
+  table.sort(audio_clips, function(a, b) return a.clip_info.trackIndex < b.clip_info.trackIndex end)
+  for idx, c in ipairs(audio_clips) do
+    local expected_track = idx
+    local expected_channel = idx - 1
+    if c.clip_info.trackIndex ~= expected_track then return false end
+    if c.target_channel ~= nil and c.target_channel ~= expected_channel then return false end
+  end
+
+  return true
+end
+
+local function get_audio_item_ids(tl)
+  local item_ids = {}
+  if not tl then return item_ids end
+  local track_count = tl:GetTrackCount("audio")
+  for t = 1, track_count do
+    local items = tl:GetItemListInTrack("audio", t) or {}
+    for _, it in ipairs(items) do
+      local uid = it:GetUniqueId()
+      if uid and uid ~= "" then
+        item_ids[uid] = true
+      else
+        item_ids[tostring(t) .. "_" .. tostring(it:GetStart()) .. "_" .. tostring(it:GetEnd())] = true
+      end
+    end
+  end
+  return item_ids
+end
+
+local function _append_clips_to_timeline(target_timeline, media_pool, timeline_items)
   local grouped_clips = {}
 
   for _, item in ipairs(timeline_items) do
     if not item.bmd_item then
       print("Warning: Skipping item '" .. (item.name or "Unnamed") .. "' because it has no 'bmd_item'.")
     elseif not item.edit_instructions or #item.edit_instructions == 0 then
-      -- This item is uncut and shouldn't be re-appended. This is expected.
+      -- Uncut
     else
       if not item.bmd_mpi then item.bmd_mpi = item.bmd_item:GetMediaPoolItem() end
       if not item.bmd_mpi then
@@ -2677,11 +2766,17 @@ local function _prepare_clips_for_append(timeline_items)
               mediaType = media_type,
             }
             local link_key = tostring(item.link_group_id) .. "-" .. tostring(record_frame)
+            local target_ch = nil
+            if media_type == 2 and item.source_channel then
+              target_ch = item.source_channel.channel_idx
+            end
             local appended_clip = {
               clip_info = clip_info_for_api,
               link_key = link_key,
               enabled = edit.enabled == nil or edit.enabled,
               auto_linked = false,
+              target_channel = target_ch,
+              source_audio_mapping = item.source_audio_mapping,
             }
             if not grouped_clips[link_key] then grouped_clips[link_key] = {} end
             table.insert(grouped_clips[link_key], appended_clip)
@@ -2693,35 +2788,162 @@ local function _prepare_clips_for_append(timeline_items)
 
   if not next(grouped_clips) then return {}, {} end
 
-  local final_api_batch, all_processed_clips = {}, {}
-  for link_key, group in pairs(grouped_clips) do
-    local is_optimizable = false
-    if #group == 2 then
-      local clip1, clip2 = group[1], group[2]
-      local path1 = clip1.clip_info.mediaPoolItem:GetClipProperty("File Path")
-      local path2 = clip2.clip_info.mediaPoolItem:GetClipProperty("File Path")
-      if clip1.clip_info.mediaType ~= clip2.clip_info.mediaType and
-          path1 and path1 == path2 and
-          clip1.clip_info.trackIndex == 1 and
-          clip2.clip_info.trackIndex == 1 then
-        is_optimizable = true
-      end
-    end
+  local auto_linked_instructions = {}
+  local independent_video_instructions = {}
+  local independent_audio_by_track = {}
+  local all_processed_clips = {}
+  local audio_channels_cache = {}
 
-    if is_optimizable then
+  for link_key, group in pairs(grouped_clips) do
+    if is_group_auto_appendable(group, audio_channels_cache) then
+      print("Optimizing auto-append for link group " .. tostring(link_key))
       for _, clip in ipairs(group) do clip.auto_linked = true end
       local optimized_clip_info = {}
       for k, v in pairs(group[1].clip_info) do optimized_clip_info[k] = v end
-      optimized_clip_info.mediaType, optimized_clip_info.trackIndex = nil, nil
-      table.insert(final_api_batch, optimized_clip_info)
+      optimized_clip_info.trackIndex = nil
+      local has_video = false
+      for _, c in ipairs(group) do
+        if c.clip_info.mediaType == 1 then has_video = true; break end
+      end
+      if has_video then
+        optimized_clip_info.mediaType = nil
+      else
+        optimized_clip_info.mediaType = 2
+      end
+      table.insert(auto_linked_instructions, optimized_clip_info)
     else
-      for _, clip in ipairs(group) do table.insert(final_api_batch, clip.clip_info) end
+      for _, clip in ipairs(group) do
+        local media_type = clip.clip_info.mediaType
+        if media_type == 1 then
+          table.insert(independent_video_instructions, clip.clip_info)
+        else
+          local t_idx = clip.clip_info.trackIndex
+          if not independent_audio_by_track[t_idx] then independent_audio_by_track[t_idx] = {} end
+          table.insert(independent_audio_by_track[t_idx], clip)
+        end
+      end
     end
     for _, clip in ipairs(group) do table.insert(all_processed_clips, clip) end
   end
 
   table.sort(all_processed_clips, function(a, b) return a.clip_info.recordFrame < b.clip_info.recordFrame end)
-  return all_processed_clips, final_api_batch
+
+  local BATCH_SIZE = 100
+  local bmd_items_from_api = {}
+
+  -- 1. Execute auto-linked instructions
+  if #auto_linked_instructions > 0 then
+    print("Appending " .. #auto_linked_instructions .. " auto-linked clip instructions...")
+    for i = 1, #auto_linked_instructions, BATCH_SIZE do
+      local chunk = {}
+      for j = i, math.min(i + BATCH_SIZE - 1, #auto_linked_instructions) do
+        table.insert(chunk, auto_linked_instructions[j])
+      end
+      local appended = media_pool:AppendToTimeline(chunk) or {}
+      for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
+    end
+  end
+
+  -- 2. Execute independent video instructions
+  if #independent_video_instructions > 0 then
+    print("Appending " .. #independent_video_instructions .. " independent video instructions...")
+    for i = 1, #independent_video_instructions, BATCH_SIZE do
+      local chunk = {}
+      for j = i, math.min(i + BATCH_SIZE - 1, #independent_video_instructions) do
+        table.insert(chunk, independent_video_instructions[j])
+      end
+      local appended = media_pool:AppendToTimeline(chunk) or {}
+      for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
+    end
+  end
+
+  -- 3. Execute independent audio instructions track by track
+  local sorted_track_indices = {}
+  for t_idx, _ in pairs(independent_audio_by_track) do
+    table.insert(sorted_track_indices, t_idx)
+  end
+  table.sort(sorted_track_indices)
+
+  for _, track_idx in ipairs(sorted_track_indices) do
+    local clips_for_track = independent_audio_by_track[track_idx]
+    if clips_for_track and #clips_for_track > 0 then
+      print("Appending " .. #clips_for_track .. " independent audio clips on Track " .. tostring(track_idx) .. "...")
+      local existing_ids = get_audio_item_ids(target_timeline)
+      local insts = {}
+      for _, c in ipairs(clips_for_track) do table.insert(insts, c.clip_info) end
+
+      for i = 1, #insts, BATCH_SIZE do
+        local chunk = {}
+        for j = i, math.min(i + BATCH_SIZE - 1, #insts) do
+          table.insert(chunk, insts[j])
+        end
+        local appended = media_pool:AppendToTimeline(chunk) or {}
+        for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
+      end
+
+      -- Collect new items across all audio tracks
+      local new_target_items = {}
+      local spillover_items = {}
+      local all_new_items = {}
+
+      local track_count = target_timeline:GetTrackCount("audio")
+      for t = 1, track_count do
+        local items = target_timeline:GetItemListInTrack("audio", t) or {}
+        for _, it in ipairs(items) do
+          local uid = it:GetUniqueId()
+          local fallback_id = tostring(t) .. "_" .. tostring(it:GetStart()) .. "_" .. tostring(it:GetEnd())
+          if (uid and uid ~= "" and not existing_ids[uid]) or (not uid and not existing_ids[fallback_id]) then
+            table.insert(all_new_items, it)
+            if t == track_idx then
+              table.insert(new_target_items, it)
+            else
+              table.insert(spillover_items, it)
+            end
+          end
+        end
+      end
+
+      -- Unlink newly created items
+      if #all_new_items > 0 then
+        target_timeline:SetClipsLinked(all_new_items, false)
+      end
+
+      -- Delete spillovers
+      if #spillover_items > 0 then
+        target_timeline:DeleteClips(spillover_items)
+      end
+
+      -- Remap target items to desired channel
+      for _, c in ipairs(clips_for_track) do
+        local rf = math.floor(c.clip_info.recordFrame + 0.5)
+        for _, it in ipairs(new_target_items) do
+          if math.abs(math.floor(it:GetStart() + 0.5) - rf) <= 1 then
+            local mapping_str = c.source_audio_mapping
+            if not mapping_str or mapping_str == "" then
+              local ch = (c.target_channel or 0) + 1
+              local mapping_obj = {
+                track_mapping = {
+                  ["1"] = {
+                    channel_idx = { ch },
+                    type = "mono",
+                    mute = false,
+                  }
+                }
+              }
+              local ok, encoded = pcall(json.encode, mapping_obj)
+              if ok and encoded then mapping_str = encoded end
+            end
+            if mapping_str and mapping_str ~= "" then
+              it:SetSourceAudioChannelMapping(mapping_str)
+            end
+            break
+          end
+        end
+      end
+    end
+  end
+
+  return all_processed_clips, bmd_items_from_api
 end
 
 ---
@@ -2845,19 +3067,7 @@ local function append_and_link_timeline_items(create_new, task_id)
   -- ... Append, Verify, and Link logic follows ...
   local success, num_retries, sleep_time = false, 4, 2.5
   for attempt = 1, num_retries do
-    local processed_clips, final_api_batch = _prepare_clips_for_append(timeline_items)
-
-    local BATCH_SIZE = 100
-    local bmd_items_from_api = {}
-    if #final_api_batch > 0 then
-      print("Appending " .. #final_api_batch .. " clip instructions in batches...")
-      for i = 1, #final_api_batch, BATCH_SIZE do
-        local chunk = {}
-        for j = i, math.min(i + BATCH_SIZE - 1, #final_api_batch) do table.insert(chunk, final_api_batch[j]) end
-        local appended = media_pool:AppendToTimeline(chunk) or {}
-        for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
-      end
-    end
+    local processed_clips, bmd_items_from_api = _append_clips_to_timeline(target_timeline, media_pool, timeline_items)
 
     if #processed_clips == 0 then
       success = true; break
@@ -2963,6 +3173,22 @@ local function append_and_link_timeline_items(create_new, task_id)
       print("Attempt " .. attempt .. " failed. Rolling back changes...")
       if #bmd_items_from_api > 0 then target_timeline:DeleteClips(bmd_items_from_api, false) end
       if attempt < num_retries then
+        if create_new then
+          local all_current_items = {}
+          for t = 1, target_timeline:GetTrackCount("video") do
+            for _, it in ipairs(target_timeline:GetItemListInTrack("video", t) or {}) do
+              table.insert(all_current_items, it)
+            end
+          end
+          for t = 1, target_timeline:GetTrackCount("audio") do
+            for _, it in ipairs(target_timeline:GetItemListInTrack("audio", t) or {}) do
+              table.insert(all_current_items, it)
+            end
+          end
+          if #all_current_items > 0 then
+            target_timeline:DeleteClips(all_current_items)
+          end
+        end
         if os_type == "Windows" then
           ffi.C.Sleep(sleep_time * 1000)     -- FFI call is silent and takes milliseconds
         else

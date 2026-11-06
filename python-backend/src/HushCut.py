@@ -712,6 +712,9 @@ def process_track_items(
             link_group_id = (
                 item.get("metadata", {}).get("Resolve_OTIO", {}).get("Link Group ID")
             )
+            audio_mapping = (
+                item.get("metadata", {}).get("Resolve_OTIO", {}).get("AudioMapping")
+            )
             print(
                 f"Processing item '{item.get('name')}' on track {track_index} with link group ID: {link_group_id}"
             )
@@ -721,6 +724,11 @@ def process_track_items(
                 for corresponding_item in corresponding_items:
                     corresponding_item["link_group_id"] = link_group_id
                 max_id = max(max_id, link_group_id)
+
+            if audio_mapping:
+                for corresponding_item in corresponding_items:
+                    if not corresponding_item.get("source_audio_mapping"):
+                        corresponding_item["source_audio_mapping"] = audio_mapping
 
             playhead_frames += duration_val
 
@@ -1696,6 +1704,7 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
         try:
             mapping_str = item["bmd_item"].GetSourceAudioChannelMapping()
             if mapping_str:
+                item["source_audio_mapping"] = mapping_str
                 mapping = json.loads(mapping_str)
                 track_mappings = mapping.get("track_mapping", {})
                 if not track_mappings:
@@ -2034,19 +2043,118 @@ class ClipInfo(TypedDict):
     trackIndex: int
 
 
-class AppendedClipInfo(TypedDict):
+class AppendedClipInfo(TypedDict, total=False):
     clip_info: Dict
     link_key: Tuple[int, int]
     enabled: bool
     auto_linked: bool  # Flag to track optimization
+    target_channel: Optional[int]
+    source_audio_mapping: Optional[str]
+
+
+def get_mpi_audio_channels_count(mpi: Any, cache: Dict[str, int]) -> int:
+    if not mpi:
+        return 0
+    try:
+        mpi_id = mpi.GetMediaId() if hasattr(mpi, "GetMediaId") else None
+        if not mpi_id:
+            mpi_id = mpi.GetClipProperty("File Path") or mpi.GetName()
+    except Exception:
+        mpi_id = str(id(mpi))
+
+    if mpi_id in cache:
+        return cache[mpi_id]
+
+    count = 0
+    try:
+        val = mpi.GetClipProperty("Audio Ch")
+        if val and val != "None":
+            count = int(val)
+    except Exception as e:
+        print(f"Could not get Audio Ch property: {e}")
+
+    cache[mpi_id] = count
+    return count
+
+
+def is_group_auto_appendable(
+    group: List[AppendedClipInfo], audio_channels_cache: Dict[str, int]
+) -> bool:
+    if len(group) < 2:
+        return False
+
+    first_clip = group[0]["clip_info"]
+    mpi = first_clip.get("mediaPoolItem")
+    if not mpi:
+        return False
+
+    rec_frame = int(round(first_clip.get("recordFrame", 0)))
+    start_frame = int(round(first_clip.get("startFrame", 0)))
+    end_frame = int(round(first_clip.get("endFrame", 0)))
+
+    for c in group:
+        ci = c["clip_info"]
+        if ci.get("mediaPoolItem") != mpi:
+            return False
+        if (
+            int(round(ci.get("recordFrame", 0))) != rec_frame
+            or int(round(ci.get("startFrame", 0))) != start_frame
+            or int(round(ci.get("endFrame", 0))) != end_frame
+        ):
+            return False
+
+    video_clips = [c for c in group if c["clip_info"].get("mediaType") == 1]
+    audio_clips = [c for c in group if c["clip_info"].get("mediaType") == 2]
+
+    # Video check: must be 0 or 1 clip, and if 1 clip, must be track 1
+    if len(video_clips) > 1:
+        return False
+    if len(video_clips) == 1 and video_clips[0]["clip_info"].get("trackIndex") != 1:
+        return False
+
+    if not audio_clips:
+        return False
+
+    num_channels = get_mpi_audio_channels_count(mpi, audio_channels_cache)
+    if num_channels <= 0 or len(audio_clips) != num_channels:
+        return False
+
+    # Audio clips must be contiguous on tracks 1..N and mapped to channels 0..N-1
+    sorted_audio = sorted(audio_clips, key=lambda c: c["clip_info"].get("trackIndex", 0))
+    for idx, c in enumerate(sorted_audio):
+        expected_track = idx + 1
+        expected_channel = idx  # 0-based
+        if c["clip_info"].get("trackIndex") != expected_track:
+            return False
+        if c.get("target_channel") is not None and c["target_channel"] != expected_channel:
+            return False
+
+    return True
+
+
+def get_audio_item_ids(timeline: Any) -> Set[str]:
+    item_ids: Set[str] = set()
+    if not timeline:
+        return item_ids
+    track_count = timeline.GetTrackCount("audio")
+    for t in range(1, track_count + 1):
+        items = timeline.GetItemListInTrack("audio", t) or []
+        for it in items:
+            uid = it.GetUniqueId() if hasattr(it, "GetUniqueId") else None
+            if uid:
+                item_ids.add(uid)
+            else:
+                item_ids.add(f"{t}_{it.GetStart()}_{it.GetEnd()}")
+    return item_ids
 
 
 def _append_clips_to_timeline(
     timeline: Any, media_pool: Any, timeline_items: List[TimelineItem]
 ) -> Tuple[List[AppendedClipInfo], List[Any]]:
     """
-    Groups clips, prepares a SINGLE batch of instructions for the API with a
-    mix of optimized (auto-linked) and standard clips, then makes one API call.
+    Groups clips, prepares optimized auto-linked batches where all natural tracks
+    are present, and handles independent tracks track-by-track to prevent
+    multi-channel audio spillovers, linking bugs, and collisions.
     """
     global PROJECT_DATA
 
@@ -2072,7 +2180,6 @@ def _append_clips_to_timeline(
             if duration_frames < 1:
                 continue
             source_start = edit.get("source_start_frame", 0)
-            # source_end = source_start + (duration_frames * fps_ratio)
 
             if not item.get("bmd_mpi"):
                 item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
@@ -2091,69 +2198,150 @@ def _append_clips_to_timeline(
                 "link_key": link_key,
                 "enabled": edit.get("enabled", True),
                 "auto_linked": False,
+                "target_channel": item.get("source_channel", {}).get("channel_idx", 0) if media_type == 2 else None,
+                "source_audio_mapping": item.get("source_audio_mapping"),
             }
             grouped_clips.setdefault(link_key, []).append(appended_clip)
 
     if not grouped_clips:
         return [], []
 
-    # --- REFACTORED LOGIC: Build a single API batch ---
-    final_api_batch: List[Dict] = []
+    auto_linked_instructions: List[Dict] = []
+    independent_video_instructions: List[Dict] = []
+    independent_audio_by_track: Dict[int, List[AppendedClipInfo]] = defaultdict(list)
     all_processed_clips: List[AppendedClipInfo] = []
+    audio_channels_cache: Dict[str, int] = {}
 
     for link_key, group in grouped_clips.items():
-        is_optimizable = False
-        if len(group) == 2:
-            clip1, clip2 = group
-            mpi1 = clip1["clip_info"]["mediaPoolItem"]
-            mpi2 = clip2["clip_info"]["mediaPoolItem"]
-            path1 = mpi1.GetClipProperty("File Path") if mpi1 else None
-            path2 = mpi2.GetClipProperty("File Path") if mpi2 else None
-
-            if (
-                {c["clip_info"]["mediaType"] for c in group} == {1, 2}
-                and clip1["clip_info"]["trackIndex"] == 1
-                and clip2["clip_info"]["trackIndex"] == 1
-                and (path1 is not None and path1 == path2)
-            ):
-                is_optimizable = True
-
-        if is_optimizable:
-            print(f"Optimizing append for link group {link_key} on Track 1.")
-            # Mark both original clips as auto-linked for the next step
+        if is_group_auto_appendable(group, audio_channels_cache):
+            print(f"Optimizing auto-append for link group {link_key}")
             for clip in group:
                 clip["auto_linked"] = True
 
-            # Prepare a single, optimized instruction for the API call
-            optimized_clip_info = group[0]["clip_info"].copy()
-            del optimized_clip_info["mediaType"]
+            first_clip_info = group[0]["clip_info"]
+            optimized_clip_info = first_clip_info.copy()
             del optimized_clip_info["trackIndex"]
-            final_api_batch.append(optimized_clip_info)
-        else:
-            # If not optimizable, add the original clip_info for each clip
-            for clip in group:
-                final_api_batch.append(clip["clip_info"])
+            has_video = any(c["clip_info"].get("mediaType") == 1 for c in group)
+            if has_video:
+                del optimized_clip_info["mediaType"]
+            else:
+                optimized_clip_info["mediaType"] = 2
 
-        # Always add the full, original clip info to our source-of-truth list
+            auto_linked_instructions.append(optimized_clip_info)
+        else:
+            for clip in group:
+                media_type = clip["clip_info"].get("mediaType")
+                if media_type == 1:
+                    independent_video_instructions.append(clip["clip_info"])
+                else:
+                    track_idx = clip["clip_info"]["trackIndex"]
+                    independent_audio_by_track[track_idx].append(clip)
+
         all_processed_clips.extend(group)
 
     all_processed_clips.sort(key=lambda item: item["clip_info"].get("recordFrame", 0))
 
-    # --- Make unified API calls with a defined batch size ---
-    print(f"Appending {len(final_api_batch)} total clip instructions to timeline...")
     BATCH_SIZE = 100
     appended_bmd_items: List[Any] = []
-    # print(f"FINAL API BATCH: {final_api_batch}")
 
-    for i in range(0, len(final_api_batch), BATCH_SIZE):
-        chunk = final_api_batch[i : i + BATCH_SIZE]
-        appended = media_pool.AppendToTimeline(chunk) or []
-        appended_bmd_items.extend(appended)
-        if appended:
-            TRACKER.update_task_progress(
-                "append",
-                10.0 + (i / len(final_api_batch)) * 80.0,
-            )
+    total_instructions = (
+        len(auto_linked_instructions)
+        + len(independent_video_instructions)
+        + sum(len(v) for v in independent_audio_by_track.values())
+    )
+    processed_count = 0
+
+    # 1. Execute auto-linked instructions
+    if auto_linked_instructions:
+        print(f"Appending {len(auto_linked_instructions)} auto-linked clip instructions...")
+        for i in range(0, len(auto_linked_instructions), BATCH_SIZE):
+            chunk = auto_linked_instructions[i : i + BATCH_SIZE]
+            appended = media_pool.AppendToTimeline(chunk) or []
+            appended_bmd_items.extend(appended)
+            processed_count += len(chunk)
+            if total_instructions > 0:
+                TRACKER.update_task_progress(
+                    "append", 10.0 + (processed_count / total_instructions) * 80.0
+                )
+
+    # 2. Execute independent video instructions
+    if independent_video_instructions:
+        print(f"Appending {len(independent_video_instructions)} independent video instructions...")
+        for i in range(0, len(independent_video_instructions), BATCH_SIZE):
+            chunk = independent_video_instructions[i : i + BATCH_SIZE]
+            appended = media_pool.AppendToTimeline(chunk) or []
+            appended_bmd_items.extend(appended)
+            processed_count += len(chunk)
+            if total_instructions > 0:
+                TRACKER.update_task_progress(
+                    "append", 10.0 + (processed_count / total_instructions) * 80.0
+                )
+
+    # 3. Execute independent audio instructions track by track
+    for track_idx in sorted(independent_audio_by_track.keys()):
+        clips_for_track = independent_audio_by_track[track_idx]
+        if not clips_for_track:
+            continue
+
+        print(f"Appending {len(clips_for_track)} independent audio clips on Track {track_idx}...")
+        existing_ids = get_audio_item_ids(timeline)
+        insts = [c["clip_info"] for c in clips_for_track]
+
+        for i in range(0, len(insts), BATCH_SIZE):
+            chunk = insts[i : i + BATCH_SIZE]
+            appended = media_pool.AppendToTimeline(chunk) or []
+            appended_bmd_items.extend(appended)
+            processed_count += len(chunk)
+            if total_instructions > 0:
+                TRACKER.update_task_progress(
+                    "append", 10.0 + (processed_count / total_instructions) * 80.0
+                )
+
+        # Collect newly created items across all audio tracks
+        new_target_items = []
+        spillover_items = []
+        all_new_items = []
+
+        track_count = timeline.GetTrackCount("audio")
+        for t in range(1, track_count + 1):
+            items = timeline.GetItemListInTrack("audio", t) or []
+            for it in items:
+                uid = it.GetUniqueId() if hasattr(it, "GetUniqueId") else None
+                fallback_id = f"{t}_{it.GetStart()}_{it.GetEnd()}"
+                if (uid and uid not in existing_ids) or (not uid and fallback_id not in existing_ids):
+                    all_new_items.append(it)
+                    if t == track_idx:
+                        new_target_items.append(it)
+                    else:
+                        spillover_items.append(it)
+
+        # Unlink all newly created items so spillover deletion doesn't delete target items
+        if all_new_items:
+            timeline.SetClipsLinked(all_new_items, False)
+
+        # Delete spillovers
+        if spillover_items:
+            timeline.DeleteClips(spillover_items)
+
+        # Remap target items to desired channel
+        for c in clips_for_track:
+            rf = int(round(c["clip_info"]["recordFrame"]))
+            for it in new_target_items:
+                if abs(int(round(it.GetStart())) - rf) <= 1:
+                    mapping_str = c.get("source_audio_mapping")
+                    if not mapping_str:
+                        ch = (c.get("target_channel") or 0) + 1
+                        mapping_str = json.dumps({
+                            "track_mapping": {
+                                "1": {
+                                    "channel_idx": [ch],
+                                    "type": "mono",
+                                    "mute": False,
+                                }
+                            }
+                        })
+                    it.SetSourceAudioChannelMapping(mapping_str)
+                    break
 
     return all_processed_clips, appended_bmd_items
 
@@ -2429,7 +2617,7 @@ def append_and_link_timeline_items(
                 lookup_key = (
                     clip_info.get("mediaType"),
                     clip_info["trackIndex"],
-                    int(clip_info["recordFrame"]),  # Cast to int
+                    int(round(clip_info["recordFrame"])),
                 )
                 link_key_lookup[lookup_key] = link_key
 
@@ -2470,7 +2658,7 @@ def append_and_link_timeline_items(
                 lookup_key = (
                     media_type,
                     item_dict["track_index"],
-                    int(item_dict["start_frame"]),
+                    int(round(item_dict["start_frame"])),
                 )
                 link_key = link_key_lookup.get(lookup_key)
                 if link_key:
@@ -2504,9 +2692,15 @@ def append_and_link_timeline_items(
             break
         else:
             print(f"Attempt {attempt} failed.")
-            # if bmd_items_from_api:
-            #     TIMELINE.DeleteClips(bmd_items_from_api, delete_gaps=False)
             if attempt < num_retries:
+                if create_new_timeline:
+                    all_current_items = []
+                    for t in range(1, TIMELINE.GetTrackCount("video") + 1):
+                        all_current_items.extend(TIMELINE.GetItemListInTrack("video", t) or [])
+                    for t in range(1, TIMELINE.GetTrackCount("audio") + 1):
+                        all_current_items.extend(TIMELINE.GetItemListInTrack("audio", t) or [])
+                    if all_current_items:
+                        TIMELINE.DeleteClips(all_current_items)
                 sleep(sleep_time_between)
                 sleep_time_between += 1.5
 

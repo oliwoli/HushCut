@@ -943,6 +943,17 @@ func parseFFmpegStreams(ffmpegOutput string) ([]VideoStream, []AudioStream) {
 	return videoStreams, audioStreams
 }
 
+func resolveAudioStreamAndChannel(channelIndex int, audioStreams []AudioStream) (int, int, error) {
+	remaining := channelIndex
+	for i, aStream := range audioStreams {
+		if remaining < aStream.Channels {
+			return i, remaining, nil
+		}
+		remaining -= aStream.Channels
+	}
+	return 0, 0, fmt.Errorf("audio channel index %d is out of bounds for the available streams", channelIndex)
+}
+
 func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *SourceChannel) error {
 	tracker := &ProgressTracker{Done: make(chan error, 1)}
 	actualTracker, loaded := a.progressTracker.LoadOrStore(outputPath, tracker)
@@ -1007,33 +1018,18 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		log.Printf("  - Stream %d: %d channels", i, as.Channels)
 	}
 
-	streamFound := false
-	audioStreamIndex := 0
-	remaining := sourceChannel.ChannelIndex // 0-based index from Python
-	//streamIndexInAudioStreams := 0
-
-	for i, aStream := range audioStreams {
-		if remaining < aStream.Channels {
-			audioStreamIndex = i // absolute stream index in ffmpeg
-			streamFound = true
-			//streamIndexInAudioStreams = i // save the index for later
-			break
-		}
-		remaining -= aStream.Channels
-	}
-
-	if !streamFound {
-		return fmt.Errorf("audio channel index %d is out of bounds for the available streams", sourceChannel.ChannelIndex)
-	}
-
 	args := []string{"-y", "-i", inputPath}
 
 	if sourceChannel != nil {
-		//aStream := audioStreams[streamIndexInAudioStreams]
-		log.Printf("Extracting channel %d from stream %d of '%s'",
-			sourceChannel.ChannelIndex, audioStreamIndex, filepath.Base(inputPath))
+		audioStreamIndex, channelInStream, err := resolveAudioStreamAndChannel(sourceChannel.ChannelIndex, audioStreams)
+		if err != nil {
+			return err
+		}
 
-		panExpr := fmt.Sprintf("c0=c%d", sourceChannel.ChannelIndex)
+		log.Printf("Extracting channel %d (stream %d, channel %d) from '%s'",
+			sourceChannel.ChannelIndex, audioStreamIndex, channelInStream, filepath.Base(inputPath))
+
+		panExpr := fmt.Sprintf("c0=c%d", channelInStream)
 
 		afArg := fmt.Sprintf("pan=mono|%s", panExpr)
 		args = append(args,
