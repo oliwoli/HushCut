@@ -17,10 +17,11 @@ import {
   ProcessProjectAudio,
   SyncWithDavinci,
   MakeFinalTimeline,
+  OpenDevTools,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
-import { EventsEmit, EventsOn } from "@wails/runtime";
+import { EventsEmit, EventsOn, isBrowserEnvironment } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveformPlayer";
@@ -73,7 +74,7 @@ import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { ChevronRightIcon, LoaderCircleIcon, RefreshCwIcon } from "lucide-react";
+import { ChevronRightIcon, LoaderCircleIcon, RefreshCwIcon, CodeIcon } from "lucide-react";
 import DownloadPrompt from "./components/ui-custom/DownloadPrompt";
 import { sanitizeProjectDataForComparison } from "./lib/utils";
 
@@ -173,17 +174,26 @@ function AppContent() {
       if (data && typeof data.isReady === "boolean") {
         console.log(`Event: Python status changed to ${data.isReady}`);
         setPythonReady(data.isReady);
-        if (pythonReady && !prevPythonReady) {
-          console.log("Python backend is now ready, triggering a re-sync.");
-          handleSyncRef.current();
-        }
       }
+    });
+
+    const unsubscribeCriticalError = EventsOn("app:criticalError", (msg) => {
+      console.error("Critical error from backend:", msg);
+      toast.error(String(msg));
     });
 
     return () => {
       if (typeof unsubscribe === "function") unsubscribe(); // Cleanup listener
+      if (typeof unsubscribeCriticalError === "function") unsubscribeCriticalError();
     };
   }, []); // runs once on mount
+
+  useEffect(() => {
+    if (pythonReady && !prevPythonReady) {
+      console.log("Python backend is now ready, triggering a re-sync.");
+      handleSyncRef.current();
+    }
+  }, [pythonReady, prevPythonReady]);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
   const setToken = useAppState((s) => s.setToken);
@@ -280,6 +290,10 @@ function AppContent() {
     }
     if (isSyncPaused) {
       console.log("Sync paused. Skipping sync.");
+      return;
+    }
+    if (!pythonReady) {
+      console.log("python backend not yet ready. Skipping sync.");
       return;
     }
     console.log("syncing...");
@@ -472,13 +486,6 @@ function AppContent() {
         "App.tsx: Backend is ready, proceeding with initialization..."
       );
 
-      EventsOn("pythonStatusUpdate", (data) => {
-        if (data && typeof data.isReady === "boolean") {
-          console.log(`Event: Python status changed to ${data.isReady}`);
-          setPythonReady(data.isReady);
-        }
-      });
-
       try {
         const port = await GetGoServerPort();
         if (!port || port <= 0) {
@@ -501,7 +508,7 @@ function AppContent() {
         console.log("App.tsx: Initial FFmpeg status:", isFfmpegReady);
         console.log("App.tsx: Initial Python status:", pyReady);
 
-        if (isFfmpegReady) {
+        if (isFfmpegReady && pyReady) {
           handleSyncRef.current();
         }
       } catch (err) {
@@ -709,9 +716,35 @@ function AppContent() {
           </div>
         </div>
       );
-    } else if (projectDataRef && currentClipId && httpPort) {
+    } else if (!pythonReady) {
+      return (
+        <div className="my-auto space-y-4 text-center">
+          <LoaderCircleIcon
+            size={32}
+            className="text-teal-500/60 animate-spin mx-auto mb-2"
+          />
+          <p className="text-gray-400 font-medium">Connecting to Python backend...</p>
+          <p className="text-gray-500 text-xs">Waiting for DaVinci Resolve bridge to initialize.</p>
+        </div>
+      );
+    } else if (!httpPort) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center rounded-sm text-center px-4">
+          <p className="text-gray-400 font-medium">
+            {isBrowserEnvironment()
+              ? "Browser Preview Mode"
+              : "There was a problem setting up the local http server."}
+          </p>
+          {isBrowserEnvironment() && (
+            <p className="text-gray-500 text-xs mt-1 max-w-sm">
+              Only UI previews are available in the browser. For full DaVinci Resolve integration and Go backend functionality, run the application in desktop mode.
+            </p>
+          )}
+        </div>
+      );
+    } else if (projectDataRef.current && currentClipId && httpPort) {
       return;
-    } else if (!projectDataRef) {
+    } else if (!projectDataRef.current) {
       return (
         <div className="my-auto space-y-8 text-gray-500">
           <div className="w-full gap-2 flex items-center justify-center rounded-sm">
@@ -729,18 +762,19 @@ function AppContent() {
           </div>
         </div>
       );
-    } else if (!httpPort) {
-      return (
-        <div className="w-full h-full flex items-center justify-center rounded-sm">
-          <p className="text-gray-500">
-            There was a problem setting up the local http server.
-          </p>
-        </div>
-      );
     }
     return (
-      <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-        <p className="text-gray-500">No audio clips in timeline.</p>
+      <div className="w-full h-full flex flex-col items-center justify-center bg-[#212126] rounded-sm text-center px-4">
+        {isBrowserEnvironment() ? (
+          <>
+            <p className="text-gray-400 text-sm font-medium">Browser Preview Mode</p>
+            <p className="text-gray-500 text-xs mt-1 max-w-md">
+              Only UI previews are available in the browser. For full DaVinci Resolve integration, run the application in desktop mode.
+            </p>
+          </>
+        ) : (
+          <p className="text-gray-500">No audio clips in timeline.</p>
+        )}
       </div>
     );
   };
@@ -831,7 +865,12 @@ function AppContent() {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onClick={handleSync} className="text-xs"><RefreshCwIcon className="w-[1.25em]" /> Sync with DaVinci</ContextMenuItem>
+          <ContextMenuItem onClick={handleSync} className="text-xs">
+            <RefreshCwIcon className="w-[1.25em]" /> Sync with DaVinci
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => OpenDevTools()} className="text-xs">
+            <CodeIcon className="w-[1.25em]" /> Open Developer Tools
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     </>

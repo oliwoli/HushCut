@@ -156,8 +156,22 @@ func main() {
 		Services: []application.Service{
 			application.NewService(appInstance),
 		},
+		Server: application.ServerOptions{
+			Host: "127.0.0.1",
+			Port: 8080,
+		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
+			Middleware: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+					if req.URL.Path == "/wails/custom.js" || strings.HasSuffix(req.URL.Path, "custom.js") {
+						rw.Header().Set("Content-Type", "application/javascript")
+						rw.WriteHeader(http.StatusOK)
+						return
+					}
+					next.ServeHTTP(rw, req)
+				})
+			},
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
@@ -167,7 +181,9 @@ func main() {
 		},
 	})
 
-	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+	isDev := app.Env.Info().Debug
+
+	windowOptions := application.WebviewWindowOptions{
 		Title:            "HushCut",
 		Width:            1024,
 		Height:           801,
@@ -177,7 +193,7 @@ func main() {
 		Frameless:        true,
 		BackgroundColour: application.NewRGBA(40, 40, 46, 255),
 		URL:              "/",
-		DevToolsEnabled:  true,
+		DevToolsEnabled:  isDev,
 		Mac: application.MacWindow{
 			TitleBar:   application.MacTitleBarHidden,
 			Appearance: application.NSAppearanceNameDarkAqua,
@@ -186,9 +202,27 @@ func main() {
 			Icon:             icon,
 			WebviewGpuPolicy: application.WebviewGpuPolicyNever,
 		},
-	})
+	}
+
+	if isDev {
+		windowOptions.KeyBindings = map[string]func(window application.Window){
+			"CmdOrCtrl+Alt+I": func(window application.Window) {
+				window.OpenDevTools()
+				openNativeDevTools(window.NativeWindow())
+			},
+			"F12": func(window application.Window) {
+				window.OpenDevTools()
+				openNativeDevTools(window.NativeWindow())
+			},
+		}
+	}
+
+	win := app.Window.NewWithOptions(windowOptions)
 
 	appInstance.SetApplication(app, win)
+	if isDev {
+		enableNativeDevTools(win.NativeWindow())
+	}
 
 	err := app.Run()
 	if err != nil {

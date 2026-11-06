@@ -21,6 +21,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -147,6 +148,22 @@ func (a *App) SetWindowAlwaysOnTop(alwaysOnTop bool) {
 	}
 }
 
+func (a *App) OpenDevTools() {
+	if !a.isDev {
+		return
+	}
+	var nsWindow unsafe.Pointer
+	if a.window != nil {
+		nsWindow = a.window.NativeWindow()
+		a.window.OpenDevTools()
+	}
+	openNativeDevTools(nsWindow)
+}
+
+func (a *App) IsDev() bool {
+	return a.isDev
+}
+
 func (a *App) OpenURL(url string) {
 	if a.app != nil && a.app.Browser != nil {
 		a.app.Browser.OpenURL(url)
@@ -222,11 +239,35 @@ func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 
-	pythonBinaryPath := filepath.Join(a.resourcesPath, "python_backend")
+	binName := "python_backend"
+	if runtime.GOOS == "windows" {
+		binName = "python_backend.exe"
+	}
 
-	platform := runtime.GOOS
-	if platform == "windows" {
-		pythonBinaryPath = filepath.Join(a.resourcesPath, "python_backend.exe")
+	pythonBinaryPath := filepath.Join(a.resourcesPath, binName)
+
+	if fi, err := os.Stat(pythonBinaryPath); err != nil || fi.IsDir() {
+		// Fallbacks when running outside a packaged bundle (e.g. go run -tags server .)
+		candidates := []string{
+			filepath.Join("bin", "HushCut.dev.app", "Contents", "Resources", binName),
+			filepath.Join("bin", "HushCut.app", "Contents", "Resources", binName),
+			filepath.Join("bin", binName),
+			filepath.Join("build", "bin", binName),
+			filepath.Join(".", binName),
+		}
+		for _, cand := range candidates {
+			if absCand, err := filepath.Abs(cand); err == nil {
+				if fi, err := os.Stat(absCand); err == nil && !fi.IsDir() {
+					pythonBinaryPath = absCand
+					log.Printf("Go app: Located Python backend fallback at '%s'", pythonBinaryPath)
+					break
+				}
+			}
+		}
+	}
+
+	if fi, err := os.Stat(pythonBinaryPath); err != nil || fi.IsDir() {
+		return fmt.Errorf("python backend binary not found at '%s' or fallback paths (run 'wails3 task darwin:build DEV=true' or build python_backend first)", pythonBinaryPath)
 	}
 
 	cmdArgs := []string{
@@ -639,6 +680,7 @@ func (a *App) initializeBackendsAndPython() {
 		case <-time.After(30 * time.Second):
 			log.Printf("Go Routine Warning: Timed out waiting for Python registration.")
 			a.pythonReady = false
+			a.emitEvent("pythonStatusUpdate", map[string]interface{}{"isReady": false, "error": "Timed out waiting for Python registration."})
 		case <-a.ctx.Done():
 			log.Println("Go Routine: Application shutdown requested during Python wait.")
 			return
