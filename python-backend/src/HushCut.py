@@ -1026,7 +1026,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                     continue
 
                 timeline_start = round(timeline_playhead)
-                timeline_end = round(timeline_playhead + timeline_duration_float) - 1
+                timeline_end = round(timeline_playhead + timeline_duration_float)
 
                 final_timeline_segments.append(
                     {
@@ -1048,6 +1048,10 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                 for segment in final_timeline_segments:
                     source_start = segment["proj_start"] * proj_to_src_ratio
                     source_end = segment["proj_end"] * proj_to_src_ratio
+                    tl_dur = segment["tl_end"] - segment["tl_start"]
+                    min_src = math.ceil(tl_dur * (source_fps / timeline_fps))
+                    if (source_end - source_start) < min_src:
+                        source_end = source_start + min_src
 
                     new_edit_instructions.append(
                         {
@@ -2688,6 +2692,8 @@ def append_and_link_timeline_items(
 
             TRACKER.complete_task("link")
             print("✅ Operation completed successfully.")
+            if PROJECT and TIMELINE:
+                PROJECT.SetCurrentTimeline(TIMELINE)
             success = True
             break
         else:

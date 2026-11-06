@@ -2438,7 +2438,7 @@ local function unify_linked_items_in_project_data(input_otio_path)
             local timeline_duration_float = proj_duration * proj_to_timeline_ratio
             if timeline_duration_float >= 1.0 then
               local tl_start = math.floor(timeline_playhead + 0.5)
-              local tl_end = math.floor(timeline_playhead + timeline_duration_float + 0.5) - 1
+              local tl_end = math.floor(timeline_playhead + timeline_duration_float + 0.5)
               table.insert(final_timeline_segments, {
                 proj_start = edit[1], proj_end = edit[2], tl_start = tl_start, tl_end = tl_end,
               })
@@ -2452,9 +2452,16 @@ local function unify_linked_items_in_project_data(input_otio_path)
           if source_fps < EPSILON then source_fps = project_fps end
           local proj_to_src_ratio = source_fps / project_fps
           for _, segment in ipairs(final_timeline_segments) do
+            local source_start = segment.proj_start * proj_to_src_ratio
+            local source_end = segment.proj_end * proj_to_src_ratio
+            local tl_dur = segment.tl_end - segment.tl_start
+            local min_src = math.ceil(tl_dur * (source_fps / timeline_fps))
+            if (source_end - source_start) < min_src then
+              source_end = source_start + min_src
+            end
             table.insert(new_edit_instructions, {
-              source_start_frame = segment.proj_start * proj_to_src_ratio,
-              source_end_frame = segment.proj_end * proj_to_src_ratio,
+              source_start_frame = source_start,
+              source_end_frame = source_end,
               start_frame = segment.tl_start,
               end_frame = segment.tl_end,
               enabled = true,
@@ -3166,6 +3173,11 @@ local function append_and_link_timeline_items(create_new, task_id)
 
       TRACKER:complete_task("link")
       print("✅ Operation completed successfully.")
+      pcall(function()
+        if PROJECT and target_timeline then
+          PROJECT:SetCurrentTimeline(target_timeline)
+        end
+      end)
       success = true
       break
       -- === END: NEW POST-VERIFICATION LOGIC ===
