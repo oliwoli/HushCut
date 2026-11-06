@@ -1,3 +1,4 @@
+-- luacheck: push ignore
 --[[
 David Kolf's JSON module for Lua 5.1/5.2 (Version 2.5)
 Rewritten as a self-contained local module.
@@ -690,6 +691,7 @@ local json = (function()
 
   return internal_json_module
 end)()
+-- luacheck: pop
 
 
 local ffi = require("ffi")
@@ -749,8 +751,10 @@ ffi.cdef [[
                     SECURITY_ATTRIBUTES* lpPipeAttributes, DWORD nSize);
     BOOL SetHandleInformation(HANDLE hObject, DWORD dwMask, DWORD dwFlags);
     BOOL CloseHandle(HANDLE hObject);
-    BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead, DWORD* lpNumberOfBytesRead, void* lpOverlapped);
-    BOOL CreateProcessW(LPCWSTR, wchar_t*, void*, void*, BOOL, DWORD, void*, LPCWSTR, STARTUPINFOW*, PROCESS_INFORMATION*);
+    BOOL ReadFile(HANDLE hFile, void* lpBuffer, DWORD nNumberOfBytesToRead,
+                  DWORD* lpNumberOfBytesRead, void* lpOverlapped);
+    BOOL CreateProcessW(LPCWSTR, wchar_t*, void*, void*, BOOL, DWORD,
+                        void*, LPCWSTR, STARTUPINFOW*, PROCESS_INFORMATION*);
     HANDLE CreateFileW(LPCWSTR, DWORD, DWORD, SECURITY_ATTRIBUTES*, DWORD, DWORD, HANDLE);
 ]]
 
@@ -911,7 +915,7 @@ local script_dir = get_script_dir()
 
 --- Reads the HushCut installation path from the Windows Registry.
 -- @return string The installation path, or a dynamically determined fallback if not found.
-function GetWinInstallPath()
+local function GetWinInstallPath()
   if jit.os ~= "Windows" then
     return nil
   end
@@ -970,7 +974,7 @@ local function send_message_to_go(message_type, payload, task_id)
   -- Create a state table with a custom exception handler for the JSON encoder.
   -- This mimics the Python fallback_serializer by converting unknown types to a string.
   local state = {
-    exception = function(reason, value, state, defaultmessage)
+    exception = function(reason, _value, _state, defaultmessage)
       if reason == 'unsupported type' then
         -- Fallback to string representation for any unsupported type (like userdata).
         -- We must quote the string to make it a valid JSON string value.
@@ -1007,7 +1011,8 @@ local function send_message_to_go(message_type, payload, task_id)
   f:close()
 
   local command = string.format(
-    'curl -s -X POST -H "Content-Type: application/json" --data-binary "@%s" "%s" -w "\\n%%{http_code}" --header "Authorization: Bearer %s"',
+    'curl -s -X POST -H "Content-Type: application/json" --data-binary "@%s" "%s"' ..
+    ' -w "\\n%%{http_code}" --header "Authorization: Bearer %s"',
     tmp_filename,
     url,
     AUTH_TOKEN
@@ -1403,13 +1408,14 @@ end
 
 
 
-local function get_item_id(bmd_item, item_name, start_frame, track_type, track_index)
+local function get_item_id(_bmd_item, item_name, start_frame, track_type, track_index)
   -- This creates an ID like: "MyClip-video-1--120"
   return string.format("%s-%s-%d--%d", item_name, track_type, track_index, start_frame)
 end
 
 
-function PrintTable(t, indent)
+-- luacheck: ignore PrintTable
+local function PrintTable(t, indent)
   indent = indent or 0
   local formatting = string.rep("  ", indent)
   for k, v in pairs(t) do
@@ -1657,14 +1663,16 @@ local function export_timeline_to_otio(davinci_tl, file_path)
 end
 
 
-local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_container, timeline_fps, max_duration)
+local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_container, timeline_fps, _max_duration)
   local media_refs = otio_clip.media_references
   if not media_refs then return nil end
 
   local active_media_key = otio_clip.active_media_reference_key or "DEFAULT_MEDIA"
   local media_ref = media_refs[active_media_key]
 
-  if not media_ref or not media_ref.OTIO_SCHEMA or string.lower(media_ref.OTIO_SCHEMA):find("externalreference", 1, true) == nil then
+  local is_ext = media_ref and media_ref.OTIO_SCHEMA and
+      string.lower(media_ref.OTIO_SCHEMA):find("externalreference", 1, true) ~= nil
+  if not is_ext then
     return nil
   end
 
@@ -1715,11 +1723,7 @@ local function _create_nested_audio_item_from_otio(otio_clip, clip_start_in_cont
   if mapping_str and mapping_str ~= "" then
     local ok, mapping = pcall(json.decode, mapping_str)
     if ok and mapping and mapping.track_mapping then
-      local first_key
-      for k, _ in pairs(mapping.track_mapping) do
-        first_key = k
-        break
-      end
+      local first_key = next(mapping.track_mapping)
 
       if first_key then
         local clip_track_map = mapping.track_mapping[first_key] or {}
@@ -1978,11 +1982,7 @@ local function get_project_data(bmd_project, bmd_timeline)
       local ok, mapping = pcall(json.decode, mapping_str)
       if ok and mapping and mapping.track_mapping then
         -- get first key in mapping.track_mapping
-        local first_key
-        for k, _ in pairs(mapping.track_mapping) do
-          first_key = k
-          break
-        end
+        local first_key = next(mapping.track_mapping)
 
         if first_key then
           local clip_track_map = mapping.track_mapping[first_key] or {}
@@ -2106,8 +2106,9 @@ end
 -- @param track_index (number) The 1-based index of the current track.
 -- @return (number) The updated maximum link_group_id.
 --
-local function process_track_items(items, pd_timeline, pd_timeline_key, timeline_start_rate, timeline_start_frame, max_id,
-                                   track_index)
+local function process_track_items(items, pd_timeline, pd_timeline_key,
+                                   _timeline_start_rate, timeline_start_frame,
+                                   max_id, track_index)
   local playhead_frames = 0.0
 
   for _, item in ipairs(items) do
@@ -2245,7 +2246,11 @@ unify_edit_instructions = function(items, project_fps)
       local is_segment_enabled = active_enabled_count > 0
       local is_segment_active = active_enabled_count > 0 or active_disabled_count > 0
       if is_segment_active then
-        table.insert(merged_segments, { start_frame = last_frame, end_frame = event.frame, enabled = is_segment_enabled })
+        table.insert(merged_segments, {
+          start_frame = last_frame,
+          end_frame = event.frame,
+          enabled = is_segment_enabled,
+        })
       end
     end
 
@@ -2529,7 +2534,7 @@ end
 -- @param expected_clips (table) A list of clip info tables that were intended to be appended.
 -- @return (boolean) True if the timeline state is correct, false otherwise.
 --
-local function _verify_timeline_state(bmd_timeline, expected_clips)
+local function _verify_timeline_state(_bmd_timeline, _expected_clips)
   -- print("Verifying timeline state...")
   TRACKER:complete_task("verify")
   return true
@@ -2745,21 +2750,20 @@ local function get_audio_item_ids(tl)
   return item_ids
 end
 
-local function _append_clips_to_timeline(target_timeline, media_pool, timeline_items)
+local function _append_clips_to_timeline(target_timeline, target_media_pool, timeline_items)
   local grouped_clips = {}
 
   for _, item in ipairs(timeline_items) do
     if not item.bmd_item then
       print("Warning: Skipping item '" .. (item.name or "Unnamed") .. "' because it has no 'bmd_item'.")
-    elseif not item.edit_instructions or #item.edit_instructions == 0 then
-      -- Uncut
-    else
+    elseif item.edit_instructions and #item.edit_instructions > 0 then
       if not item.bmd_mpi then item.bmd_mpi = item.bmd_item:GetMediaPoolItem() end
       if not item.bmd_mpi then
-        print("Warning: Skipping item '" .. (item.name or "Unnamed") .. "' because its MediaPoolItem could not be found.")
+        print("Warning: Skipping item '" .. (item.name or "Unnamed") ..
+              "' because its MediaPoolItem could not be found.")
       else
         local media_type = item.track_type == "video" and 1 or 2
-        for i, edit in ipairs(item.edit_instructions) do
+        for _, edit in ipairs(item.edit_instructions) do
           local record_frame = math.floor((edit.start_frame or 0) + 0.5)
           local end_frame = math.floor((edit.end_frame or 0) + 0.5)
 
@@ -2846,7 +2850,7 @@ local function _append_clips_to_timeline(target_timeline, media_pool, timeline_i
       for j = i, math.min(i + BATCH_SIZE - 1, #auto_linked_instructions) do
         table.insert(chunk, auto_linked_instructions[j])
       end
-      local appended = media_pool:AppendToTimeline(chunk) or {}
+      local appended = target_media_pool:AppendToTimeline(chunk) or {}
       for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
     end
   end
@@ -2859,7 +2863,7 @@ local function _append_clips_to_timeline(target_timeline, media_pool, timeline_i
       for j = i, math.min(i + BATCH_SIZE - 1, #independent_video_instructions) do
         table.insert(chunk, independent_video_instructions[j])
       end
-      local appended = media_pool:AppendToTimeline(chunk) or {}
+      local appended = target_media_pool:AppendToTimeline(chunk) or {}
       for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
     end
   end
@@ -2884,7 +2888,7 @@ local function _append_clips_to_timeline(target_timeline, media_pool, timeline_i
         for j = i, math.min(i + BATCH_SIZE - 1, #insts) do
           table.insert(chunk, insts[j])
         end
-        local appended = media_pool:AppendToTimeline(chunk) or {}
+        local appended = target_media_pool:AppendToTimeline(chunk) or {}
         for _, item in ipairs(appended) do table.insert(bmd_items_from_api, item) end
       end
 
@@ -3173,11 +3177,9 @@ local function append_and_link_timeline_items(create_new, task_id)
 
       TRACKER:complete_task("link")
       print("✅ Operation completed successfully.")
-      pcall(function()
-        if PROJECT and target_timeline then
-          PROJECT:SetCurrentTimeline(target_timeline)
-        end
-      end)
+      if project and target_timeline then
+        project:SetCurrentTimeline(target_timeline)
+      end
       success = true
       break
       -- === END: NEW POST-VERIFICATION LOGIC ===
@@ -3401,18 +3403,17 @@ if go_app_path and free_port then
     end
 
     -- try to parse the line as JSON
-    local json_data, pos, err = nil, nil, nil
+    local json_data = nil
     local params = nil
     local task_id = nil
     if line:find("Body: {") then
       local json_str = line:match("Body: (.*)")
       if json_str then
-        json_data, pos, err = json.decode(json_str, 1, nil)
+        -- luacheck: ignore _pos
+        local json_data_parsed, _pos, err = json.decode(json_str, 1, nil)
+        json_data = json_data_parsed
         if err then
-          print("Error parsing JSON: " .. err)
-        else
-          -- print the parsed JSON data
-          -- print("Parsed JSON data: " .. json.encode(json_data))
+          print("Error parsing JSON: " .. tostring(err))
         end
       else
         print("No JSON found in line: " .. line)
@@ -3477,10 +3478,6 @@ if go_app_path and free_port then
           local time_value = params.time
           if time_value and set_timecode(time_value) then
             print("Setting playhead to: " .. time_value)
-            local payload = {
-              status = "success",
-              message = "Playhead set to " .. time_value,
-            }
             -- ack serves as result, final response here
             send_message_to_go("taskAck", { message = "set playhead" }, task_id)
           end
