@@ -907,7 +907,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	if loaded {
 		// If another goroutine is already working on this, just wait for its result.
-		runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
+		// runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
 		err := <-actualTracker.(*ProgressTracker).Done
 		return err
 	}
@@ -915,7 +915,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	defer func() {
 		close(tracker.Done)
 		a.progressTracker.Delete(outputPath)
-		runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
+		// runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
 
 	if err := a.waitForFfmpeg(); err != nil {

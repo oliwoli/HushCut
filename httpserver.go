@@ -542,7 +542,7 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If we get here, the audioData buffer is successfully filled.
-	runtime.LogDebugf(a.ctx, "RenderClip: Successfully buffered %d bytes. Now serving content.", audioData.Len())
+	// runtime.LogDebugf(a.ctx, "RenderClip: Successfully buffered %d bytes. Now serving content.", audioData.Len())
 	audioDataReader := bytes.NewReader(audioData.Bytes())
 
 	serveName := fmt.Sprintf("rendered_clip_%s_%.2f_%.2f.wav", cleanFileName, startSeconds, endSeconds)
