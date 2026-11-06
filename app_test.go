@@ -70,3 +70,116 @@ func TestParseWhereOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveAudioStreamAndChannel(t *testing.T) {
+	tests := []struct {
+		name              string
+		channelIndex      int
+		audioStreams      []AudioStream
+		wantStreamIndex   int
+		wantChannelStream int
+		wantErr           bool
+	}{
+		{
+			name:         "4 mono streams - channel 0",
+			channelIndex: 0,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 1},
+				{FFmpegIndex: 2, Channels: 1},
+				{FFmpegIndex: 3, Channels: 1},
+				{FFmpegIndex: 4, Channels: 1},
+			},
+			wantStreamIndex:   0,
+			wantChannelStream: 0,
+		},
+		{
+			name:         "4 mono streams - channel 1",
+			channelIndex: 1,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 1},
+				{FFmpegIndex: 2, Channels: 1},
+				{FFmpegIndex: 3, Channels: 1},
+				{FFmpegIndex: 4, Channels: 1},
+			},
+			wantStreamIndex:   1,
+			wantChannelStream: 0,
+		},
+		{
+			name:         "4 mono streams - channel 2",
+			channelIndex: 2,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 1},
+				{FFmpegIndex: 2, Channels: 1},
+				{FFmpegIndex: 3, Channels: 1},
+				{FFmpegIndex: 4, Channels: 1},
+			},
+			wantStreamIndex:   2,
+			wantChannelStream: 0,
+		},
+		{
+			name:         "4 mono streams - channel 3",
+			channelIndex: 3,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 1},
+				{FFmpegIndex: 2, Channels: 1},
+				{FFmpegIndex: 3, Channels: 1},
+				{FFmpegIndex: 4, Channels: 1},
+			},
+			wantStreamIndex:   3,
+			wantChannelStream: 0,
+		},
+		{
+			name:         "4 mono streams - out of bounds",
+			channelIndex: 4,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 1},
+				{FFmpegIndex: 2, Channels: 1},
+				{FFmpegIndex: 3, Channels: 1},
+				{FFmpegIndex: 4, Channels: 1},
+			},
+			wantErr: true,
+		},
+		{
+			name:         "single quad stream - channel 2",
+			channelIndex: 2,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 4},
+			},
+			wantStreamIndex:   0,
+			wantChannelStream: 2,
+		},
+		{
+			name:         "dual stereo streams - channel 3",
+			channelIndex: 3,
+			audioStreams: []AudioStream{
+				{FFmpegIndex: 1, Channels: 2},
+				{FFmpegIndex: 2, Channels: 2},
+			},
+			wantStreamIndex:   1,
+			wantChannelStream: 1,
+		},
+		{
+			name:         "empty streams list",
+			channelIndex: 0,
+			audioStreams: []AudioStream{},
+			wantErr:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStream, gotChan, err := resolveAudioStreamAndChannel(tt.channelIndex, tt.audioStreams)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("unexpected error state: %v, wantErr: %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				if gotStream != tt.wantStreamIndex {
+					t.Errorf("got streamIndex %d, want %d", gotStream, tt.wantStreamIndex)
+				}
+				if gotChan != tt.wantChannelStream {
+					t.Errorf("got channelInStream %d, want %d", gotChan, tt.wantChannelStream)
+				}
+			}
+		})
+	}
+}
