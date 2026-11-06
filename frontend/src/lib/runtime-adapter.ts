@@ -48,6 +48,8 @@ if (isVitePreview()) {
                         return null;
                     case 1352203027: // HasAValidLicense
                         return true;
+                    case 1574971412: // IsDev
+                        return true;
                     case 1050264718: // SyncWithDavinci
                     case 2153205730:
                         return {

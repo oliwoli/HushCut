@@ -18,6 +18,7 @@ import {
   SyncWithDavinci,
   MakeFinalTimeline,
   OpenDevTools,
+  IsDev,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
@@ -140,16 +141,26 @@ const Status = {
 };
 
 function AppContent() {
+  const [isDev, setIsDev] = useState(false);
   const [ffmpegStatus, setFFmpegReady] = useState(Status.Unknown);
   const prevFfmpegStatus = usePrevious(ffmpegStatus);
+  const ffmpegStatusRef = useRef(ffmpegStatus);
+  ffmpegStatusRef.current = ffmpegStatus;
+
   // const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
   const [pythonReady, setPythonReady] = useState<boolean | null>(null);
-  const prevPythonReady = usePrevious(pythonReady);
+  const pythonReadyRef = useRef<boolean | null>(null);
+  pythonReadyRef.current = pythonReady;
+
+  useEffect(() => {
+    IsDev().then(setIsDev).catch(() => {});
+  }, []);
 
   useEffect(() => {
     EventsOn("ffmpeg:status", (status) => {
       console.log("Received ffmpeg status from backend:", status);
       setFFmpegReady(status);
+      ffmpegStatusRef.current = status;
     });
 
     // fallback, probably not needed
@@ -158,6 +169,7 @@ function AppContent() {
       // Only set if status is still unknown
       if (ffmpegStatus === Status.Unknown) {
         setFFmpegReady(isFfmpegReady);
+        ffmpegStatusRef.current = isFfmpegReady;
       }
     };
     checkInitialStatus();
@@ -166,7 +178,9 @@ function AppContent() {
 
   useEffect(() => {
     const checkInitialStatus = async () => {
-      setPythonReady(await GetPythonReadyStatus());
+      const pyReady = await GetPythonReadyStatus();
+      setPythonReady(pyReady);
+      pythonReadyRef.current = pyReady;
     };
     checkInitialStatus(); // Check status on component mount
 
@@ -174,6 +188,11 @@ function AppContent() {
       if (data && typeof data.isReady === "boolean") {
         console.log(`Event: Python status changed to ${data.isReady}`);
         setPythonReady(data.isReady);
+        pythonReadyRef.current = data.isReady;
+        if (data.isReady) {
+          console.log("Python backend is now ready, triggering automatic initial sync.");
+          handleSyncRef.current();
+        }
       }
     });
 
@@ -182,18 +201,17 @@ function AppContent() {
       toast.error(String(msg));
     });
 
+    const unsubscribeSyncRequest = EventsOn("requestSync", () => {
+      console.log("Received requestSync event, initiating sync...");
+      handleSyncRef.current();
+    });
+
     return () => {
       if (typeof unsubscribe === "function") unsubscribe(); // Cleanup listener
       if (typeof unsubscribeCriticalError === "function") unsubscribeCriticalError();
+      if (typeof unsubscribeSyncRequest === "function") unsubscribeSyncRequest();
     };
   }, []); // runs once on mount
-
-  useEffect(() => {
-    if (pythonReady && !prevPythonReady) {
-      console.log("Python backend is now ready, triggering a re-sync.");
-      handleSyncRef.current();
-    }
-  }, [pythonReady, prevPythonReady]);
 
   const [httpPort, setHttpPort] = useState<number | null>(null);
   const setToken = useAppState((s) => s.setToken);
@@ -283,8 +301,12 @@ function AppContent() {
     );
   }, [projectDataRef.current, httpPort, currentClipId]);
 
-  const handleSync = async () => {
-    if (isBusy) {
+  const handleSync = async (isManual = false) => {
+    if (isManual) {
+      EventsEmit("clearAlertSuppression");
+      setBusy(false);
+    }
+    if (isBusy && !isManual) {
       console.log("Sync skipped: App is busy.");
       return;
     }
@@ -292,12 +314,12 @@ function AppContent() {
       console.log("Sync paused. Skipping sync.");
       return;
     }
-    if (!pythonReady) {
+    if (!pythonReadyRef.current) {
       console.log("python backend not yet ready. Skipping sync.");
       return;
     }
     console.log("syncing...");
-    if (ffmpegStatus == Status.Unknown) {
+    if (ffmpegStatusRef.current == Status.Unknown) {
       return;
     }
 
@@ -366,6 +388,8 @@ function AppContent() {
           response.message
         );
         conditionalSetProjectData(response.data || null);
+        setBusy(false);
+        setSyncing(false);
       } else if (response && response.status !== "success") {
         console.error(
           "Sync failed (Python reported error, no global alert by Go):",
@@ -414,9 +438,9 @@ function AppContent() {
   };
 
   const handleSyncRef = useRef(handleSync);
+  handleSyncRef.current = handleSync;
 
   useEffect(() => {
-    handleSyncRef.current = handleSync;
     if (projectDataRef.current?.timeline?.name)
       setTimelineName(projectDataRef.current?.timeline?.name);
   }, [handleSync]);
@@ -503,7 +527,9 @@ function AppContent() {
 
         setToken(goToken);
         setFFmpegReady(isFfmpegReady);
+        ffmpegStatusRef.current = isFfmpegReady;
         setPythonReady(pyReady);
+        pythonReadyRef.current = pyReady;
 
         console.log("App.tsx: Initial FFmpeg status:", isFfmpegReady);
         console.log("App.tsx: Initial Python status:", pyReady);
@@ -647,7 +673,7 @@ function AppContent() {
       cancelPendingSync();
 
       console.log("Drag-friendly delay is over. Executing sync.");
-      handleSync();
+      handleSync(true);
     };
 
     syncMouseUpListenerRef.current = executeSyncAndCleanup;
@@ -760,6 +786,17 @@ function AppContent() {
               HushCut
             </div>
           </div>
+          <div className="flex justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleSync(true)}
+              className="text-xs text-zinc-300 hover:text-white border-zinc-700 bg-zinc-800/60 hover:bg-zinc-800"
+            >
+              <RefreshCwIcon className="w-3.5 h-3.5 mr-1.5" />
+              Sync with DaVinci
+            </Button>
+          </div>
         </div>
       );
     }
@@ -865,12 +902,14 @@ function AppContent() {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onClick={handleSync} className="text-xs">
+          <ContextMenuItem onClick={() => handleSync(true)} className="text-xs">
             <RefreshCwIcon className="w-[1.25em]" /> Sync with DaVinci
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => OpenDevTools()} className="text-xs">
-            <CodeIcon className="w-[1.25em]" /> Open Developer Tools
-          </ContextMenuItem>
+          {isDev && (
+            <ContextMenuItem onClick={() => OpenDevTools()} className="text-xs">
+              <CodeIcon className="w-[1.25em]" /> Open Developer Tools
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     </>

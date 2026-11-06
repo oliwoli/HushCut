@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { EventsOn } from "@wails/runtime";
+import { EventsEmit, EventsOn } from "@wails/runtime";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -98,9 +98,23 @@ const GlobalAlertDialog = () => {
     isBusyRef.current = isBusy;
   }, [isBusy]);
 
+  const suppressAlertRef = useRef(false);
+  const suppressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const handler = (data: AlertData) => {
-      console.log("alert data: ", data)
+      console.log("alert data: ", data);
+      if (suppressAlertRef.current) {
+        console.log("Alert suppressed because Continue was clicked.");
+        suppressAlertRef.current = false;
+        if (suppressTimeoutRef.current) {
+          clearTimeout(suppressTimeoutRef.current);
+          suppressTimeoutRef.current = null;
+        }
+        setBusy(false);
+        return;
+      }
+
       // 1. Set the app to busy *when the event is received*.
       setBusy(true);
 
@@ -116,18 +130,46 @@ const GlobalAlertDialog = () => {
     };
 
     const alertEvent = EventsOn("showAlert", handler);
+    const clearSuppressionEvent = EventsOn("clearAlertSuppression", () => {
+      console.log("Alert suppression cleared by manual action.");
+      suppressAlertRef.current = false;
+      if (suppressTimeoutRef.current) {
+        clearTimeout(suppressTimeoutRef.current);
+        suppressTimeoutRef.current = null;
+      }
+    });
+
     return () => {
       if (alertEvent) alertEvent();
+      if (clearSuppressionEvent) clearSuppressionEvent();
     };
 
   }, []);
+
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Dialog open/close logic
   const handleOpenChange = (isOpen: boolean) => {
     setAlertOpen(isOpen);
     if (!isOpen) {
       setBusy(false);
-      console.log("closing alert!");
+      console.log("closing alert, suppressing next loop alert and requesting sync!");
+      suppressAlertRef.current = true;
+      if (suppressTimeoutRef.current) {
+        clearTimeout(suppressTimeoutRef.current);
+      }
+      suppressTimeoutRef.current = setTimeout(() => {
+        suppressAlertRef.current = false;
+        suppressTimeoutRef.current = null;
+      }, 4000);
+
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      syncTimeoutRef.current = setTimeout(() => {
+        EventsEmit("requestSync");
+        syncTimeoutRef.current = null;
+      }, 50);
     } else {
       console.log("opening alert!");
     }
@@ -176,6 +218,7 @@ const GlobalAlertDialog = () => {
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-1">
           <AlertDialogAction
+            onClick={() => handleOpenChange(false)}
             className={cn(
               buttonVariants({
                 variant: alertData.actions?.length ? "outline" : "default",
