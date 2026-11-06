@@ -49,7 +49,7 @@
     "uuid": "^13.0.2",
     "vaul": "^1.1.2",
     "waveform-data": "^4.5.2",
-    "wavesurfer.js": "^7.12.1",
+    "wavesurfer.js": "^8.0.5",
     "zustand": "^5.0.9"
   },
   "devDependencies": {
