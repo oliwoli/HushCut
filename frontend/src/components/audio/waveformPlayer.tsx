@@ -3,7 +3,7 @@ import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
-import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js";
+import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 
 import { useClipParameter, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
 
@@ -144,7 +144,7 @@ export const TimecodeDisplay: React.FC<TimecodeDisplayProps> = React.memo(({
   const formattedDuration = formatAudioTime(duration, frameRate, showHours);
 
   return (
-    <span className="ml-2 flex gap-1.5 pt-1 text-xs font-mono tracking-tighter text-gray-400/80 mb-[3px]">
+    <span className="ml-2 flex gap-1.5 pt-1 text-xs font-mono tracking-tighter text-gray-400/80 mb-0.75">
       <span>{formattedTime}</span>
       <span>/</span>
       <span>{formattedDuration}</span>
@@ -205,7 +205,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const regionsPluginRef = useRef<RegionsPlugin | null>(null);
+  const regionsPluginRef = useRef<InstanceType<typeof RegionsPlugin> | null>(null);
   const addRegionsTimeoutRef = useRef<any | null>(null); // Ref to manage the timeout for adding regions
 
   const setPlaybackState = usePlaybackStore.setState;
@@ -389,6 +389,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       }
       wavesurferRef.current.destroy();
       wavesurferRef.current = null;
+      regionsPluginRef.current = null;
     }
     // Update prevAudioUrlRef for the next render
     prevAudioUrlRef.current = audioUrl;
@@ -662,7 +663,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
 
-      ws.on("error", (err: Error | string) => {
+      ws.on("error", (err: Error) => {
         console.error("WaveSurfer error:", err);
         setIsLoading(false);
         setIsPlaying(false);
@@ -803,6 +804,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       if (wavesurferRef.current) {
         wavesurferRef.current.destroy();
         wavesurferRef.current = null;
+        regionsPluginRef.current = null;
       }
     };
   }, [audioUrl, cutAudioSegmentUrl, peakData]);
