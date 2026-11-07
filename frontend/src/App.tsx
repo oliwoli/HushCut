@@ -583,6 +583,13 @@ function AppContent() {
       if (data?.timeline?.name) {
         setTimelineName(data.timeline.name);
       }
+      if (data?.timeline?.curr_timecode) {
+        const timecode = Timecode(
+          data.timeline.curr_timecode,
+          data.timeline.fps as FRAMERATE
+        );
+        setTimecode(timecode);
+      }
       setProjectDataVersion((v) => v + 1);
     };
     const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
@@ -596,6 +603,13 @@ function AppContent() {
       setHasProjectData(!!data);
       if (data?.timeline?.name) {
         setTimelineName(data.timeline.name);
+      }
+      if (data?.timeline?.curr_timecode) {
+        const timecode = Timecode(
+          data.timeline.curr_timecode,
+          data.timeline.fps as FRAMERATE
+        );
+        setTimecode(timecode);
       }
       setProjectDataVersion((v) => v + 1);
     };

@@ -211,6 +211,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const setPlaybackState = usePlaybackStore.setState;
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const isPlayingRef = useRef(false);
   const [isLoading, setIsLoading] = useState(true);
 
   const clipFrameDuration = activeClip.sourceEndFrame - activeClip.sourceStartFrame
@@ -227,12 +228,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   //update the player time if timecode fits
   useEffect(() => {
     if (!wavesurferRef.current || !currTimecode) return;
-    if (currTimecode.frameCount < maxTimecode.frameCount) {
+    if (
+      currTimecode.frameCount >= activeClip.startFrame &&
+      currTimecode.frameCount < maxTimecode.frameCount
+    ) {
       console.log("curr timecode: ", currTimecode);
       //const currTime = (currTimelineFrameRefTC.frameCount - activeClip.startFrame) / projectFrameRate;
       const clipTime =
         (currTimecode.frameCount - activeClip.startFrame) / projectFrameRate;
       console.log("we can use the timecode! ", clipTime);
+      isUserSeekingRef.current = false;
+      lastTimecodeRef.current = currTimecode.toString();
       currentTimeRef.current = clipTime;
       setDisplayedTime(clipTime);
       wavesurferRef.current?.setTime(clipTime);
@@ -241,11 +247,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   const currentTimeRef = useRef(0);
   const [displayedTime, setDisplayedTime] = useState(0);
+  const isUserSeekingRef = useRef(false);
 
   // Reset current time when activeClip changes
   useEffect(() => {
     currentTimeRef.current = 0;
     setDisplayedTime(0);
+    isUserSeekingRef.current = false;
   }, [activeClip]);
 
   const currTimelineFrameRef = useRef<number | null>(null);
@@ -265,10 +273,10 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     currTimelineFrameRef.current = frame;
   }, [displayedTime, isLoading, projectFrameRate, activeClip.startFrame]);
 
-  // 2) Cooldown-style throttle, but only when paused
+  // 2) Cooldown-style throttle, but only when paused and user-initiated
   useEffect(() => {
-    if (isPlaying || isLoading || displayedTime == null) {
-      // If we're playing, loading, or don't have a time, clear any pending timer and exit.
+    if (isPlaying || isLoading || displayedTime == null || !isUserSeekingRef.current) {
+      // If we're playing, loading, don't have a time, or this is NOT user-initiated seeking, clear any pending timer and exit.
       if (timerRef.current != null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -279,18 +287,23 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const makeUpdate = async () => {
       // *** FIX 1: Check the lock. If an update is already running, do nothing. ***
       if (isUpdatingRef.current) return;
+      if (!isUserSeekingRef.current) return;
 
       const f = Math.round(currTimelineFrameRef.current!);
       const tcStr = Timecode(f, projectFrameRate as FRAMERATE, false).toString();
 
       // No-op if timecode hasn't actually changed
-      if (tcStr === lastTimecodeRef.current) return;
+      if (tcStr === lastTimecodeRef.current) {
+        isUserSeekingRef.current = false;
+        return;
+      }
 
       try {
         // *** FIX 2: Set the lock and update the call time BEFORE the async call. ***
         isUpdatingRef.current = true;
         lastCallTimeRef.current = Date.now();
         lastTimecodeRef.current = tcStr;
+        isUserSeekingRef.current = false;
 
         await SetDavinciPlayhead(tcStr);
 
@@ -529,7 +542,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       ws.on("ready", () => {
         setPlaybackRate(1.0);
         setIsLoading(false);
-        if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount > activeClip.startFrame) {
+        if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount >= activeClip.startFrame) {
           const clipTime =
             (currTimecode.frameCount - activeClip.startFrame) /
             projectFrameRate;
@@ -583,11 +596,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
       ws.on("play", () => {
+        isPlayingRef.current = true;
         setPlaybackState({ isPlaying: true });
         setIsPlaying(true);
         // cursed webkit fix
         ws.setVolume(1);
-        if (ws.isPlaying()) return;
       });
       ws.on("pause", () => {
         if (wavesurferRef.current) {
@@ -595,27 +608,51 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
         // Then, update the React state so the UI display is correct
         setPlaybackRate(1.0);
-        if (isPlaying) {
-          const timecode = currTimelineFrameRef.current || 0;
-          console.log("timecode", timecode);
-          setTimecode(Timecode(timecode, projectFrameRate as FRAMERATE, false))
+        if (isPlayingRef.current) {
+          const pauseTime = wavesurferRef.current
+            ? wavesurferRef.current.getCurrentTime()
+            : currentTimeRef.current;
+          currentTimeRef.current = pauseTime;
+          setDisplayedTime(pauseTime);
+
+          const frame =
+            secToFrames(pauseTime, projectFrameRate) + activeClip.startFrame;
+          currTimelineFrameRef.current = frame;
+
+          const tc = Timecode(frame, projectFrameRate as FRAMERATE, false);
+          setTimecode(tc);
+
+          const tcStr = tc.toString();
+          lastTimecodeRef.current = tcStr;
+          isUserSeekingRef.current = false;
+          SetDavinciPlayhead(tcStr).catch((err) => {
+            console.error("Error setting DaVinci playhead on pause:", err);
+          });
         }
+        isPlayingRef.current = false;
         setPlaybackState({ isPlaying: false });
         setIsPlaying(false);
       });
       ws.on("finish", () => {
+        isPlayingRef.current = false;
+        setPlaybackState({ isPlaying: false });
         setIsPlaying(false);
         ws.setTime(0);
         currentTimeRef.current = 0;
         setDisplayedTime(0);
-        lastRenderedFrameRef.current = -1
+        lastRenderedFrameRef.current = -1;
       }); // Reset to start on finish
 
       ws.on("interaction", (newTime: number) => {
+        isUserSeekingRef.current = true;
         ws.setTime(newTime); // Ensure wavesurfer time is set
         currentTimeRef.current = newTime;
         setDisplayedTime(newTime);
         lastRenderedFrameRef.current = getFrameFromTime(newTime, projectFrameRate);
+      });
+
+      ws.on("drag", () => {
+        isUserSeekingRef.current = true;
       });
 
       ws.on("timeupdate", (time: number) => {
@@ -754,6 +791,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if (!mainWs) return;
         const mainDuration = mainWs.getDuration();
         if (mainDuration > 0) {
+          isUserSeekingRef.current = true;
           const newTime = relativeX * mainDuration;
           currentTimeRef.current = newTime;
           setDisplayedTime(newTime);
@@ -774,6 +812,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if (mainWs) {
           const mainDuration = mainWs.getDuration();
           if (mainDuration > 0) {
+            isUserSeekingRef.current = true;
             const newTime = relativeX * mainDuration;
             // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
             currentTimeRef.current = newTime;
@@ -956,6 +995,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         break;
       }
     }
+    isUserSeekingRef.current = true;
+    currentTimeRef.current = targetTime;
+    setDisplayedTime(targetTime);
     wavesurferRef.current.setTime(targetTime);
   }, [silenceData, getSilencePoints]);
 
@@ -974,6 +1016,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         break;
       }
     }
+    isUserSeekingRef.current = true;
+    currentTimeRef.current = targetTime;
+    setDisplayedTime(targetTime);
     wavesurferRef.current.setTime(targetTime);
   }, [silenceData, getSilencePoints]);
 
