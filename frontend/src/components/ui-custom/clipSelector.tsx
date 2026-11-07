@@ -95,7 +95,7 @@ const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some d
 
 
 const waveformCache = new Map<string, number[]>();
-const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, allClipIds, allConstituentIds, forwardedRef }: {
+const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, allClipIds, forwardedRef }: {
   clip: DisplayClip;
   index: string;
   isSelected: boolean;
@@ -103,7 +103,6 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
   disabled?: boolean;
   fps?: number;
   allClipIds: string[];
-  allConstituentIds?: string[];
   forwardedRef: React.Ref<HTMLButtonElement>;
 }) => {
   if (!fps) return null;
@@ -188,11 +187,6 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
   // bypass toggle
   const setBypassed = (val: boolean) => {
     useClipStore.getState().setParameter(clip.id, "bypassed", val);
-    if (clip.constituent_item_ids) {
-      clip.constituent_item_ids.forEach((cid) => {
-        useClipStore.getState().setParameter(cid, "bypassed", val);
-      });
-    }
   };
 
   // effect to fetch & cache waveform
@@ -267,11 +261,6 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
       allClipIds.forEach(id =>
         useClipStore.getState().setParameter(id, 'bypassed', newBypass)
       );
-      if (allConstituentIds) {
-        allConstituentIds.forEach(id =>
-          useClipStore.getState().setParameter(id, 'bypassed', newBypass)
-        );
-      }
     } else {
       // Just this clip:
       setBypassed(newBypass);
@@ -283,15 +272,10 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
       <div className={cn(
         "flex flex-col shrink-0 max-w-44 min-w-24 w-full",
       )}>
-        <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
+        <div className="flex justify-start items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
           <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border flex items-center")}>{index}</span>
-          <span className="flex items-center gap-1">{frameToTimecode(clip.start_frame, fps)}</span>
+          <span className="flex items-center gap-1 text-[0.6rem]">{frameToTimecode(clip.start_frame, fps)}</span>
           <span className="flex items-center gap-1">
-            {clip.is_linked_group && (
-              <span title={`Linked (Group ${clip.link_group_id})`} className="inline-flex items-center text-sky-400">
-                <ClipLinkIcon className="h-3 w-3 text-sky-400" />
-              </span>
-            )}
             <AlignJustifyIcon className="h-4 items-center text-gray-700" /> {clip.track_label}
           </span>
         </div>
@@ -367,10 +351,14 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
               "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-linear-to-t from-black/50 via-black/20 to-transparent"
             )}>
               <div className="flex items-center space-x-1.5">
-                {isNested ? (
-                  <LayersIcon className="text-sm h-3.5 text-stone-400 p-0 mr-1" />
+                {clip.is_linked_group ? (
+                  <span title={`Linked Audio (${clip.track_label})`} className="inline-flex items-center shrink-0 mr-1">
+                    <ClipLinkIcon className="h-3.5 w-3.5 text-gray-300 p-0" />
+                  </span>
+                ) : isNested ? (
+                  <LayersIcon className="text-sm h-3.5 text-stone-400 p-0 mr-1 shrink-0" />
                 ) : (
-                  <AudioLinesIcon className={cn("text-sm h-3.5 text-stone-400 p-0 mr-1")} />
+                  <AudioLinesIcon className={cn("text-sm h-3.5 text-stone-400 p-0 mr-1 shrink-0")} />
                 )}
                 <div className={cn(
                   "flex items-baseline space-x-1")}>
@@ -611,10 +599,6 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   }, []);
 
   const allClipIds = useMemo(() => displayClips.map((clip) => clip.id), [displayClips]);
-  const allConstituentIds = useMemo(
-    () => displayClips.flatMap((clip) => clip.constituent_item_ids || [clip.id]),
-    [displayClips]
-  );
 
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
@@ -658,7 +642,6 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
                 disabled={disabled}
                 fps={fps}
                 allClipIds={allClipIds}
-                allConstituentIds={allConstituentIds}
               />
             </div>
           );

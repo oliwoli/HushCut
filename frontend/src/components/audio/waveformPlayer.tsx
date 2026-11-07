@@ -357,7 +357,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const [zoomTrigger, setZoomTrigger] = useState(0);
   const [debouncedZoomTrigger] = useDebounce(zoomTrigger, 150); // adjust delay as needed
 
-  const [skipRegionsEnabled, setSkipRegionsEnabled] = useState(true);
+  const skipRegionsEnabled = useGlobalStore((s) => s.skipSilences);
+  const setSkipSilences = useGlobalStore((s) => s.setSkipSilences);
   const skipRegionsEnabledRef = useRef(skipRegionsEnabled);
   useEffect(() => {
     skipRegionsEnabledRef.current = skipRegionsEnabled;
@@ -1031,8 +1032,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   });
 
   const toggleSkipRegions = useCallback(
-    () => setSkipRegionsEnabled((prev) => !prev),
-    []
+    () => setSkipSilences(!useGlobalStore.getState().skipSilences),
+    [setSkipSilences]
   );
 
   const handleKeyDown = useCallback(
@@ -1089,7 +1090,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         </button>
       );
     });
-  }, [toggleSkipRegions, skipClass, skipTitle]);
+  }, [toggleSkipRegions, skipClass, skipTitle, skipRegionsEnabled]);
 
   const sliderClassName =
     "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out";

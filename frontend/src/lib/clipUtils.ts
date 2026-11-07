@@ -254,3 +254,45 @@ export function deriveAllClipDetectionParams(
   }
   return detectionParams;
 }
+
+/**
+ * Computes the intersection of two disjoint, sorted silence period lists.
+ */
+export function intersectTwoSilenceLists(
+  a: Array<{ start: number; end: number }>,
+  b: Array<{ start: number; end: number }>
+): Array<{ start: number; end: number }> {
+  const result: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const start = Math.max(a[i].start, b[j].start);
+    const end = Math.min(a[i].end, b[j].end);
+    if (end > start + 1e-4) {
+      result.push({ start, end });
+    }
+    if (a[i].end < b[j].end) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return result;
+}
+
+/**
+ * Computes the multi-way intersection across multiple silence period lists.
+ */
+export function intersectMultipleSilenceLists(
+  lists: Array<Array<{ start: number; end: number }>>
+): Array<{ start: number; end: number }> {
+  if (lists.length === 0) return [];
+  if (lists.length === 1) return lists[0];
+  let current = lists[0];
+  for (let k = 1; k < lists.length; k++) {
+    current = intersectTwoSilenceLists(current, lists[k]);
+    if (current.length === 0) break;
+  }
+  return current;
+}
+

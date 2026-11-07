@@ -257,15 +257,23 @@ function AppContent() {
 
   useEffect(() => {
     const mapping: Record<string, string> = {};
+    const reverseMapping: Record<string, string[]> = {};
+    const itemsMap: Record<string, main.TimelineItem> = {};
+    for (const item of audioItems) {
+      if (item.id) {
+        itemsMap[item.id] = item;
+      }
+    }
     for (const clip of displayClips) {
       if (clip.is_linked_group && clip.constituent_item_ids) {
+        reverseMapping[clip.id] = clip.constituent_item_ids;
         for (const cid of clip.constituent_item_ids) {
           mapping[cid] = clip.id;
         }
       }
     }
-    useClipStore.getState().setClipToGroupMapping(mapping);
-  }, [displayClips]);
+    useClipStore.getState().setClipToGroupMapping(mapping, reverseMapping, itemsMap);
+  }, [displayClips, audioItems]);
 
   useEffect(() => {
     if (displayClips.length === 0) {

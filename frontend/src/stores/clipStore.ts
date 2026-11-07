@@ -4,8 +4,8 @@ import { create } from "zustand";
 import { useCallback, useMemo } from 'react';
 import deepEqual from 'fast-deep-equal';
 import { useStoreWithEqualityFn } from "zustand/traditional";
-import { main } from "@wails/go/models";
-import { TimecodeInstance } from "smpte-timecode";
+import type { main } from "@wails/go/models";
+import type { TimecodeInstance } from "smpte-timecode";
 
 
 interface PlaybackState {
@@ -24,18 +24,22 @@ interface GlobalStore {
   makeNewTimeline: boolean;
   isThresholdDragging: boolean;
   keepSilence: boolean;
+  skipSilences: boolean;
   setMakeNewTimeline: (value: boolean) => void;
   setIsThresholdDragging: (value: boolean) => void;
   setKeepSilence: (value: boolean) => void;
+  setSkipSilences: (value: boolean) => void;
 }
 
 export const useGlobalStore = create<GlobalStore>((set) => ({
   makeNewTimeline: true,
   isThresholdDragging: false,
   keepSilence: false,
+  skipSilences: true,
   setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
   setIsThresholdDragging: (value) => set({ isThresholdDragging: value }),
-  setKeepSilence: (value) => set({ keepSilence: value})
+  setKeepSilence: (value) => set({ keepSilence: value}),
+  setSkipSilences: (value) => set({ skipSilences: value }),
 }));
 
 interface TimecodeStore {
@@ -84,6 +88,8 @@ export interface ClipParameters {
 export interface ClipStore {
   parameters: Record<string, ClipParameters>;
   clipToGroup: Record<string, string>;
+  groupToClips: Record<string, string[]>;
+  timelineItems: Record<string, main.TimelineItem>;
   currentClipId: string | null;
 
   liveDefaultParameters: ClipParameters;
@@ -91,15 +97,20 @@ export interface ClipStore {
   syncDefaultsToLastEdit: boolean;
 
   setCurrentClipId: (clipId: string | null) => void;
-  setClipToGroupMapping: (mapping: Record<string, string>) => void;
+  setClipToGroupMapping: (
+    mapping: Record<string, string>,
+    reverseMapping?: Record<string, string[]>,
+    itemsMap?: Record<string, main.TimelineItem>
+  ) => void;
   clearClipOverrides: (clipIds: string[]) => void;
+  resetParameterToDefault: (clipId: string, key: keyof ClipParameters) => void;
   getParameter: <K extends keyof ClipParameters>(clipId: string, key: K) => ClipParameters[K];
   setParameter: <K extends keyof ClipParameters>(clipId: string, key: K, value: ClipParameters[K]) => void;
   setAllParameters: (clipId: string, newParams: Partial<ClipParameters>) => void;
   setSyncDefaults: (enabled: boolean) => void;
 }
 
-const getClipParams = (state: ClipStore, clipId: string) => {
+export const getClipParams = (state: ClipStore, clipId: string): ClipParameters => {
   if (state.parameters[clipId]) {
     return state.parameters[clipId];
   }
@@ -110,17 +121,31 @@ const getClipParams = (state: ClipStore, clipId: string) => {
   return state.liveDefaultParameters;
 };
 
+const clampParameter = (key: keyof ClipParameters, val: number): number => {
+  if (key === 'threshold') {
+    return Math.max(-60, Math.min(0, Math.round(val)));
+  }
+  return Math.max(0, Math.min(2, Math.round(val * 1000) / 1000));
+};
+
 export const useClipStore = create<ClipStore>((set, get) => ({
   currentClipId: null,
   parameters: {},
   clipToGroup: {},
+  groupToClips: {},
+  timelineItems: {},
 
   liveDefaultParameters: { ...defaultParameters }, // Start with the hardcoded defaults
 
   syncDefaultsToLastEdit: true, // The feature is ON by default
 
   setCurrentClipId: (clipId) => set({ currentClipId: clipId }),
-  setClipToGroupMapping: (mapping) => set({ clipToGroup: mapping }),
+  setClipToGroupMapping: (mapping, reverseMapping, itemsMap) =>
+    set((state) => ({
+      clipToGroup: mapping,
+      groupToClips: reverseMapping ?? {},
+      timelineItems: itemsMap ?? state.timelineItems,
+    })),
   clearClipOverrides: (clipIds) => {
     set((state) => {
       const newParams = { ...state.parameters };
@@ -130,22 +155,176 @@ export const useClipStore = create<ClipStore>((set, get) => ({
       return { parameters: newParams };
     });
   },
-  setSyncDefaults: (enabled) => set({ syncDefaultsToLastEdit: enabled }),
-  getParameter: (clipId, key) => getClipParams(get(), clipId)[key],
+  resetParameterToDefault: (clipId, key) => {
+    set((state) => {
+      const constituents = state.groupToClips?.[clipId];
+      const defVal = defaultParameters[key];
+      const newParams = { ...state.parameters };
 
+      if (constituents && constituents.length > 0) {
+        const activeConstituents = constituents.filter((cid) => !getClipParams(state, cid).bypassed);
+        const targetConstituents = activeConstituents.length > 0 ? activeConstituents : constituents;
+
+        const groupParams = { ...getClipParams(state, clipId), [key]: defVal };
+        if (key === 'paddingLeft' || key === 'paddingRight') {
+          groupParams.paddingLeft = defaultParameters.paddingLeft;
+          groupParams.paddingRight = defaultParameters.paddingRight;
+        }
+        newParams[clipId] = groupParams;
+
+        for (const cid of targetConstituents) {
+          if (newParams[cid]) {
+            const cur = { ...newParams[cid], [key]: defVal };
+            if (key === 'paddingLeft' || key === 'paddingRight') {
+              cur.paddingLeft = defaultParameters.paddingLeft;
+              cur.paddingRight = defaultParameters.paddingRight;
+            }
+            const hasOtherDifferences = (Object.keys(cur) as (keyof ClipParameters)[]).some(
+              (k) => k !== 'paddingLocked' && cur[k] !== groupParams[k]
+            );
+            if (!hasOtherDifferences && !cur.bypassed) {
+              delete newParams[cid];
+            } else {
+              newParams[cid] = cur;
+            }
+          }
+        }
+        return { parameters: newParams };
+      }
+
+      if (newParams[clipId]) {
+        const parentGroupId = state.clipToGroup[clipId];
+        const baseParams =
+          parentGroupId && newParams[parentGroupId]
+            ? newParams[parentGroupId]
+            : defaultParameters;
+
+        const cur = { ...newParams[clipId], [key]: baseParams[key] };
+        if (key === 'paddingLeft' || key === 'paddingRight') {
+          cur.paddingLeft = baseParams.paddingLeft;
+          cur.paddingRight = baseParams.paddingRight;
+        }
+        const hasOtherDifferences = (Object.keys(cur) as (keyof ClipParameters)[]).some(
+          (k) => k !== 'paddingLocked' && cur[k] !== baseParams[k]
+        );
+        if (!hasOtherDifferences && !cur.bypassed) {
+          delete newParams[clipId];
+        } else {
+          newParams[clipId] = cur;
+        }
+        return { parameters: newParams };
+      }
+
+      return state;
+    });
+  },
+  setSyncDefaults: (enabled) => set({ syncDefaultsToLastEdit: enabled }),
+  getParameter: (clipId, key) => {
+    const state = get();
+    const constituents = state.groupToClips?.[clipId];
+    if (constituents && constituents.length > 0) {
+      if (key === 'bypassed' || key === 'paddingLocked') {
+        return getClipParams(state, clipId)[key];
+      }
+      const activeConstituents = constituents.filter((cid) => !getClipParams(state, cid).bypassed);
+      const targetConstituents = activeConstituents.length > 0 ? activeConstituents : constituents;
+
+      let sum = 0;
+      for (const cid of targetConstituents) {
+        const cVal = getClipParams(state, cid)[key];
+        sum += (cVal as number);
+      }
+      const avg = sum / targetConstituents.length;
+      if (key === 'threshold') {
+        return Math.round(avg) as any;
+      }
+      return (Math.round(avg * 1000) / 1000) as any;
+    }
+    return getClipParams(state, clipId)[key];
+  },
 
   setParameter: (clipId, key, value) => {
-    const currentValue = getClipParams(get(), clipId)[key];
-    if (currentValue === value) {
-      return;
-    }
-
     set((state) => {
+      const constituents = state.groupToClips?.[clipId];
+      if (constituents && constituents.length > 0) {
+        if (key === 'bypassed' || key === 'paddingLocked') {
+          const newParams = { ...state.parameters };
+          const groupParams = {
+            ...getClipParams(state, clipId),
+            [key]: value,
+          };
+          newParams[clipId] = groupParams;
+          return {
+            parameters: newParams,
+            liveDefaultParameters:
+              state.syncDefaultsToLastEdit && key !== 'bypassed'
+                ? { ...groupParams, bypassed: state.liveDefaultParameters.bypassed }
+                : state.liveDefaultParameters,
+          };
+        }
+
+        // Only include active (non-bypassed) constituent clips in average and offset calculation:
+        const activeConstituents = constituents.filter((cid) => !getClipParams(state, cid).bypassed);
+        const targetConstituents = activeConstituents.length > 0 ? activeConstituents : constituents;
+
+        // Numeric parameter offset adjustment:
+        let sum = 0;
+        for (const cid of targetConstituents) {
+          const cVal = getClipParams(state, cid)[key];
+          sum += (cVal as number);
+        }
+        const currentAvg = sum / targetConstituents.length;
+        const delta = (value as number) - currentAvg;
+        if (Math.abs(delta) < 1e-6) {
+          return state;
+        }
+
+        const newParams = { ...state.parameters };
+        const currentGroupVal = (getClipParams(state, clipId)[key] as number);
+        const groupParams = {
+          ...getClipParams(state, clipId),
+          [key]: clampParameter(key, currentGroupVal + delta),
+        };
+        if (groupParams.paddingLocked && (key === 'paddingLeft' || key === 'paddingRight')) {
+          const otherSide = key === 'paddingLeft' ? 'paddingRight' : 'paddingLeft';
+          const otherVal = (getClipParams(state, clipId)[otherSide] as number);
+          groupParams[otherSide] = clampParameter(otherSide, otherVal + delta);
+        }
+        newParams[clipId] = groupParams;
+
+        // Shift active constituents that have explicit overrides in state.parameters
+        for (const cid of targetConstituents) {
+          if (newParams[cid]) {
+            const cur = { ...newParams[cid] };
+            const oldVal = cur[key] as number;
+            cur[key] = clampParameter(key, oldVal + delta) as any;
+            if (cur.paddingLocked && (key === 'paddingLeft' || key === 'paddingRight')) {
+              const otherSide = key === 'paddingLeft' ? 'paddingRight' : 'paddingLeft';
+              const oldOther = cur[otherSide] as number;
+              cur[otherSide] = clampParameter(otherSide, oldOther + delta) as any;
+            }
+            newParams[cid] = cur;
+          }
+        }
+
+        return {
+          parameters: newParams,
+          liveDefaultParameters: state.syncDefaultsToLastEdit
+            ? { ...groupParams, bypassed: state.liveDefaultParameters.bypassed }
+            : state.liveDefaultParameters,
+        };
+      }
+
+      const currentValue = getClipParams(state, clipId)[key];
+      if (currentValue === value) {
+        return state;
+      }
+
       const newClipParams = {
         ...getClipParams(state, clipId),
         [key]: value,
       };
-      
+
       const shouldUpdateLiveDefaults =
         state.syncDefaultsToLastEdit && key !== 'bypassed' && !state.clipToGroup?.[clipId];
 
@@ -259,3 +438,11 @@ export function useHasGroupOverrides(constituentIds?: string[]): boolean {
     }
   );
 }
+
+export function isConstituentClipOverridden(
+  clipId: string,
+  parameters: Record<string, ClipParameters>
+): boolean {
+  return Object.prototype.hasOwnProperty.call(parameters, clipId);
+}
+
