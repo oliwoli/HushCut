@@ -179,11 +179,39 @@ export function createActiveFileFromDisplayClip(
   };
 }
 
+export function createActiveFileFromTimelineItem(
+  item: main.TimelineItem,
+  port: number,
+  fps: number
+): ActiveClip | null {
+  if (!item.processed_file_name) {
+    return null;
+  }
+  const clipStartSeconds = item.source_start_frame / fps;
+  const clipEndSeconds = item.source_end_frame / fps;
+
+  return {
+    id: item.id,
+    name: item.name || "Unnamed Track Item",
+    sourceFilePath: item.source_file_path,
+    processedFileName: item.processed_file_name,
+    previewUrl: `http://localhost:${port}/render_clip?file=${encodeURIComponent(
+      item.processed_file_name
+    )}&start=${clipStartSeconds}&end=${clipEndSeconds}`,
+    sourceStartFrame: item.source_start_frame,
+    sourceEndFrame: item.source_end_frame,
+    startFrame: item.start_frame,
+    duration: item.duration,
+  };
+}
+
 /**
  * deriveAllClipDetectionParams extracts silence detection parameters for all timeline items.
- * If an item is part of a multi-audio link group, parameters configured for that group
- * (`linkgroup_${item.link_group_id}`) take precedence, ensuring synchronized silence
- * parameters across all constituent tracks.
+ * If an item is part of a multi-audio link group:
+ * - If the group as a whole is bypassed, all its items are excluded.
+ * - If a specific item is bypassed in local view, that item is excluded.
+ * - If a specific item has per-clip parameter overrides in local view, those overrides are used.
+ * - Otherwise, parameters configured for that group take precedence over live defaults.
  */
 export function deriveAllClipDetectionParams(
   timelineItems: main.TimelineItem[],
@@ -195,14 +223,23 @@ export function deriveAllClipDetectionParams(
     const clipId = item.id;
     if (!clipId) continue;
 
-    // Check if there are parameters specifically for this item's link group
     const groupKey = item.link_group_id != null ? `linkgroup_${item.link_group_id}` : undefined;
-    const correctClipParams =
-      (groupKey ? clipStoreState.parameters[groupKey] : undefined) ??
-      clipStoreState.parameters[clipId] ??
-      clipStoreState.liveDefaultParameters;
+    const groupParams = groupKey ? clipStoreState.parameters[groupKey] : undefined;
+    const itemParams = clipStoreState.parameters[clipId];
 
-    // If a clip is bypassed, it should be excluded from processing.
+    // 1. If the group as a whole is bypassed, bypass all its clips
+    if (groupParams?.bypassed) {
+      continue;
+    }
+
+    // 2. If this specific constituent clip is bypassed in local view, bypass it
+    if (itemParams?.bypassed) {
+      continue;
+    }
+
+    // 3. Parameters priority: Local View per-clip override -> Group parameters -> Live defaults
+    const correctClipParams = itemParams ?? groupParams ?? clipStoreState.liveDefaultParameters;
+
     if (correctClipParams.bypassed) {
       continue;
     }

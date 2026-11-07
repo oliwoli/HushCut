@@ -33,6 +33,8 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
 
     const currUiScale = useUiStore((s) => s.uiScale);
     const setUiScale = useUiStore((s) => s.setUiScale);
+    const confirmOverwritePerClip = useUiStore((s) => s.confirmOverwritePerClipChanges);
+    const setConfirmOverwritePerClip = useUiStore((s) => s.setConfirmOverwritePerClipChanges);
 
     useEffect(() => {
         if (open) {
@@ -40,7 +42,8 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 setDavinciFolderPath(settings.davinciFolderPath);
                 setCleanupThreshold(settings.cleanupThresholdDays !== undefined ? settings.cleanupThresholdDays : 30);
                 setEnableCleanup(settings.enableCleanup !== undefined ? settings.enableCleanup : true);
-                setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0)
+                setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0);
+                setConfirmOverwritePerClip(settings.confirmOverwritePerClipChanges !== undefined ? settings.confirmOverwritePerClipChanges : true);
             });
             setInternalOpen(true);
             setDialogOpacity(1);
@@ -57,7 +60,8 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
 
     useEffect(() => {
         GetSettings().then((settings: any) => {
-            setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0)
+            setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0);
+            setConfirmOverwritePerClip(settings.confirmOverwritePerClipChanges !== undefined ? settings.confirmOverwritePerClipChanges : true);
         });
     }, []);
 
@@ -69,7 +73,13 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     };
 
     const handleSave = () => {
-        SaveSettings({ davinciFolderPath, cleanupThresholdDays: cleanupThreshold, enableCleanup, uiScale: currUiScale }).then(() => {
+        SaveSettings({
+            davinciFolderPath,
+            cleanupThresholdDays: cleanupThreshold,
+            enableCleanup,
+            uiScale: currUiScale,
+            confirmOverwritePerClipChanges: confirmOverwritePerClip,
+        }).then(() => {
             onOpenChange(false);
         });
         toast.success("Your settings have been saved.")
@@ -185,6 +195,25 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                                 </div>
                             </div>
 
+                        </div>
+
+                        <Separator className="h-px w-full bg-gray-700 my-2" />
+
+                        {/* CONFIRM OVERWRITE PER-CLIP CHANGES */}
+                        <div className="space-y-1">
+                            <div className="flex items-center space-x-2">
+                                <Switch
+                                    id="confirm-overwrite-switch"
+                                    checked={confirmOverwritePerClip}
+                                    onCheckedChange={setConfirmOverwritePerClip}
+                                />
+                                <Label htmlFor="confirm-overwrite-switch" className="cursor-pointer">
+                                    Confirm overwriting per-clip changes
+                                </Label>
+                            </div>
+                            <p className="text-zinc-400 text-xs text-balance">
+                                Show a confirmation dialog before overwriting local view clip adjustments when returning to Combined Overview.
+                            </p>
                         </div>
                     </div>
                 </div>

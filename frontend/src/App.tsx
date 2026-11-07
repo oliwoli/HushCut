@@ -256,6 +256,18 @@ function AppContent() {
   }, [audioItems, linkedAudioGroups, projectDataVersion]);
 
   useEffect(() => {
+    const mapping: Record<string, string> = {};
+    for (const clip of displayClips) {
+      if (clip.is_linked_group && clip.constituent_item_ids) {
+        for (const cid of clip.constituent_item_ids) {
+          mapping[cid] = clip.id;
+        }
+      }
+    }
+    useClipStore.getState().setClipToGroupMapping(mapping);
+  }, [displayClips]);
+
+  useEffect(() => {
     if (displayClips.length === 0) {
       setCurrentClipId(null);
       return;
@@ -268,8 +280,11 @@ function AppContent() {
           currentFrame >= clip.start_frame && currentFrame < clip.end_frame
       );
       if (clipAtTimecode) {
-        // Update current clip ID if changed
-        if (clipAtTimecode.id !== currentClipId) {
+        // Update current clip ID if changed, preserving local view within the active group
+        const isCurrentInThisClip =
+          clipAtTimecode.id === currentClipId ||
+          Boolean(clipAtTimecode.constituent_item_ids?.includes(currentClipId || ""));
+        if (!isCurrentInThisClip) {
           setCurrentClipId(clipAtTimecode.id);
         }
       } else if (!currentClipId) {
@@ -283,6 +298,22 @@ function AppContent() {
   const currentActiveClip = useMemo(() => {
     if (!projectDataRef.current || !httpPort || displayClips.length === 0) {
       return null;
+    }
+
+    const fps = projectDataRef.current.timeline.fps;
+
+    if (currentClipId) {
+      // 1. Direct match on a display clip (combined group or standalone clip)
+      const exactDisplayClip = displayClips.find((clip) => clip.id === currentClipId);
+      if (exactDisplayClip) {
+        return createActiveFileFromDisplayClip(exactDisplayClip, httpPort, fps);
+      }
+
+      // 2. Local view constituent item match (render individual track item audio/waveform)
+      const constituentItem = audioItems.find((it) => it.id === currentClipId);
+      if (constituentItem) {
+        return createActiveFileFromTimelineItem(constituentItem, httpPort, fps);
+      }
     }
 
     let clipToDisplay = currentClipId
@@ -301,9 +332,9 @@ function AppContent() {
     return createActiveFileFromDisplayClip(
       clipToDisplay,
       httpPort,
-      projectDataRef.current.timeline.fps
+      fps
     );
-  }, [projectDataRef.current, httpPort, currentClipId, displayClips]);
+  }, [projectDataRef.current, httpPort, currentClipId, displayClips, audioItems]);
 
   const handleSync = async (isManual = false) => {
     if (isManual) {
@@ -936,7 +967,11 @@ function AppContent() {
                 <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border shadow-xl h-min flex flex-col mx-auto">
                   <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between grow">
                     <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
-                      <SilenceControls key={currentClipId} />
+                      <SilenceControls
+                        key={currentClipId}
+                        displayClips={displayClips}
+                        audioItems={audioItems}
+                      />
                     </div>
                     {projectDataRef.current &&
                       projectDataRef.current.timeline?.audio_track_items?.length > 0 && (

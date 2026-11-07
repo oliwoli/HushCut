@@ -83,6 +83,7 @@ export interface ClipParameters {
 // Export the main store interface
 export interface ClipStore {
   parameters: Record<string, ClipParameters>;
+  clipToGroup: Record<string, string>;
   currentClipId: string | null;
 
   liveDefaultParameters: ClipParameters;
@@ -90,24 +91,45 @@ export interface ClipStore {
   syncDefaultsToLastEdit: boolean;
 
   setCurrentClipId: (clipId: string | null) => void;
+  setClipToGroupMapping: (mapping: Record<string, string>) => void;
+  clearClipOverrides: (clipIds: string[]) => void;
   getParameter: <K extends keyof ClipParameters>(clipId: string, key: K) => ClipParameters[K];
   setParameter: <K extends keyof ClipParameters>(clipId: string, key: K, value: ClipParameters[K]) => void;
   setAllParameters: (clipId: string, newParams: Partial<ClipParameters>) => void;
   setSyncDefaults: (enabled: boolean) => void;
 }
 
-const getClipParams = (state: ClipStore, clipId: string) => 
-  state.parameters[clipId] ?? state.liveDefaultParameters;
+const getClipParams = (state: ClipStore, clipId: string) => {
+  if (state.parameters[clipId]) {
+    return state.parameters[clipId];
+  }
+  const groupKey = state.clipToGroup?.[clipId];
+  if (groupKey && state.parameters[groupKey]) {
+    return state.parameters[groupKey];
+  }
+  return state.liveDefaultParameters;
+};
 
 export const useClipStore = create<ClipStore>((set, get) => ({
   currentClipId: null,
   parameters: {},
+  clipToGroup: {},
 
   liveDefaultParameters: { ...defaultParameters }, // Start with the hardcoded defaults
 
   syncDefaultsToLastEdit: true, // The feature is ON by default
 
   setCurrentClipId: (clipId) => set({ currentClipId: clipId }),
+  setClipToGroupMapping: (mapping) => set({ clipToGroup: mapping }),
+  clearClipOverrides: (clipIds) => {
+    set((state) => {
+      const newParams = { ...state.parameters };
+      for (const id of clipIds) {
+        delete newParams[id];
+      }
+      return { parameters: newParams };
+    });
+  },
   setSyncDefaults: (enabled) => set({ syncDefaultsToLastEdit: enabled }),
   getParameter: (clipId, key) => getClipParams(get(), clipId)[key],
 
@@ -124,7 +146,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         [key]: value,
       };
       
-      const shouldUpdateLiveDefaults = state.syncDefaultsToLastEdit && key !== 'bypassed';
+      const shouldUpdateLiveDefaults =
+        state.syncDefaultsToLastEdit && key !== 'bypassed' && !state.clipToGroup?.[clipId];
 
       return {
         parameters: {
@@ -223,6 +246,16 @@ export function useIsClipModified(clipIdToCheck?: string): boolean {
         // then the clip is considered modified.
         return clipParams[key] !== staticDefaults[key];
       });
+    }
+  );
+}
+
+export function useHasGroupOverrides(constituentIds?: string[]): boolean {
+  return useStoreWithEqualityFn(
+    useClipStore,
+    (state) => {
+      if (!constituentIds || constituentIds.length === 0) return false;
+      return constituentIds.some((id) => Object.prototype.hasOwnProperty.call(state.parameters, id));
     }
   );
 }

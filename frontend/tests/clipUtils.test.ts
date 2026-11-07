@@ -188,4 +188,34 @@ assert.strictEqual(bypassedParams["item_a2"], undefined);
 assert.ok(bypassedParams["item_single"]);
 console.log("✓ group bypass correctly excludes all constituent items from processing");
 
+// Test local view per-clip override and per-clip bypass within a group
+mockClipStoreState.parameters["linkgroup_10"].bypassed = false;
+// Override item_a1 threshold in local view to -20
+mockClipStoreState.parameters["item_a1"] = {
+  threshold: -20,
+  minDuration: 0.5,
+  paddingLeft: 0.05,
+  paddingRight: 0.05,
+  minContent: 0.1,
+  paddingLocked: true,
+  bypassed: false,
+};
+// Bypass item_a2 in local view
+mockClipStoreState.parameters["item_a2"] = {
+  threshold: -45,
+  minDuration: 0.8,
+  paddingLeft: 0.1,
+  paddingRight: 0.1,
+  minContent: 0.2,
+  paddingLocked: true,
+  bypassed: true,
+};
+
+const localViewParams = deriveAllClipDetectionParams(rawAudioItems, mockClipStoreState);
+// item_a1 must use overridden threshold: -20
+assert.strictEqual(localViewParams["item_a1"]?.loudnessThreshold, -20);
+// item_a2 must be bypassed (undefined)
+assert.strictEqual(localViewParams["item_a2"], undefined);
+console.log("✓ local view per-clip overrides and single-clip bypass work correctly within groups");
+
 console.log("All clipUtils unit tests passed successfully!");
