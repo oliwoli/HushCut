@@ -686,16 +686,16 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 								log.Printf("msgEndpoint: Successfully parsed OTIO link groups directly in taskResult")
 							}
 						}
-						a.currentProjectMu.Lock()
-						a.currentProject = &pd
+						a.UpsertDaVinciSession(&pd, a.otioReadyChan)
 						if taskData.OtioPath != "" && a.otioReadyChan != nil {
+							a.currentProjectMu.Lock()
 							select {
 							case <-a.otioReadyChan:
 							default:
 								close(a.otioReadyChan)
 							}
+							a.currentProjectMu.Unlock()
 						}
-						a.currentProjectMu.Unlock()
 						// Supply the enriched payload to taskData so SyncWithDavinci returns it enriched
 						taskData.Data = &pd
 					}

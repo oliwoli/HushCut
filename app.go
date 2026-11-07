@@ -85,6 +85,12 @@ type App struct {
 	currentProject   *ProjectDataPayload
 	otioReadyChan    chan struct{}
 
+	// --- Timeline Sessions / Multi-Timeline Workspace ---
+	sessionMu        sync.RWMutex
+	activeTimelineID string
+	timelineSessions map[string]*TimelineSession
+	timelineOrder    []string
+
 	// --- FFmpeg STATE ---
 	ffmpegMutex      sync.RWMutex
 	ffmpegReadyChan  chan struct{}
@@ -119,6 +125,9 @@ func NewApp() *App {
 		appVersion:    AppVersion,
 		ffmpegVersion: FfmpegVersion,
 		fileUsage:     make(map[string]time.Time),
+
+		timelineSessions: make(map[string]*TimelineSession),
+		timelineOrder:    make([]string, 0),
 	}
 }
 
