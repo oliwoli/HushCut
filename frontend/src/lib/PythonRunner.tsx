@@ -16,34 +16,8 @@ import { useAppState } from "@/stores/appSync";
 import { cn } from "./utils";
 
 
-export function deriveAllClipDetectionParams(
-  timelineItems: main.TimelineItem[],
-  clipStoreState: ClipStore
-): Record<string, DetectionParams> {
-  const detectionParams: Record<string, DetectionParams> = {};
-
-  for (const item of timelineItems) {
-    const clipId = item.id;
-    if (!clipId) continue;
-
-    // It checks for clip-specific params, then falls back to live defaults.
-    const correctClipParams = clipStoreState.parameters[clipId] ?? clipStoreState.liveDefaultParameters;
-
-    // If a clip is bypassed, it should be excluded from processing.
-    if (correctClipParams.bypassed) {
-      continue;
-    }
-
-    detectionParams[clipId] = {
-      loudnessThreshold: correctClipParams.threshold,
-      minSilenceDurationSeconds: correctClipParams.minDuration,
-      minContent: correctClipParams.minContent,
-      paddingLeftSeconds: correctClipParams.paddingLeft,
-      paddingRightSeconds: correctClipParams.paddingRight,
-    };
-  }
-  return detectionParams;
-}
+import { deriveAllClipDetectionParams } from "./clipUtils";
+export { deriveAllClipDetectionParams };
 
 // Helper function
 export async function prepareProjectDataWithEdits(

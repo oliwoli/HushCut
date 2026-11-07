@@ -2165,10 +2165,10 @@ local function process_track_items(items, pd_timeline, pd_timeline_key,
           print("Processing item '" .. tostring(item.name) .. "' on track " .. tostring(track_index) ..
             " with link group ID: " .. tostring(link_group_id))
 
-          for _, corresponding_item in ipairs(corresponding_items) do
-            corresponding_item.link_group_id = link_group_id
-          end
           if link_group_id ~= nil then
+            for _, corresponding_item in ipairs(corresponding_items) do
+              corresponding_item.link_group_id = link_group_id
+            end
             max_id = math.max(max_id, link_group_id)
           end
 
@@ -2333,6 +2333,9 @@ local function clip_is_uncut(item)
 
   -- Check if the only edit instruction is for the full clip
   local edit = item.edit_instructions[1]
+  if edit.enabled == false then
+    return false
+  end
   local TOLERANCE = 0.01
 
   if math.abs((edit.start_frame or 0) - (item.start_frame or 0)) < TOLERANCE and
@@ -2829,11 +2832,13 @@ local function get_audio_item_ids(tl)
   return item_ids
 end
 
-local function _append_clips_to_timeline(target_timeline, target_media_pool, timeline_items)
+local function _append_clips_to_timeline(target_timeline, target_media_pool, timeline_items, tl_needs_clearing)
   local grouped_clips = {}
 
   for _, item in ipairs(timeline_items) do
-    if not item.bmd_item then
+    if tl_needs_clearing and clip_is_uncut(item) then
+      print("Skipping uncut item '" .. (item.name or "Unnamed") .. "' from appending on cleared timeline.")
+    elseif not item.bmd_item then
       print("Warning: Skipping item '" .. (item.name or "Unnamed") .. "' because it has no 'bmd_item'.")
     elseif item.edit_instructions and #item.edit_instructions > 0 then
       if not item.bmd_mpi then item.bmd_mpi = item.bmd_item:GetMediaPoolItem() end
@@ -3137,13 +3142,20 @@ local function append_and_link_timeline_items(create_new, task_id)
   if tl_needs_clearing then
     print("Clearing edited clips from existing timeline...")
     local all_clips_to_delete = {}
+    local seen_items = {}
     for _, item in ipairs(timeline_items) do
       if item.bmd_item and not clip_is_uncut(item) then
-        table.insert(all_clips_to_delete, item.bmd_item)
+        if not seen_items[item.bmd_item] then
+          seen_items[item.bmd_item] = true
+          table.insert(all_clips_to_delete, item.bmd_item)
+        end
       end
     end
     if #all_clips_to_delete > 0 then
       print("Deleting " .. #all_clips_to_delete .. " existing clips...")
+      pcall(function()
+        target_timeline:SetClipsLinked(all_clips_to_delete, false)
+      end)
       target_timeline:DeleteClips(all_clips_to_delete)
     else
       print("No clips marked for deletion.")
@@ -3161,7 +3173,7 @@ local function append_and_link_timeline_items(create_new, task_id)
   -- ... Append, Verify, and Link logic follows ...
   local success, num_retries, sleep_time = false, 4, 2.5
   for attempt = 1, num_retries do
-    local processed_clips, bmd_items_from_api = _append_clips_to_timeline(target_timeline, media_pool, timeline_items)
+    local processed_clips, bmd_items_from_api = _append_clips_to_timeline(target_timeline, media_pool, timeline_items, tl_needs_clearing)
 
     if #processed_clips == 0 then
       success = true; break

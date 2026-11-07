@@ -33,6 +33,13 @@ func (a *App) DetectSilences(
 	}
 
 	absPath := filepath.Join(a.tmpPath, filePath)
+	if a.isLinkedAudioFile(filePath) {
+		if err := a.EnsureLinkedAudioMixdown(absPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", filePath, err)
+		}
+	} else if err := a.WaitForFile(absPath); err != nil {
+		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
+	}
 	// Mark the input file as used after its absolute path is determined
 	a.updateFileUsage(absPath)
 	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)

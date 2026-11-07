@@ -41,7 +41,11 @@ func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 
 func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
 	maxDb := 0.0
-	if err := a.WaitForFile(filePath); err != nil {
+	if a.isLinkedAudioFile(filePath) {
+		if err := a.EnsureLinkedAudioMixdown(filePath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", filePath, err)
+		}
+	} else if err := a.WaitForFile(filePath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
 	}
 	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
@@ -101,7 +105,11 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	}
 	a.updateFileUsage(localFSPath)
 
-	if err := a.WaitForFile(localFSPath); err != nil {
+	if a.isLinkedAudioFile(webInputPath) {
+		if err := a.EnsureLinkedAudioMixdown(localFSPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", webInputPath, err)
+		}
+	} else if err := a.WaitForFile(localFSPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
 	}
 
@@ -182,7 +190,11 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}
-	if err := a.WaitForFile(absPath); err != nil {
+	if a.isLinkedAudioFile(webInputPath) {
+		if err := a.EnsureLinkedAudioMixdown(absPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", webInputPath, err)
+		}
+	} else if err := a.WaitForFile(absPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
 
@@ -363,7 +375,11 @@ func (a *App) ProcessWavToLinearPeaks(
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}
-	if err := a.WaitForFile(absPath); err != nil {
+	if a.isLinkedAudioFile(webInputPath) {
+		if err := a.EnsureLinkedAudioMixdown(absPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", webInputPath, err)
+		}
+	} else if err := a.WaitForFile(absPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
 

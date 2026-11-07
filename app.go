@@ -1157,7 +1157,13 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 func (a *App) WaitForFile(path string) error {
 	val, ok := a.progressTracker.Load(path)
 	if !ok {
-		return nil
+		// Also check if path was passed as a relative/base filename
+		baseName := filepath.Base(path)
+		fullPath := filepath.Join(a.tmpPath, baseName)
+		val, ok = a.progressTracker.Load(fullPath)
+		if !ok {
+			return nil
+		}
 	}
 
 	log.Printf("Waiting for file to be ready: %s", path)
@@ -1269,6 +1275,22 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 }
 
 func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips []*NestedAudioTimelineItem) error {
+	inputs := make([]AudioMixInput, 0, len(nestedClips))
+	for _, nc := range nestedClips {
+		if nc.ProcessedFileName == "" {
+			continue
+		}
+		inputs = append(inputs, AudioMixInput{
+			ProcessedFileName: nc.ProcessedFileName,
+			SourceStartFrame:  nc.SourceStartFrame,
+			Duration:          nc.Duration,
+			StartFrame:        nc.StartFrame,
+		})
+	}
+	return a.executeAudioMix(fps, outputPath, inputs)
+}
+
+func (a *App) executeAudioMix(fps float64, outputPath string, inputs []AudioMixInput) error {
 	if err := a.waitForFfmpeg(); err != nil {
 		return err
 	}
@@ -1279,19 +1301,19 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 	uniqueSourceFiles := []string{}
 	sourceMap := make(map[string]int)
 
-	for _, nc := range nestedClips {
-		if nc.ProcessedFileName == "" {
+	for _, in := range inputs {
+		if in.ProcessedFileName == "" {
 			continue
 		}
-		if _, found := sourceMap[nc.ProcessedFileName]; !found {
-			fullPath := filepath.Join(a.tmpPath, nc.ProcessedFileName)
-			sourceMap[nc.ProcessedFileName] = len(uniqueSourceFiles)
+		if _, found := sourceMap[in.ProcessedFileName]; !found {
+			fullPath := filepath.Join(a.tmpPath, in.ProcessedFileName)
+			sourceMap[in.ProcessedFileName] = len(uniqueSourceFiles)
 			uniqueSourceFiles = append(uniqueSourceFiles, fullPath)
 		}
 	}
 
 	if len(uniqueSourceFiles) == 0 {
-		return fmt.Errorf("no valid processed nested clips found for mixdown into %s", filepath.Base(outputPath))
+		return fmt.Errorf("no valid processed audio files found for mixdown into %s", filepath.Base(outputPath))
 	}
 
 	log.Printf("Mixdown for '%s' is waiting for %d input file(s) to be ready...", filepath.Base(outputPath), len(uniqueSourceFiles))
@@ -1300,17 +1322,22 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 			// If an input file failed to convert, this mixdown cannot proceed.
 			return fmt.Errorf("mixdown dependency '%s' failed: %w", filepath.Base(inputFile), err)
 		}
+		if !isValidWavFile(inputFile) {
+			if err := a.ensureStandardizedAudio(inputFile); err != nil {
+				return fmt.Errorf("failed to ensure mixdown dependency '%s': %w", filepath.Base(inputFile), err)
+			}
+		}
 	}
 	log.Printf("All inputs for mixdown '%s' are ready. Proceeding.", filepath.Base(outputPath))
 
-	for i, nc := range nestedClips {
-		if nc.ProcessedFileName == "" {
+	for i, in := range inputs {
+		if in.ProcessedFileName == "" {
 			continue
 		}
-		sourceIndex := sourceMap[nc.ProcessedFileName]
-		startSec := nc.SourceStartFrame / fps
-		durationSec := nc.Duration / fps
-		delayMs := (nc.StartFrame / fps) * 1000
+		sourceIndex := sourceMap[in.ProcessedFileName]
+		startSec := in.SourceStartFrame / fps
+		durationSec := in.Duration / fps
+		delayMs := (in.StartFrame / fps) * 1000
 		trimStream := fmt.Sprintf("[t%d]", i)
 		delayStream := fmt.Sprintf("[d%d]", i)
 		trimFilter := fmt.Sprintf("[%d:a]atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS%s;", sourceIndex, startSec, durationSec, trimStream)
@@ -1347,6 +1374,30 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 	}
 
 	return nil
+}
+
+// ensureStandardizedAudio standardizes a single audio file dependency on-demand if missing.
+func (a *App) ensureStandardizedAudio(targetPath string) error {
+	base := filepath.Base(targetPath)
+	var pd *ProjectDataPayload
+	session := a.GetActiveTimelineSession()
+	if session != nil && session.Data != nil {
+		pd = session.Data
+	} else {
+		a.currentProjectMu.RLock()
+		pd = a.currentProject
+		a.currentProjectMu.RUnlock()
+	}
+	if pd == nil {
+		return fmt.Errorf("no project data to standardize dependency %s", base)
+	}
+
+	for _, it := range pd.Timeline.AudioTrackItems {
+		if it.ProcessedFileName != nil && *it.ProcessedFileName == base {
+			return a.StandardizeAudioToWav(it.SourceFilePath, targetPath, it.SourceChannel)
+		}
+	}
+	return fmt.Errorf("item for audio dependency %s not found in timeline items", base)
 }
 
 func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {

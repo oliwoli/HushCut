@@ -126,6 +126,7 @@ func (a *App) UpsertDaVinciSession(pd *ProjectDataPayload, otioChan chan struct{
 	projectName := ""
 	timelineName := "Untitled Timeline"
 	if pd != nil {
+		EnrichLinkedAudioGroups(pd)
 		projectName = pd.ProjectName
 		if pd.Timeline.Name != "" {
 			timelineName = pd.Timeline.Name

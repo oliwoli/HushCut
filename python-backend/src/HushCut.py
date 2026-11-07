@@ -723,10 +723,10 @@ def process_track_items(
                 f"Processing item '{item.get('name')}' on track {track_index} with link group ID: {link_group_id}"
             )
 
-            # Apply the found link ID to all matching items (or None if unlinked).
-            for corresponding_item in corresponding_items:
-                corresponding_item["link_group_id"] = link_group_id
+            # Apply the found link ID to all matching items if present.
             if link_group_id is not None:
+                for corresponding_item in corresponding_items:
+                    corresponding_item["link_group_id"] = link_group_id
                 max_id = max(max_id, link_group_id)
 
             if audio_mapping:
@@ -867,6 +867,8 @@ def clip_is_uncut(item: TimelineItem) -> bool:
         return False
     # check if the only edit instruction is a full clip
     edit_instruction = item["edit_instructions"][0]
+    if edit_instruction.get("enabled", True) is False:
+        return False
     TOLERANCE = 0.01
     if (
         abs(edit_instruction.get("start_frame", 0) - item.get("start_frame", 0)) < TOLERANCE
@@ -2226,7 +2228,10 @@ def get_audio_item_ids(timeline: Any) -> Set[str]:
 
 
 def _append_clips_to_timeline(
-    timeline: Any, media_pool: Any, timeline_items: List[TimelineItem]
+    timeline: Any,
+    media_pool: Any,
+    timeline_items: List[TimelineItem],
+    tl_needs_clearing: bool = False,
 ) -> Tuple[List[AppendedClipInfo], List[Any]]:
     """
     Groups clips, prepares optimized auto-linked batches where all natural tracks
@@ -2246,6 +2251,12 @@ def _append_clips_to_timeline(
     grouped_clips: Dict[Tuple[int, int], List[AppendedClipInfo]] = {}
 
     for item in timeline_items:
+        if tl_needs_clearing and clip_is_uncut(item):
+            print(
+                f"Skipping uncut item '{item.get('name')}' from appending on cleared timeline."
+            )
+            continue
+
         link_id = item.get("link_group_id")
         if link_id is None:
             link_id = f"unlinked_{item.get('id', id(item))}"
@@ -2552,62 +2563,55 @@ def append_and_link_timeline_items(
             return
 
     if timeline and tl_needs_clearing:
-        # --- Robustly clear all tracks on the timeline ---
-        print("Clearing all clips from existing timeline...")
+        # --- Robustly clear edited tracks on the timeline ---
+        print("Clearing edited clips from existing timeline...")
         all_clips_to_delete = []
 
-        # Iterate through all video tracks that might have content
-        for item in PROJECT_DATA["timeline"]["video_track_items"]:
-            type = item["type"]
-            if not item["bmd_item"]:
-                print(f"Warning, no bmd item set for '{item['name']}'")
-                continue
-            if not item["bmd_mpi"]:
-                item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
-            if not item["bmd_mpi"]:
+        for item in timeline_items:
+            bmd_item = item.get("bmd_item")
+            if not bmd_item:
                 print(
-                    f"Warning: No MediaPoolItem found for item '{item['name']}'. Skipping."
+                    f"Warning: No bmd_item set for '{item.get('name')}'. Skipping deletion."
                 )
                 continue
-            # don't delete items with no edit instructions, or empty edit instructions
-            if not item.get("edit_instructions"):
-                print(f"Skipping item '{item['name']}' with no edit instructions.")
-                continue
-            if clip_is_uncut(item):
-                print(f"Skipping uncut item '{item['name']}' with no edits.")
-                continue
-            if type:
-                all_clips_to_delete.append(item["bmd_item"])
 
-            print(f"marking {item} for deletion")
-
-            all_clips_to_delete.append(item["bmd_item"])
-
-        for item in PROJECT_DATA["timeline"]["audio_track_items"]:
-            type = item["type"]
-            if not item["bmd_mpi"]:
-                continue
+            if not item.get("bmd_mpi"):
+                try:
+                    item["bmd_mpi"] = bmd_item.GetMediaPoolItem()
+                except Exception as e:
+                    print(
+                        f"Warning getting MediaPoolItem for '{item.get('name')}': {e}"
+                    )
 
             if not item.get("edit_instructions"):
-                print(f"Skipping item '{item['name']}' with no edit instructions.")
+                print(
+                    f"Skipping item '{item.get('name')}' with no edit instructions."
+                )
                 continue
 
             if clip_is_uncut(item):
-                print(f"Skipping uncut item '{item['name']}' with no edits.")
+                print(f"Skipping uncut item '{item.get('name')}' with no edits.")
                 continue
 
-            if type:
-                all_clips_to_delete.append(item["bmd_item"])
+            print(f"Marking '{item.get('name')}' for deletion")
+            all_clips_to_delete.append(bmd_item)
 
-            print(f"marking {item} for deletion")
+        unique_clips_to_delete = []
+        seen_clips = set()
+        for it in all_clips_to_delete:
+            if it and id(it) not in seen_clips:
+                seen_clips.add(id(it))
+                unique_clips_to_delete.append(it)
 
-            all_clips_to_delete.append(item["bmd_item"])
-
-        if all_clips_to_delete:
-            print(f"Deleting {len(all_clips_to_delete)} existing clips...")
-            timeline.DeleteClips(all_clips_to_delete)
+        if unique_clips_to_delete:
+            print(f"Deleting {len(unique_clips_to_delete)} existing clips...")
+            try:
+                timeline.SetClipsLinked(unique_clips_to_delete, False)
+            except Exception as e:
+                print(f"Warning unlinking clips before deletion: {e}")
+            timeline.DeleteClips(unique_clips_to_delete)
         else:
-            print("Timeline is already empty.")
+            print("No clips marked for deletion.")
 
     if not timeline:
         print("Error: Could not get a valid timeline. Aborting operation.")
@@ -2638,7 +2642,7 @@ def append_and_link_timeline_items(
     sleep_time_between = 2.5
     for attempt in range(1, num_retries + 1):
         processed_clips, bmd_items_from_api = _append_clips_to_timeline(
-            TIMELINE, media_pool, timeline_items
+            TIMELINE, media_pool, timeline_items, tl_needs_clearing=tl_needs_clearing
         )
         TRACKER.complete_task("append")
         if not processed_clips:

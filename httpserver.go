@@ -471,6 +471,15 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	originalFilePath := filepath.Join(a.tmpPath, cleanFileName)
+	if a.isLinkedAudioFile(cleanFileName) {
+		if err := a.EnsureLinkedAudioMixdown(originalFilePath); err != nil {
+			http.Error(w, fmt.Sprintf("Error ensuring linked audio mixdown: %v", err), http.StatusInternalServerError)
+			return
+		}
+	} else if err := a.WaitForFile(originalFilePath); err != nil {
+		http.Error(w, fmt.Sprintf("Error waiting for file: %v", err), http.StatusInternalServerError)
+		return
+	}
 	if _, err := os.Stat(originalFilePath); os.IsNotExist(err) {
 		http.NotFound(w, r)
 		return
@@ -660,6 +669,10 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 				if err := ParseOTIOLinkGroups(otioData.OtioPath, currProj); err != nil {
 					log.Printf("msgEndpoint: Error parsing OTIO link groups: %v", err)
 					return
+				}
+
+				if err := a.MixdownLinkedAudio(*currProj); err != nil {
+					log.Printf("msgEndpoint: Error pre-rendering linked audio mixdowns: %v", err)
 				}
 
 				log.Printf("msgEndpoint: Successfully parsed OTIO link groups. Emitting projectDataUpdated to frontend.")

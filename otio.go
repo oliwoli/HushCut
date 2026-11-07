@@ -175,5 +175,6 @@ func ApplyOTIOLinkGroupsToProjectData(otioTimeline *OTIOTimeline, pd *ProjectDat
 		}
 	}
 
+	EnrichLinkedAudioGroups(pd)
 	return nil
 }
