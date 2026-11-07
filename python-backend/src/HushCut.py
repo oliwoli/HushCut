@@ -2660,70 +2660,75 @@ def append_and_link_timeline_items(
             }
             if auto_linked_keys:
                 print(
-                    f"Identified {len(auto_linked_keys)} auto-linked groups to skip for manual linking."
+                    f"Identified {len(auto_linked_keys)} auto-linked groups."
                 )
 
+            # Build expected clips map by track for robust fuzzy-tolerance matching
             link_key_lookup: Dict[Tuple[Optional[int], int, int], Tuple[int, int]] = {}
+            expected_by_track: Dict[Tuple[Optional[int], int], List[AppendedClipInfo]] = defaultdict(list)
             for appended_clip in processed_clips:
                 clip_info, link_key = (
                     appended_clip["clip_info"],
                     appended_clip["link_key"],
                 )
-                lookup_key = (
-                    clip_info.get("mediaType"),
-                    clip_info["trackIndex"],
-                    int(round(clip_info["recordFrame"])),
-                )
+                mt = clip_info.get("mediaType")
+                ti = clip_info["trackIndex"]
+                rf = int(round(clip_info["recordFrame"]))
+                lookup_key = (mt, ti, rf)
                 link_key_lookup[lookup_key] = link_key
+                expected_by_track[(mt, ti)].append(appended_clip)
 
             actual_items: list[TimelineItem] = []
             actual_items.extend(get_items_by_tracktype("video", TIMELINE))
             actual_items.extend(get_items_by_tracktype("audio", TIMELINE))
 
-            disabled_keys = {
-                (
-                    p_clip["clip_info"]["mediaType"],
-                    p_clip["clip_info"]["trackIndex"],
-                    p_clip["clip_info"]["recordFrame"],
+            # Helper for robust lookup with +-2 frame tolerance to guard against floating-point rounding
+            def get_matching_appended_clip(media_type: int, track_index: int, actual_start: float) -> Optional[AppendedClipInfo]:
+                actual_frame = int(round(actual_start))
+                exact_key = (media_type, track_index, actual_frame)
+                if exact_key in link_key_lookup:
+                    for c in expected_by_track.get((media_type, track_index), []):
+                        if int(round(c["clip_info"]["recordFrame"])) == actual_frame:
+                            return c
+                # Fuzzy match within +-2 frames
+                best_cand = None
+                best_diff = float("inf")
+                for cand in expected_by_track.get((media_type, track_index), []):
+                    exp_frame = int(round(cand["clip_info"]["recordFrame"]))
+                    diff = abs(actual_frame - exp_frame)
+                    if diff <= 2 and diff < best_diff:
+                        best_diff = diff
+                        best_cand = cand
+                return best_cand
+
+            disabled_count = 0
+            for item_dict in actual_items:
+                media_type = 1 if item_dict["track_type"] == "video" else 2
+                matched_clip = get_matching_appended_clip(
+                    media_type, item_dict["track_index"], item_dict["start_frame"]
                 )
-                for p_clip in processed_clips
-                if not p_clip["enabled"]
-            }
-            if disabled_keys:
-                disabled_count = 0
-                for item_dict in actual_items:
-                    media_type = 1 if item_dict["track_type"] == "video" else 2
-                    actual_key = (
-                        media_type,
-                        item_dict["track_index"],
-                        item_dict["start_frame"],
-                    )
-                    if actual_key in disabled_keys:
-                        bmd_item = item_dict["bmd_item"]
-                        bmd_item.SetClipColor("Violet")
-                        disabled_count += 1
+                if matched_clip and not matched_clip.get("enabled", True):
+                    bmd_item = item_dict["bmd_item"]
+                    bmd_item.SetClipColor("Violet")
+                    disabled_count += 1
+            if disabled_count > 0:
                 print(f"Updated status for {disabled_count} clip(s).")
 
             link_groups: Dict[Tuple[int, int], List[Any]] = {}
             for item_dict in actual_items:
                 media_type = 1 if item_dict["track_type"] == "video" else 2
-                # Note: For auto-linked clips, multiple actual items might map back
-                # via different mediaTypes to the same original recordFrame.
-                # The lookup key must be specific.
-                lookup_key = (
-                    media_type,
-                    item_dict["track_index"],
-                    int(round(item_dict["start_frame"])),
+                matched_clip = get_matching_appended_clip(
+                    media_type, item_dict["track_index"], item_dict["start_frame"]
                 )
-                link_key = link_key_lookup.get(lookup_key)
-                if link_key:
+                if matched_clip:
+                    link_key = matched_clip["link_key"]
                     link_groups.setdefault(link_key, []).append(item_dict["bmd_item"])
 
             print("Performing manual linking for necessary clips...")
             groups_to_link = {
                 k: v
                 for k, v in link_groups.items()
-                if k not in auto_linked_keys and not str(k[0]).startswith("unlinked_")
+                if not str(k[0]).startswith("unlinked_")
             }
 
             if not groups_to_link:

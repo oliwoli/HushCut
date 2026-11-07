@@ -3187,19 +3187,25 @@ local function append_and_link_timeline_items(create_new, task_id)
 
       -- === START: NEW POST-VERIFICATION LOGIC ===
 
-      -- 1. Identify auto-linked clips to skip them during manual linking.
+      -- 1. Identify auto-linked clips.
       local auto_linked_keys = {}
       for _, clip in ipairs(processed_clips) do
         if clip.auto_linked then auto_linked_keys[clip.link_key] = true end
       end
 
-      -- 2. Create a lookup map to connect actual timeline items back to their link_key.
+      -- 2. Build expected clips list by track for robust fuzzy-tolerance matching
+      local expected_by_track = {}
       local link_key_lookup = {}
       for _, appended_clip in ipairs(processed_clips) do
         local clip_info, link_key = appended_clip.clip_info, appended_clip.link_key
+        local rf = math.floor(clip_info.recordFrame + 0.5)
         local lookup_key = tostring(clip_info.mediaType) ..
-            "-" .. tostring(clip_info.trackIndex) .. "-" .. tostring(math.floor(clip_info.recordFrame))
+            "-" .. tostring(clip_info.trackIndex) .. "-" .. tostring(rf)
         link_key_lookup[lookup_key] = link_key
+
+        local track_key = tostring(clip_info.mediaType) .. "-" .. tostring(clip_info.trackIndex)
+        if not expected_by_track[track_key] then expected_by_track[track_key] = {} end
+        table.insert(expected_by_track[track_key], appended_clip)
       end
 
       -- 3. Get the fresh list of actual items from the timeline after appending.
@@ -3207,50 +3213,67 @@ local function append_and_link_timeline_items(create_new, task_id)
       for _, item in ipairs(get_items_by_tracktype("video", target_timeline)) do table.insert(actual_items, item) end
       for _, item in ipairs(get_items_by_tracktype("audio", target_timeline)) do table.insert(actual_items, item) end
 
-      -- 4. Handle disabled clips by coloring them.
-      local disabled_keys = {}
-      for _, p_clip in ipairs(processed_clips) do
-        if not p_clip.enabled then
-          local key = tostring(p_clip.clip_info.mediaType) ..
-              "-" .. tostring(p_clip.clip_info.trackIndex) .. "-" .. tostring(math.floor(p_clip.clip_info.recordFrame))
-          disabled_keys[key] = true
-        end
-      end
+      -- Helper for robust lookup with +-2 frame tolerance to guard against floating-point rounding
+      local function get_matching_appended_clip(media_type, track_index, actual_start)
+        local actual_frame = math.floor(actual_start + 0.5)
+        local track_key = tostring(media_type) .. "-" .. tostring(track_index)
+        local exact_key = track_key .. "-" .. tostring(actual_frame)
+        local candidates = expected_by_track[track_key]
+        if not candidates then return nil end
 
-      if next(disabled_keys) then
-        local disabled_count = 0
-        for _, item_dict in ipairs(actual_items) do
-          local media_type = (item_dict.track_type == "video" and 1 or 2)
-          local actual_key = tostring(media_type) ..
-              "-" .. tostring(item_dict.track_index) .. "-" .. tostring(math.floor(item_dict.start_frame))
-          if disabled_keys[actual_key] then
-            item_dict.bmd_item:SetClipColor("Violet")
-            disabled_count = disabled_count + 1
+        if link_key_lookup[exact_key] then
+          for _, cand in ipairs(candidates) do
+            if math.floor(cand.clip_info.recordFrame + 0.5) == actual_frame then
+              return cand
+            end
           end
         end
-        print("Updated status for " .. disabled_count .. " clip(s).")
+
+        local best_cand = nil
+        local best_diff = 999999
+        for _, cand in ipairs(candidates) do
+          local exp_frame = math.floor(cand.clip_info.recordFrame + 0.5)
+          local diff = math.abs(actual_frame - exp_frame)
+          if diff <= 2 and diff < best_diff then
+            best_diff = diff
+            best_cand = cand
+            if diff == 0 then break end
+          end
+        end
+        return best_cand
       end
 
+      -- 4. Handle disabled clips by coloring them.
+      local disabled_count = 0
+      for _, item_dict in ipairs(actual_items) do
+        local media_type = (item_dict.track_type == "video" and 1 or 2)
+        local matched_clip = get_matching_appended_clip(media_type, item_dict.track_index, item_dict.start_frame)
+        if matched_clip and not matched_clip.enabled then
+          item_dict.bmd_item:SetClipColor("Violet")
+          disabled_count = disabled_count + 1
+        end
+      end
+      if disabled_count > 0 then
+        print("Updated status for " .. disabled_count .. " clip(s).")
+      end
 
       -- 5. Group the actual bmd_items by their original link_key for manual linking.
       local link_groups = {}
       for _, item_dict in ipairs(actual_items) do
         local media_type = (item_dict.track_type == "video" and 1 or 2)
-        local lookup_key = tostring(media_type) ..
-            "-" .. tostring(item_dict.track_index) .. "-" .. tostring(math.floor(item_dict.start_frame))
-        local link_key = link_key_lookup[lookup_key]
-
-        if link_key then
+        local matched_clip = get_matching_appended_clip(media_type, item_dict.track_index, item_dict.start_frame)
+        if matched_clip then
+          local link_key = matched_clip.link_key
           if not link_groups[link_key] then link_groups[link_key] = {} end
           table.insert(link_groups[link_key], item_dict.bmd_item)
         end
       end
 
-      -- 6. Perform manual linking on groups that were not auto-linked.
+      -- 6. Perform manual linking on groups.
       TRACKER:update_task_progress("link", 1.0, "Linking clips...")
       local groups_to_link = {}
       for key, clips in pairs(link_groups) do
-        if not auto_linked_keys[key] and not string.match(tostring(key), "^unlinked_") then
+        if not string.match(tostring(key), "^unlinked_") then
           table.insert(groups_to_link, { key = key, clips = clips })
         end
       end
