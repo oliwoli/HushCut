@@ -65,7 +65,7 @@ type TimelineItem struct {
 	Duration          float64                    `json:"duration"`
 	EditInstructions  []EditInstruction          `json:"edit_instructions"`
 	SourceChannel     *SourceChannel             `json:"source_channel,omitempty"`
-	LinkGroupID       int                        `json:"link_group_id,omitempty"`
+	LinkGroupID       *int                       `json:"link_group_id,omitempty"`
 	Type              string                     `json:"type,omitempty"` // "Compound", "Timeline"
 	NestedClips       []*NestedAudioTimelineItem `json:"nested_clips,omitempty"`
 }

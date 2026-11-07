@@ -234,6 +234,8 @@ function AppContent() {
   const pendingSelectionRef = useRef<string | null>(null);
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
+  const [projectDataVersion, setProjectDataVersion] = useState(0);
+
   const projectDataRef =
     useRef<main.ProjectDataPayload | null>(null);
 
@@ -356,13 +358,21 @@ function AppContent() {
           newData.timeline.fps as FRAMERATE
         );
         setTimecode(timecode);
+        setHasProjectData(true);
+        if (newData.timeline?.name) {
+          setTimelineName(newData.timeline.name);
+        }
+      } else {
+        setHasProjectData(false);
+        setTimelineName(null);
       }
+
       const newProjectDataSanitized = sanitizeProjectDataForComparison(newData);
       const currentProjectDataSanitized = sanitizeProjectDataForComparison(projectDataRef?.current)
 
       if (!deepEqual(currentProjectDataSanitized, newProjectDataSanitized)) {
-        projectDataRef.current = newData;;
-        setHasProjectData(!!newData);
+        projectDataRef.current = newData;
+        setProjectDataVersion((v) => v + 1);
         console.log("task result: Project data updated.");
 
         if (!newData) return;
@@ -569,11 +579,31 @@ function AppContent() {
         data
       );
       projectDataRef.current = data;
+      setHasProjectData(!!data);
+      if (data?.timeline?.name) {
+        setTimelineName(data.timeline.name);
+      }
+      setProjectDataVersion((v) => v + 1);
     };
     const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
 
+    const handleProjectDataUpdated = (data: main.ProjectDataPayload) => {
+      console.log(
+        "Event: projectDataUpdated in App.tsx, hydrating link groups.",
+        data
+      );
+      projectDataRef.current = data;
+      setHasProjectData(!!data);
+      if (data?.timeline?.name) {
+        setTimelineName(data.timeline.name);
+      }
+      setProjectDataVersion((v) => v + 1);
+    };
+    const unsubscribeUpdated = EventsOn("projectDataUpdated", handleProjectDataUpdated);
+
     return () => {
       if (typeof unsubscribe === "function") unsubscribe();
+      if (typeof unsubscribeUpdated === "function") unsubscribeUpdated();
     };
   }, []);
 
@@ -832,6 +862,7 @@ function AppContent() {
               {currentActiveClip?.id && httpPort && (
                 <div className="shrink-0 px-3">
                   <ClipSelector
+                    key={`clip-selector-${projectDataVersion}`}
                     audioItems={projectDataRef.current?.timeline.audio_track_items}
                     currentFileId={currentClipId}
                     onFileChange={handleAudioClipSelection}

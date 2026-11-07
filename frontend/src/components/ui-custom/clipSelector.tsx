@@ -258,7 +258,14 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
         <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
           <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border flex items-center")}>{index}</span>
           <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
-          <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
+          <span className="flex items-center gap-1">
+            {item.link_group_id != null && (
+              <span title={`Linked (Group ${item.link_group_id})`} className="inline-flex items-center text-sky-400">
+                <ClipLinkIcon className="h-3 w-3 text-sky-400" />
+              </span>
+            )}
+            <AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}
+          </span>
         </div>
 
         <ContextMenuTrigger className="flex">

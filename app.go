@@ -77,10 +77,13 @@ type App struct {
 	authToken  string
 
 	// - Python/Lua tasks - //
-	pendingMu    sync.Mutex
-	pendingTasks map[string]chan PythonCommandResponse
-	ackMutex     sync.Mutex
-	ackTasks     map[string]ackWaiter
+	pendingMu        sync.Mutex
+	pendingTasks     map[string]chan PythonCommandResponse
+	ackMutex         sync.Mutex
+	ackTasks         map[string]ackWaiter
+	currentProjectMu sync.RWMutex
+	currentProject   *ProjectDataPayload
+	otioReadyChan    chan struct{}
 
 	// --- FFmpeg STATE ---
 	ffmpegMutex      sync.RWMutex
