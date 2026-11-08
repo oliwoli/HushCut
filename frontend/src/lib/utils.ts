@@ -164,7 +164,7 @@ export const formatDuration = (totalSeconds: number): DurationPart[] => {
 
 export function truncateFilename(
   name: string,
-  maxChars = 19
+  maxChars = 17
 ): string {
   const separator = " - ";
 

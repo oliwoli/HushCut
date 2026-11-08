@@ -14,6 +14,7 @@ import {
   GetFFmpegStatus,
   GetGoServerPort,
   MixdownCompoundClips,
+  MixdownLinkedAudio,
   ProcessProjectAudio,
   SyncWithDavinci,
   MakeFinalTimeline,
@@ -31,6 +32,11 @@ import RemoveSilencesButton, {
   prepareProjectDataWithEdits,
 } from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
+import {
+  buildDisplayClips,
+  createActiveFileFromDisplayClip,
+  DisplayClip,
+} from "./lib/clipUtils";
 import { usePrevious, useWindowFocus } from "./hooks/hooks";
 import ClipSelector from "./components/ui-custom/clipSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
@@ -234,72 +240,109 @@ function AppContent() {
   const pendingSelectionRef = useRef<string | null>(null);
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
+  const [projectDataVersion, setProjectDataVersion] = useState(0);
+
   const projectDataRef =
     useRef<main.ProjectDataPayload | null>(null);
 
   const setTimecode = useTimecodeStore((s) => s.setTimecode);
   const currTimecode = useTimecodeStore((s) => s.timecode);
   const audioItems = projectDataRef.current?.timeline?.audio_track_items || [];
+  const linkedAudioGroups = projectDataRef.current?.timeline?.linked_audio_groups;
   const timelineFps = projectDataRef.current?.timeline?.fps || 30;
 
+  const displayClips = useMemo(() => {
+    return buildDisplayClips(audioItems, linkedAudioGroups);
+  }, [audioItems, linkedAudioGroups, projectDataVersion]);
+
   useEffect(() => {
-    if (audioItems.length === 0) {
+    const mapping: Record<string, string> = {};
+    const reverseMapping: Record<string, string[]> = {};
+    const itemsMap: Record<string, main.TimelineItem> = {};
+    for (const item of audioItems) {
+      if (item.id) {
+        itemsMap[item.id] = item;
+      }
+    }
+    for (const clip of displayClips) {
+      if (clip.is_linked_group && clip.constituent_item_ids) {
+        reverseMapping[clip.id] = clip.constituent_item_ids;
+        for (const cid of clip.constituent_item_ids) {
+          mapping[cid] = clip.id;
+        }
+      }
+    }
+    useClipStore.getState().setClipToGroupMapping(mapping, reverseMapping, itemsMap);
+  }, [displayClips, audioItems]);
+
+  useEffect(() => {
+    if (displayClips.length === 0) {
       setCurrentClipId(null);
       return;
     }
     if (currTimecode && !pendingSelectionRef.current) {
       const currentFrame = currTimecode.frameCount;
 
-      const clipAtTimecode = audioItems.find(
-        (item) =>
-          currentFrame >= item.start_frame && currentFrame < item.end_frame
+      const clipAtTimecode = displayClips.find(
+        (clip) =>
+          currentFrame >= clip.start_frame && currentFrame < clip.end_frame
       );
       if (clipAtTimecode) {
-        // 3. Update the current clip ID
-        const newClipId =
-          clipAtTimecode.id || clipAtTimecode.processed_file_name;
-        // Only update state if the ID has actually changed to prevent re-renders
-        if (newClipId && newClipId !== currentClipId) {
-          setCurrentClipId(newClipId);
+        // Update current clip ID if changed, preserving local view within the active group
+        const isCurrentInThisClip =
+          clipAtTimecode.id === currentClipId ||
+          Boolean(clipAtTimecode.constituent_item_ids?.includes(currentClipId || ""));
+        if (!isCurrentInThisClip) {
+          setCurrentClipId(clipAtTimecode.id);
         }
       } else if (!currentClipId) {
-        setCurrentClipId(
-          audioItems[0]?.id || audioItems[0]?.processed_file_name || null
-        );
+        setCurrentClipId(displayClips[0]?.id || null);
       }
-    } else {
-      setCurrentClipId(
-        audioItems[0]?.id || audioItems[0]?.processed_file_name || null
-      );
+    } else if (!currentClipId) {
+      setCurrentClipId(displayClips[0]?.id || null);
     }
-  }, [currTimecode, audioItems, timelineFps]);
+  }, [currTimecode, displayClips, timelineFps]);
 
   const currentActiveClip = useMemo(() => {
-    if (!projectDataRef.current) {
+    if (!projectDataRef.current || !httpPort || displayClips.length === 0) {
       return null;
     }
-    if (!httpPort || !projectDataRef.current.timeline?.audio_track_items) {
-      return null;
-    }
-    if (audioItems.length === 0) return null;
 
-    let itemToDisplay = currentClipId
-      ? audioItems.find(
-        (item) => (item.id || item.processed_file_name) === currentClipId
-      )
-      : audioItems[0];
+    const fps = projectDataRef.current.timeline.fps;
+
+    if (currentClipId) {
+      // 1. Direct match on a display clip (combined group or standalone clip)
+      const exactDisplayClip = displayClips.find((clip) => clip.id === currentClipId);
+      if (exactDisplayClip) {
+        return createActiveFileFromDisplayClip(exactDisplayClip, httpPort, fps);
+      }
+
+      // 2. Local view constituent item match (render individual track item audio/waveform)
+      const constituentItem = audioItems.find((it) => it.id === currentClipId);
+      if (constituentItem) {
+        return createActiveFileFromTimelineItem(constituentItem, httpPort, fps);
+      }
+    }
+
+    let clipToDisplay = currentClipId
+      ? displayClips.find(
+          (clip) =>
+            clip.id === currentClipId ||
+            Boolean(clip.constituent_item_ids?.includes(currentClipId))
+        )
+      : displayClips[0];
 
     // Fallback if the ID wasn't found (e.g., during a state transition)
-    if (!itemToDisplay) {
-      itemToDisplay = audioItems[0];
+    if (!clipToDisplay) {
+      clipToDisplay = displayClips[0];
     }
 
-    return createActiveFileFromTimelineItem(
-      itemToDisplay,
+    return createActiveFileFromDisplayClip(
+      clipToDisplay,
       httpPort,
-      projectDataRef.current.timeline.fps
+      fps
     );
-  }, [projectDataRef.current, httpPort, currentClipId]);
+  }, [projectDataRef.current, httpPort, currentClipId, displayClips, audioItems]);
 
   const handleSync = async (isManual = false) => {
     if (isManual) {
@@ -356,19 +399,28 @@ function AppContent() {
           newData.timeline.fps as FRAMERATE
         );
         setTimecode(timecode);
+        setHasProjectData(true);
+        if (newData.timeline?.name) {
+          setTimelineName(newData.timeline.name);
+        }
+      } else {
+        setHasProjectData(false);
+        setTimelineName(null);
       }
+
       const newProjectDataSanitized = sanitizeProjectDataForComparison(newData);
       const currentProjectDataSanitized = sanitizeProjectDataForComparison(projectDataRef?.current)
 
       if (!deepEqual(currentProjectDataSanitized, newProjectDataSanitized)) {
-        projectDataRef.current = newData;;
-        setHasProjectData(!!newData);
+        projectDataRef.current = newData;
+        setProjectDataVersion((v) => v + 1);
         console.log("task result: Project data updated.");
 
         if (!newData) return;
         await Promise.all([
           ProcessProjectAudio(newData),
           MixdownCompoundClips(newData),
+          MixdownLinkedAudio(newData),
         ]);
       } else {
         console.log(
@@ -569,11 +621,50 @@ function AppContent() {
         data
       );
       projectDataRef.current = data;
+      setHasProjectData(!!data);
+      if (data?.timeline?.name) {
+        setTimelineName(data.timeline.name);
+      }
+      if (data?.timeline?.curr_timecode) {
+        const timecode = Timecode(
+          data.timeline.curr_timecode,
+          data.timeline.fps as FRAMERATE
+        );
+        setTimecode(timecode);
+      }
+      setProjectDataVersion((v) => v + 1);
     };
     const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
 
+    const handleProjectDataUpdated = (data: main.ProjectDataPayload) => {
+      console.log(
+        "Event: projectDataUpdated in App.tsx, hydrating link groups.",
+        data
+      );
+      projectDataRef.current = data;
+      setHasProjectData(!!data);
+      if (data?.timeline?.name) {
+        setTimelineName(data.timeline.name);
+      }
+      if (data?.timeline?.curr_timecode) {
+        const timecode = Timecode(
+          data.timeline.curr_timecode,
+          data.timeline.fps as FRAMERATE
+        );
+        setTimecode(timecode);
+      }
+      setProjectDataVersion((v) => v + 1);
+      if (data) {
+        MixdownLinkedAudio(data).catch((err) =>
+          console.error("Error pre-mixing linked audio on projectDataUpdated:", err)
+        );
+      }
+    };
+    const unsubscribeUpdated = EventsOn("projectDataUpdated", handleProjectDataUpdated);
+
     return () => {
       if (typeof unsubscribe === "function") unsubscribe();
+      if (typeof unsubscribeUpdated === "function") unsubscribeUpdated();
     };
   }, []);
 
@@ -832,14 +923,16 @@ function AppContent() {
               {currentActiveClip?.id && httpPort && (
                 <div className="shrink-0 px-3">
                   <ClipSelector
+                    key={`clip-selector-${projectDataVersion}`}
+                    displayClips={displayClips}
                     audioItems={projectDataRef.current?.timeline.audio_track_items}
+                    linkedAudioGroups={projectDataRef.current?.timeline.linked_audio_groups}
                     currentFileId={currentClipId}
                     onFileChange={handleAudioClipSelection}
                     fps={projectDataRef.current?.timeline.fps}
                     disabled={
                       !httpPort ||
-                      !projectDataRef.current?.timeline?.audio_track_items ||
-                      projectDataRef.current.timeline.audio_track_items.length === 0
+                      displayClips.length === 0
                     }
                     className="w-full mt-1 overflow-visible"
                   />
@@ -882,7 +975,11 @@ function AppContent() {
                 <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border shadow-xl h-min flex flex-col mx-auto">
                   <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between grow">
                     <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
-                      <SilenceControls key={currentClipId} />
+                      <SilenceControls
+                        key={currentClipId}
+                        displayClips={displayClips}
+                        audioItems={audioItems}
+                      />
                     </div>
                     {projectDataRef.current &&
                       projectDataRef.current.timeline?.audio_track_items?.length > 0 && (

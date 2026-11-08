@@ -7,12 +7,13 @@ import http.client
 from http.client import HTTPConnection
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+import math
 import signal
 import socket
 import threading
 from time import time, sleep
 import traceback
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Sequence
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, TypedDict, Sequence
 
 import logging
 import re
@@ -33,12 +34,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 TEMP_DIR: str = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "tmp")
 
 if sys.platform.startswith("win"):
-    TEMP_DIR = os.path.join(str(os.environ.get("LOCALAPPDATA")), "tmp")
+    TEMP_DIR = os.path.join(str(os.environ.get("LOCALAPPDATA")), "HushCut", "tmp")
 
 elif sys.platform.startswith("darwin"):
     TEMP_DIR = os.path.join(
-        os.path.expanduser("~/Library/Application Support"), "HushCut", "tmp"
+        os.path.expanduser("~/Library/Caches"), "HushCut", "tmp"
     )
+else:
+    cache_home = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    TEMP_DIR = os.path.join(cache_home, "HushCut", "tmp")
 
 TEMP_DIR = os.path.abspath(TEMP_DIR)
 if not os.path.exists(TEMP_DIR):
@@ -719,8 +723,8 @@ def process_track_items(
                 f"Processing item '{item.get('name')}' on track {track_index} with link group ID: {link_group_id}"
             )
 
+            # Apply the found link ID to all matching items if present.
             if link_group_id is not None:
-                # Apply the found link ID to all matching items.
                 for corresponding_item in corresponding_items:
                     corresponding_item["link_group_id"] = link_group_id
                 max_id = max(max_id, link_group_id)
@@ -856,6 +860,44 @@ def unify_edit_instructions(
     return [(s, e, en) for s, e, en in final_edits if (e - s) >= min_duration_in_frames]
 
 
+def clip_is_uncut(item: TimelineItem) -> bool:
+    if not item.get("edit_instructions"):
+        return True
+    if len(item["edit_instructions"]) != 1:
+        return False
+    # check if the only edit instruction is a full clip
+    edit_instruction = item["edit_instructions"][0]
+    if edit_instruction.get("enabled", True) is False:
+        return False
+    TOLERANCE = 0.01
+    if (
+        abs(edit_instruction.get("start_frame", 0) - item.get("start_frame", 0)) < TOLERANCE
+        and abs(edit_instruction.get("end_frame", 0) - item.get("end_frame", 0)) < TOLERANCE
+        and abs(edit_instruction.get("source_start_frame", 0) - item.get("source_start_frame", 0))
+        < TOLERANCE
+        and abs(edit_instruction.get("source_end_frame", 0) - item.get("source_end_frame", 0))
+        < TOLERANCE
+    ):
+        return True
+
+    return False
+
+
+def are_edits_equivalent(item1: TimelineItem, item2: TimelineItem) -> bool:
+    edits1 = item1.get("edit_instructions") or []
+    edits2 = item2.get("edit_instructions") or []
+    if len(edits1) != len(edits2):
+        return False
+    for e1, e2 in zip(edits1, edits2):
+        if (
+            abs(e1.get("start_frame", 0) - e2.get("start_frame", 0)) > 0.01
+            or abs(e1.get("end_frame", 0) - e2.get("end_frame", 0)) > 0.01
+            or e1.get("enabled", True) != e2.get("enabled", True)
+        ):
+            return False
+    return True
+
+
 def unify_linked_items_in_project_data(input_otio_path: str) -> None:
     """
     Reads an OTIO file to find linked clips, unifies their edit instructions
@@ -885,9 +927,7 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         logging.error(f"Failed to read or parse OTIO file at {input_otio_path}: {e}")
         return
 
-    # The following block populates the project data from the OTIO file and
-    # is preserved from the original code. It is assumed that `process_track_items`
-    # is defined elsewhere and correctly populates the timeline.
+    # The following block populates the project data from the OTIO file.
     max_link_group_id = 0
     track_type_counters = {"video": 0, "audio": 0, "subtitle": 0}
     timeline_rate = otio_data.get("global_start_time", {}).get("rate", 24)
@@ -923,35 +963,32 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
         if link_group_id is not None:
             items_by_link_group.setdefault(link_group_id, []).append(item)
 
-    next_new_group_id = max_link_group_id + 1
-    for item in all_pd_items:
-        if item.get("link_group_id") is None and item.get("edit_instructions"):
-            logging.info(
-                f"Item '{item.get('name', 'Unnamed')}' has edits but no link_group_id. "
-                f"Assigning new group ID {next_new_group_id}"
-            )
-            item["link_group_id"] = next_new_group_id
-            items_by_link_group[next_new_group_id] = [item]
-            next_new_group_id += 1
+    # Note: Unlinked items (link_group_id is None) are left untouched and are NOT grouped.
 
-    # Main processing loop with new unification logic
+    # Main processing loop with unification logic
     for link_id, group_items in items_by_link_group.items():
-        if not group_items:
+        if len(group_items) <= 1:
             continue
 
-        edited_items = [item for item in group_items if item.get("edit_instructions")]
+        edited_items = [
+            item for item in group_items
+            if item.get("edit_instructions") and not clip_is_uncut(item)
+        ]
 
-        # --- LOGIC SWITCH ---
-        # Case 1: Simple Inheritance (0 or 1 item has edits).
-        # This is the most common case. We preserve the existing edits perfectly.
-        if len(edited_items) <= 1:
-            template_item = edited_items[0] if edited_items else None
+        if not edited_items:
+            logging.info(f"Group {link_id} has no cuts to unify. Skipping.")
+            continue
 
-            # If no item has edits, there's nothing to do.
-            if not template_item:
-                logging.info(f"Group {link_id} has no edits to unify. Skipping.")
-                continue
+        is_keep_silence = any(
+            not inst.get("enabled", True)
+            for it in edited_items
+            for inst in it.get("edit_instructions", [])
+        )
 
+        # Case 1: Simple Inheritance (only 1 item has cuts, or all cut items have equivalent edits).
+        # We preserve the existing edits perfectly.
+        if len(edited_items) <= 1 or all(are_edits_equivalent(edited_items[0], it) for it in edited_items[1:]):
+            template_item = edited_items[0]
             template_instructions = template_item["edit_instructions"]
             template_fps = template_item.get("source_fps", project_fps)
             if template_fps < 1e-9:
@@ -962,7 +999,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             )
 
             for target_item in group_items:
-                # The template item itself is already correct.
                 if target_item["id"] == template_item["id"]:
                     continue
 
@@ -972,7 +1008,6 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                     target_fps = project_fps
 
                 for inst in template_instructions:
-                    # Convert template source range -> seconds -> target source range
                     start_sec = inst["source_start_frame"] / template_fps
                     end_sec = inst["source_end_frame"] / template_fps
 
@@ -981,15 +1016,18 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
 
                     new_instructions.append(
                         {
-                            # Recalculate source frames for the target's FPS
                             "source_start_frame": new_src_start,
                             "source_end_frame": new_src_end,
-                            # Preserve the exact timeline placement from the template
                             "start_frame": inst["start_frame"],
                             "end_frame": inst["end_frame"],
-                            "enabled": inst["enabled"],
+                            "enabled": inst.get("enabled", True),
                         }
                     )
+
+                if is_keep_silence:
+                    for i in range(len(new_instructions) - 1):
+                        new_instructions[i]["source_end_frame"] = new_instructions[i + 1]["source_start_frame"]
+                        new_instructions[i]["end_frame"] = new_instructions[i + 1]["start_frame"]
 
                 target_item["edit_instructions"] = new_instructions
                 logging.info(
@@ -997,14 +1035,13 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                 )
 
         # Case 2: Complex Merge (multiple items have conflicting edits).
-        # We fall back to the full unification logic that rebuilds the timeline.
         else:
             logging.warning(
-                f"Group {link_id}: Found {len(edited_items)} items with edits. "
-                "Performing complex merge. Minor frame shifts may occur due to recalculation."
+                f"Group {link_id}: Found {len(edited_items)} items with conflicting edits. "
+                "Performing complex merge."
             )
             unified_edits_proj_domain = unify_edit_instructions(
-                group_items, project_fps
+                edited_items, project_fps
             )
 
             group_timeline_anchor = min(
@@ -1013,11 +1050,11 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
             )
 
             final_timeline_segments = []
-            timeline_playhead = group_timeline_anchor
+            timeline_playhead = float(round(group_timeline_anchor))
             proj_to_timeline_ratio = timeline_fps / project_fps
 
             for proj_start, proj_end, is_enabled in unified_edits_proj_domain:
-                if not is_enabled:
+                if not is_keep_silence and not is_enabled:
                     continue
 
                 proj_duration = proj_end - proj_start
@@ -1027,6 +1064,8 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
 
                 timeline_start = round(timeline_playhead)
                 timeline_end = round(timeline_playhead + timeline_duration_float)
+                if timeline_end <= timeline_start:
+                    timeline_end = timeline_start + 1
 
                 final_timeline_segments.append(
                     {
@@ -1034,9 +1073,10 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                         "proj_end": proj_end,
                         "tl_start": float(timeline_start),
                         "tl_end": float(timeline_end),
+                        "enabled": is_enabled,
                     }
                 )
-                timeline_playhead += timeline_duration_float
+                timeline_playhead = float(timeline_end)
 
             for item in group_items:
                 new_edit_instructions = []
@@ -1048,10 +1088,11 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                 for segment in final_timeline_segments:
                     source_start = segment["proj_start"] * proj_to_src_ratio
                     source_end = segment["proj_end"] * proj_to_src_ratio
-                    tl_dur = segment["tl_end"] - segment["tl_start"]
-                    min_src = math.ceil(tl_dur * (source_fps / timeline_fps))
-                    if (source_end - source_start) < min_src:
-                        source_end = source_start + min_src
+                    if not is_keep_silence:
+                        tl_dur = segment["tl_end"] - segment["tl_start"]
+                        min_src = math.ceil(tl_dur * (source_fps / timeline_fps))
+                        if (source_end - source_start) < min_src:
+                            source_end = source_start + min_src
 
                     new_edit_instructions.append(
                         {
@@ -1059,9 +1100,14 @@ def unify_linked_items_in_project_data(input_otio_path: str) -> None:
                             "source_end_frame": source_end,
                             "start_frame": segment["tl_start"],
                             "end_frame": segment["tl_end"],
-                            "enabled": True,
+                            "enabled": segment["enabled"],
                         }
                     )
+
+                if is_keep_silence:
+                    for i in range(len(new_edit_instructions) - 1):
+                        new_edit_instructions[i]["source_end_frame"] = new_edit_instructions[i + 1]["source_start_frame"]
+                        new_edit_instructions[i]["end_frame"] = new_edit_instructions[i + 1]["start_frame"]
 
                 item["edit_instructions"] = new_edit_instructions
                 logging.info(
@@ -1377,8 +1423,20 @@ def switch_to_page(page: ResolvePage) -> None:
 
 
 def get_items_by_tracktype(
-    track_type: Literal["video", "audio"], timeline: Any
+    track_type: Literal["video", "audio"],
+    timeline: Any,
+    timeline_fps: Optional[float] = None,
 ) -> list[TimelineItem]:
+    if timeline_fps is None and timeline:
+        try:
+            fps_setting = timeline.GetSetting("timelineFrameRate")
+            if fps_setting:
+                timeline_fps = float(fps_setting)
+        except Exception:
+            pass
+    if not timeline_fps or timeline_fps <= 0:
+        timeline_fps = 30.0
+
     items: list[TimelineItem] = []
     track_count = timeline.GetTrackCount(track_type)
     for i in range(1, track_count + 1):
@@ -1396,12 +1454,16 @@ def get_items_by_tracktype(
                 media_pool_item.GetClipProperty("File Path") if media_pool_item else ""
             )
 
-            source_fps: float = (
-                (media_pool_item.GetClipProperty("FPS") if media_pool_item else 30.0)
-                or PROJECT_DATA.get("timeline", {}).get("project_fps", 30.0)
-                if PROJECT_DATA
-                else 30.0
-            )
+            source_fps: float = float(timeline_fps)
+            if media_pool_item:
+                try:
+                    clip_fps = media_pool_item.GetClipProperty("FPS")
+                    if clip_fps:
+                        parsed_fps = float(clip_fps)
+                        if parsed_fps > 0:
+                            source_fps = parsed_fps
+                except (ValueError, TypeError):
+                    pass
 
             timeline_item: TimelineItem = {
                 "bmd_item": item_bmd,
@@ -1664,10 +1726,12 @@ def get_project_data(project, timeline) -> Tuple[bool, str | None]:
 
     # --- 1. Initial Data Gathering ---
     timeline_name = timeline.GetName()
-    timeline_fps = timeline.GetSetting("timelineFrameRate")
-    project_default_fps = project.GetSetting("timelineFrameRate")
-    video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline)
-    audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline)
+    timeline_fps_raw = timeline.GetSetting("timelineFrameRate")
+    timeline_fps = float(timeline_fps_raw) if timeline_fps_raw else 30.0
+    project_default_fps_raw = project.GetSetting("timelineFrameRate")
+    project_default_fps = float(project_default_fps_raw) if project_default_fps_raw else timeline_fps
+    video_track_items: list[TimelineItem] = get_items_by_tracktype("video", timeline, timeline_fps)
+    audio_track_items: list[TimelineItem] = get_items_by_tracktype("audio", timeline, timeline_fps)
 
     tl_dict: Timeline = {
         "name": timeline_name,
@@ -1767,43 +1831,35 @@ def apply_edits_from_go(
     target_project: ProjectData, source_project: ProjectData
 ) -> ProjectData:
     """
-    Applies ONLY the 'edit_instructions' from a source project data structure
-    to the target, matching audio timeline items by their unique ID.
-
-    This function is intentionally simple to robustly update the target with
-    the essential data from the frontend without side effects.
+    Applies edit instructions and synchronized link_group_id from Go to the
+    target project data, matching items by their unique ID.
     """
-    print("Applying edit instructions from Go...")
-    # pprint.pprint(source_project)
-
-    # Create an efficient lookup map of the audio items sent from Go.
+    print("Applying edit instructions and link groups from Go...")
     source_audio_items = source_project.get("timeline", {}).get("audio_track_items", [])
+    source_video_items = source_project.get("timeline", {}).get("video_track_items", [])
     source_items_by_id = {
-        item["id"]: item for item in source_audio_items if "id" in item
+        item["id"]: item for item in (source_audio_items + source_video_items) if "id" in item
     }
 
     if not source_items_by_id:
         print(
-            "Warning: No audio items with IDs found in data from Go. No edits applied."
+            "Warning: No items with IDs found in data from Go. No edits applied."
         )
         return source_project
 
-    # Get the target audio items that we will modify in-place.
     target_audio_items = target_project.get("timeline", {}).get("audio_track_items", [])
+    target_video_items = target_project.get("timeline", {}).get("video_track_items", [])
 
     items_updated_count = 0
-    # Iterate through the target items and apply the source's edit instructions.
-    for target_item in target_audio_items:
+    for target_item in (target_audio_items + target_video_items):
         item_id = target_item.get("id")
-
-        # Find the matching item from the source data.
         if item_id and item_id in source_items_by_id:
             source_item = source_items_by_id[item_id]
-
-            # This is the core logic: copy the edit_instructions if they exist.
             if "edit_instructions" in source_item:
                 target_item["edit_instructions"] = source_item["edit_instructions"]
-                items_updated_count += 1
+            # Synchronize link_group_id directly from Go (Go is authoritative from OTIO)
+            target_item["link_group_id"] = source_item.get("link_group_id")
+            items_updated_count += 1
 
     print(f"Finished applying edits. Updated {items_updated_count} timeline items.")
     return target_project
@@ -1967,18 +2023,37 @@ def main(sync: bool = False, task_id: str = "") -> Optional[bool]:
         print("just syncing, exiting")
         print(f"it took {time() - script_start_time:.2f} seconds for script to finish")
 
+        otio_exported = False
+        try:
+            export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
+            print(f"Exported timeline to OTIO in {input_otio_path}")
+            otio_exported = True
+        except Exception as e:
+            print(f"Failed to export timeline to OTIO: {e}")
+
         response_payload = {
             "status": "success",
             "taskID": task_id,
             "message": "Sync successful!",
             "data": PROJECT_DATA,
+            "otioPath": input_otio_path if otio_exported else "",
         }
 
         send_message_to_go(
             message_type="taskResult", payload=response_payload, task_id=task_id
         )
-        export_timeline_to_otio(TIMELINE, file_path=input_otio_path)
-        print(f"Exported timeline to OTIO in {input_otio_path}")
+        if otio_exported:
+            send_message_to_go(
+                message_type="otioExported",
+                payload={"status": "success", "otioPath": input_otio_path},
+                task_id=task_id,
+            )
+        else:
+            send_message_to_go(
+                message_type="otioExported",
+                payload={"status": "error", "message": "Failed to export timeline to OTIO", "otioPath": input_otio_path},
+                task_id=task_id,
+            )
         return
 
     if not PROJECT_DATA:
@@ -2153,7 +2228,10 @@ def get_audio_item_ids(timeline: Any) -> Set[str]:
 
 
 def _append_clips_to_timeline(
-    timeline: Any, media_pool: Any, timeline_items: List[TimelineItem]
+    timeline: Any,
+    media_pool: Any,
+    timeline_items: List[TimelineItem],
+    tl_needs_clearing: bool = False,
 ) -> Tuple[List[AppendedClipInfo], List[Any]]:
     """
     Groups clips, prepares optimized auto-linked batches where all natural tracks
@@ -2173,9 +2251,15 @@ def _append_clips_to_timeline(
     grouped_clips: Dict[Tuple[int, int], List[AppendedClipInfo]] = {}
 
     for item in timeline_items:
+        if tl_needs_clearing and clip_is_uncut(item):
+            print(
+                f"Skipping uncut item '{item.get('name')}' from appending on cleared timeline."
+            )
+            continue
+
         link_id = item.get("link_group_id")
         if link_id is None:
-            continue
+            link_id = f"unlinked_{item.get('id', id(item))}"
         media_type = 1 if item["track_type"] == "video" else 2
         for i, edit in enumerate(item.get("edit_instructions") or []):
             record_frame = edit.get("start_frame", 0)
@@ -2350,32 +2434,6 @@ def _append_clips_to_timeline(
     return all_processed_clips, appended_bmd_items
 
 
-def clip_is_uncut(item: TimelineItem) -> bool:
-    """
-    Checks if a clip is uncut, meaning it has no edit instructions.
-    """
-    if not item.get("edit_instructions") or len(item["edit_instructions"]) == 0:
-        return True
-
-    if len(item["edit_instructions"]) > 1:
-        return False
-
-    # check if the only edit instruction is a full clip
-    edit_instruction = item["edit_instructions"][0]
-    TOLERANCE = 0.01
-    if (
-        abs(edit_instruction["start_frame"] - item["start_frame"]) < TOLERANCE
-        and abs(edit_instruction["end_frame"] - item["end_frame"]) < TOLERANCE
-        and abs(edit_instruction["source_start_frame"] - item["source_start_frame"])
-        < TOLERANCE
-        and abs(edit_instruction["source_end_frame"] - item["source_end_frame"])
-        < TOLERANCE
-    ):
-        return True
-
-    return False
-
-
 def append_and_link_timeline_items(
     create_new_timeline: bool = True, task_id=""
 ) -> None:
@@ -2505,62 +2563,55 @@ def append_and_link_timeline_items(
             return
 
     if timeline and tl_needs_clearing:
-        # --- Robustly clear all tracks on the timeline ---
-        print("Clearing all clips from existing timeline...")
+        # --- Robustly clear edited tracks on the timeline ---
+        print("Clearing edited clips from existing timeline...")
         all_clips_to_delete = []
 
-        # Iterate through all video tracks that might have content
-        for item in PROJECT_DATA["timeline"]["video_track_items"]:
-            type = item["type"]
-            if not item["bmd_item"]:
-                print(f"Warning, no bmd item set for '{item['name']}'")
-                continue
-            if not item["bmd_mpi"]:
-                item["bmd_mpi"] = item["bmd_item"].GetMediaPoolItem()
-            if not item["bmd_mpi"]:
+        for item in timeline_items:
+            bmd_item = item.get("bmd_item")
+            if not bmd_item:
                 print(
-                    f"Warning: No MediaPoolItem found for item '{item['name']}'. Skipping."
+                    f"Warning: No bmd_item set for '{item.get('name')}'. Skipping deletion."
                 )
                 continue
-            # don't delete items with no edit instructions, or empty edit instructions
-            if not item.get("edit_instructions"):
-                print(f"Skipping item '{item['name']}' with no edit instructions.")
-                continue
-            if clip_is_uncut(item):
-                print(f"Skipping uncut item '{item['name']}' with no edits.")
-                continue
-            if type:
-                all_clips_to_delete.append(item["bmd_item"])
 
-            print(f"marking {item} for deletion")
-
-            all_clips_to_delete.append(item["bmd_item"])
-
-        for item in PROJECT_DATA["timeline"]["audio_track_items"]:
-            type = item["type"]
-            if not item["bmd_mpi"]:
-                continue
+            if not item.get("bmd_mpi"):
+                try:
+                    item["bmd_mpi"] = bmd_item.GetMediaPoolItem()
+                except Exception as e:
+                    print(
+                        f"Warning getting MediaPoolItem for '{item.get('name')}': {e}"
+                    )
 
             if not item.get("edit_instructions"):
-                print(f"Skipping item '{item['name']}' with no edit instructions.")
+                print(
+                    f"Skipping item '{item.get('name')}' with no edit instructions."
+                )
                 continue
 
             if clip_is_uncut(item):
-                print(f"Skipping uncut item '{item['name']}' with no edits.")
+                print(f"Skipping uncut item '{item.get('name')}' with no edits.")
                 continue
 
-            if type:
-                all_clips_to_delete.append(item["bmd_item"])
+            print(f"Marking '{item.get('name')}' for deletion")
+            all_clips_to_delete.append(bmd_item)
 
-            print(f"marking {item} for deletion")
+        unique_clips_to_delete = []
+        seen_clips = set()
+        for it in all_clips_to_delete:
+            if it and id(it) not in seen_clips:
+                seen_clips.add(id(it))
+                unique_clips_to_delete.append(it)
 
-            all_clips_to_delete.append(item["bmd_item"])
-
-        if all_clips_to_delete:
-            print(f"Deleting {len(all_clips_to_delete)} existing clips...")
-            timeline.DeleteClips(all_clips_to_delete)
+        if unique_clips_to_delete:
+            print(f"Deleting {len(unique_clips_to_delete)} existing clips...")
+            try:
+                timeline.SetClipsLinked(unique_clips_to_delete, False)
+            except Exception as e:
+                print(f"Warning unlinking clips before deletion: {e}")
+            timeline.DeleteClips(unique_clips_to_delete)
         else:
-            print("Timeline is already empty.")
+            print("No clips marked for deletion.")
 
     if not timeline:
         print("Error: Could not get a valid timeline. Aborting operation.")
@@ -2591,7 +2642,7 @@ def append_and_link_timeline_items(
     sleep_time_between = 2.5
     for attempt in range(1, num_retries + 1):
         processed_clips, bmd_items_from_api = _append_clips_to_timeline(
-            TIMELINE, media_pool, timeline_items
+            TIMELINE, media_pool, timeline_items, tl_needs_clearing=tl_needs_clearing
         )
         TRACKER.complete_task("append")
         if not processed_clips:
@@ -2609,68 +2660,75 @@ def append_and_link_timeline_items(
             }
             if auto_linked_keys:
                 print(
-                    f"Identified {len(auto_linked_keys)} auto-linked groups to skip for manual linking."
+                    f"Identified {len(auto_linked_keys)} auto-linked groups."
                 )
 
+            # Build expected clips map by track for robust fuzzy-tolerance matching
             link_key_lookup: Dict[Tuple[Optional[int], int, int], Tuple[int, int]] = {}
+            expected_by_track: Dict[Tuple[Optional[int], int], List[AppendedClipInfo]] = defaultdict(list)
             for appended_clip in processed_clips:
                 clip_info, link_key = (
                     appended_clip["clip_info"],
                     appended_clip["link_key"],
                 )
-                lookup_key = (
-                    clip_info.get("mediaType"),
-                    clip_info["trackIndex"],
-                    int(round(clip_info["recordFrame"])),
-                )
+                mt = clip_info.get("mediaType")
+                ti = clip_info["trackIndex"]
+                rf = int(round(clip_info["recordFrame"]))
+                lookup_key = (mt, ti, rf)
                 link_key_lookup[lookup_key] = link_key
+                expected_by_track[(mt, ti)].append(appended_clip)
 
             actual_items: list[TimelineItem] = []
             actual_items.extend(get_items_by_tracktype("video", TIMELINE))
             actual_items.extend(get_items_by_tracktype("audio", TIMELINE))
 
-            disabled_keys = {
-                (
-                    p_clip["clip_info"]["mediaType"],
-                    p_clip["clip_info"]["trackIndex"],
-                    p_clip["clip_info"]["recordFrame"],
+            # Helper for robust lookup with +-2 frame tolerance to guard against floating-point rounding
+            def get_matching_appended_clip(media_type: int, track_index: int, actual_start: float) -> Optional[AppendedClipInfo]:
+                actual_frame = int(round(actual_start))
+                exact_key = (media_type, track_index, actual_frame)
+                if exact_key in link_key_lookup:
+                    for c in expected_by_track.get((media_type, track_index), []):
+                        if int(round(c["clip_info"]["recordFrame"])) == actual_frame:
+                            return c
+                # Fuzzy match within +-2 frames
+                best_cand = None
+                best_diff = float("inf")
+                for cand in expected_by_track.get((media_type, track_index), []):
+                    exp_frame = int(round(cand["clip_info"]["recordFrame"]))
+                    diff = abs(actual_frame - exp_frame)
+                    if diff <= 2 and diff < best_diff:
+                        best_diff = diff
+                        best_cand = cand
+                return best_cand
+
+            disabled_count = 0
+            for item_dict in actual_items:
+                media_type = 1 if item_dict["track_type"] == "video" else 2
+                matched_clip = get_matching_appended_clip(
+                    media_type, item_dict["track_index"], item_dict["start_frame"]
                 )
-                for p_clip in processed_clips
-                if not p_clip["enabled"]
-            }
-            if disabled_keys:
-                disabled_count = 0
-                for item_dict in actual_items:
-                    media_type = 1 if item_dict["track_type"] == "video" else 2
-                    actual_key = (
-                        media_type,
-                        item_dict["track_index"],
-                        item_dict["start_frame"],
-                    )
-                    if actual_key in disabled_keys:
-                        bmd_item = item_dict["bmd_item"]
-                        bmd_item.SetClipColor("Violet")
-                        disabled_count += 1
+                if matched_clip and not matched_clip.get("enabled", True):
+                    bmd_item = item_dict["bmd_item"]
+                    bmd_item.SetClipColor("Violet")
+                    disabled_count += 1
+            if disabled_count > 0:
                 print(f"Updated status for {disabled_count} clip(s).")
 
             link_groups: Dict[Tuple[int, int], List[Any]] = {}
             for item_dict in actual_items:
                 media_type = 1 if item_dict["track_type"] == "video" else 2
-                # Note: For auto-linked clips, multiple actual items might map back
-                # via different mediaTypes to the same original recordFrame.
-                # The lookup key must be specific.
-                lookup_key = (
-                    media_type,
-                    item_dict["track_index"],
-                    int(round(item_dict["start_frame"])),
+                matched_clip = get_matching_appended_clip(
+                    media_type, item_dict["track_index"], item_dict["start_frame"]
                 )
-                link_key = link_key_lookup.get(lookup_key)
-                if link_key:
+                if matched_clip:
+                    link_key = matched_clip["link_key"]
                     link_groups.setdefault(link_key, []).append(item_dict["bmd_item"])
 
             print("Performing manual linking for necessary clips...")
             groups_to_link = {
-                k: v for k, v in link_groups.items() if k not in auto_linked_keys
+                k: v
+                for k, v in link_groups.items()
+                if not str(k[0]).startswith("unlinked_")
             }
 
             if not groups_to_link:

@@ -7,6 +7,8 @@ interface UiState {
   setSettingsDialogOpen: (isOpen: boolean) => void;
   uiScale: number;
   setUiScale: (uiScale: number) => void;
+  confirmOverwritePerClipChanges: boolean;
+  setConfirmOverwritePerClipChanges: (confirm: boolean) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -15,5 +17,7 @@ export const useUiStore = create<UiState>((set) => ({
   isSettingsDialogOpen: false,
   setSettingsDialogOpen: (isOpen) => set({ isSettingsDialogOpen: isOpen }),
   uiScale: 1.0,
-  setUiScale: (value) => set({ uiScale: value})
+  setUiScale: (value) => set({ uiScale: value}),
+  confirmOverwritePerClipChanges: true,
+  setConfirmOverwritePerClipChanges: (confirm) => set({ confirmOverwritePerClipChanges: confirm }),
 }));

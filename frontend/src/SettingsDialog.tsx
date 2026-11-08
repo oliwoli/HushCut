@@ -40,7 +40,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 setDavinciFolderPath(settings.davinciFolderPath);
                 setCleanupThreshold(settings.cleanupThresholdDays !== undefined ? settings.cleanupThresholdDays : 30);
                 setEnableCleanup(settings.enableCleanup !== undefined ? settings.enableCleanup : true);
-                setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0)
+                setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0);
             });
             setInternalOpen(true);
             setDialogOpacity(1);
@@ -57,7 +57,7 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
 
     useEffect(() => {
         GetSettings().then((settings: any) => {
-            setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0)
+            setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0);
         });
     }, []);
 
@@ -69,7 +69,12 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     };
 
     const handleSave = () => {
-        SaveSettings({ davinciFolderPath, cleanupThresholdDays: cleanupThreshold, enableCleanup, uiScale: currUiScale }).then(() => {
+        SaveSettings({
+            davinciFolderPath,
+            cleanupThresholdDays: cleanupThreshold,
+            enableCleanup,
+            uiScale: currUiScale,
+        }).then(() => {
             onOpenChange(false);
         });
         toast.success("Your settings have been saved.")

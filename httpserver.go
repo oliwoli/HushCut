@@ -73,7 +73,8 @@ type PythonCommandResponse struct {
 	AlertMessage    string `json:"alertMessage,omitempty"`
 	AlertSeverity   string `json:"alertSeverity,omitempty"` // "info", "warning", "error"
 
-	AlertIssued bool `json:"alertIssued,omitempty"`
+	AlertIssued bool   `json:"alertIssued,omitempty"`
+	OtioPath    string `json:"otioPath,omitempty"`
 }
 
 func (a *App) sendRequestToPython(ctx context.Context, method, path string, payload interface{}) ([]byte, error) {
@@ -470,6 +471,15 @@ func (a *App) handleRenderClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	originalFilePath := filepath.Join(a.tmpPath, cleanFileName)
+	if a.isLinkedAudioFile(cleanFileName) {
+		if err := a.EnsureLinkedAudioMixdown(originalFilePath); err != nil {
+			http.Error(w, fmt.Sprintf("Error ensuring linked audio mixdown: %v", err), http.StatusInternalServerError)
+			return
+		}
+	} else if err := a.WaitForFile(originalFilePath); err != nil {
+		http.Error(w, fmt.Sprintf("Error waiting for file: %v", err), http.StatusInternalServerError)
+		return
+	}
 	if _, err := os.Stat(originalFilePath); os.IsNotExist(err) {
 		http.NotFound(w, r)
 		return
@@ -607,12 +617,103 @@ func (a *App) msgEndpoint(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, "Task update received.")
 			return // IMPORTANT: We are done. We do not touch the pendingTasks channel.
 
+		case "otioExported":
+			type otioExportPayload struct {
+				Status   string `json:"status"`
+				OtioPath string `json:"otioPath"`
+				Message  string `json:"message"`
+			}
+			var otioData otioExportPayload
+			if err := json.Unmarshal(msg.Payload, &otioData); err != nil {
+				log.Printf("msgEndpoint: Error unmarshalling otioExported payload: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+
+			go func() {
+				defer func() {
+					a.currentProjectMu.Lock()
+					if a.otioReadyChan != nil {
+						select {
+						case <-a.otioReadyChan:
+							// already closed
+						default:
+							close(a.otioReadyChan)
+						}
+					}
+					a.currentProjectMu.Unlock()
+				}()
+
+				if otioData.Status != "success" || otioData.OtioPath == "" {
+					log.Printf("msgEndpoint: otioExported reported status '%s', message: %s", otioData.Status, otioData.Message)
+					return
+				}
+
+				// Wait briefly if currentProject is being unmarshaled
+				var currProj *ProjectDataPayload
+				for attempts := 0; attempts < 20; attempts++ {
+					a.currentProjectMu.RLock()
+					currProj = a.currentProject
+					a.currentProjectMu.RUnlock()
+					if currProj != nil {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+
+				if currProj == nil {
+					log.Printf("msgEndpoint: Warning - received otioExported but currentProject is nil")
+					return
+				}
+
+				log.Printf("msgEndpoint: Ingesting OTIO link groups from: %s", otioData.OtioPath)
+				if err := ParseOTIOLinkGroups(otioData.OtioPath, currProj); err != nil {
+					log.Printf("msgEndpoint: Error parsing OTIO link groups: %v", err)
+					return
+				}
+
+				if err := a.MixdownLinkedAudio(*currProj); err != nil {
+					log.Printf("msgEndpoint: Error pre-rendering linked audio mixdowns: %v", err)
+				}
+
+				log.Printf("msgEndpoint: Successfully parsed OTIO link groups. Emitting projectDataUpdated to frontend.")
+				a.emitEvent("projectDataUpdated", currProj)
+			}()
+			return
+
 		case "taskResult":
 			var taskData PythonCommandResponse
 			if err := json.Unmarshal(msg.Payload, &taskData); err != nil {
 				log.Printf("msgEndpoint: Error unmarshalling taskResult: %v", err)
 			}
 			w.WriteHeader(http.StatusOK)
+
+			if taskData.Data != nil {
+				dataBytes, err := json.Marshal(taskData.Data)
+				if err == nil {
+					var pd ProjectDataPayload
+					if err := json.Unmarshal(dataBytes, &pd); err == nil {
+						if taskData.OtioPath != "" {
+							if err := ParseOTIOLinkGroups(taskData.OtioPath, &pd); err != nil {
+								log.Printf("msgEndpoint: Error parsing OTIO link groups from taskResult: %v", err)
+							} else {
+								log.Printf("msgEndpoint: Successfully parsed OTIO link groups directly in taskResult")
+							}
+						}
+						a.UpsertDaVinciSession(&pd, a.otioReadyChan)
+						if taskData.OtioPath != "" && a.otioReadyChan != nil {
+							a.currentProjectMu.Lock()
+							select {
+							case <-a.otioReadyChan:
+							default:
+								close(a.otioReadyChan)
+							}
+							a.currentProjectMu.Unlock()
+						}
+						// Supply the enriched payload to taskData so SyncWithDavinci returns it enriched
+						taskData.Data = &pd
+					}
+				}
+			}
 			a.pendingMu.Lock()
 			respCh, ok := a.pendingTasks[taskID]
 			delete(a.pendingTasks, taskID)
@@ -681,6 +782,10 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 	a.pendingTasks[taskID] = respCh
 	a.pendingMu.Unlock()
 
+	a.currentProjectMu.Lock()
+	a.otioReadyChan = make(chan struct{})
+	a.currentProjectMu.Unlock()
+
 	// Cleanup deferred to ensure it runs
 	defer func() {
 		a.pendingMu.Lock()
@@ -733,6 +838,25 @@ func (a *App) SyncWithDavinci() (*PythonCommandResponse, error) { // Use your ac
 
 	// Python reported success, and no alert was needed (or it was handled)
 	log.Printf("Go: Python task %s reported success. Message: %s", taskID, finalResponse.Message)
+
+	// Ensure OTIO link groups ingestion has completed before returning sync result
+	a.currentProjectMu.RLock()
+	otioChan := a.otioReadyChan
+	a.currentProjectMu.RUnlock()
+	if otioChan != nil {
+		select {
+		case <-otioChan:
+		case <-time.After(1 * time.Second):
+			log.Printf("SyncWithDavinci: Timed out waiting for OTIO export, returning current state")
+		}
+	}
+
+	a.currentProjectMu.RLock()
+	if a.currentProject != nil {
+		finalResponse.Data = a.currentProject
+	}
+	a.currentProjectMu.RUnlock()
+
 	return &finalResponse, nil // finalResponse.AlertIssued will be false if no alert was processed
 }
 
@@ -759,6 +883,18 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 	a.pendingMu.Lock()
 	a.pendingTasks[taskID] = respCh
 	a.pendingMu.Unlock()
+
+	// Ensure OTIO link groups ingestion has completed before finalizing timeline
+	a.currentProjectMu.RLock()
+	otioChan := a.otioReadyChan
+	a.currentProjectMu.RUnlock()
+	if otioChan != nil {
+		select {
+		case <-otioChan:
+		case <-time.After(5 * time.Second):
+			log.Printf("MakeFinalTimeline: Timed out waiting for OTIO export, proceeding with existing data")
+		}
+	}
 
 	log.Printf("Go: Starting task 'makeFinalTimeline' with ID: %s", taskID)
 

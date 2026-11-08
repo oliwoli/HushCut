@@ -12,13 +12,14 @@ import {
 } from "@/components/ui/context-menu"
 
 import { Progress } from "../ui/progress";
-import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, Check, CheckIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
-import { useClipStore, useIsClipModified } from "@/stores/clipStore";
+import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, CheckIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
+import { isConstituentClipOverridden, useClipStore, useIsClipModified } from "@/stores/clipStore";
 import { useVirtualizer, VirtualItem, Virtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
 import { ContextMenuLabel } from "@radix-ui/react-context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { useUiStore } from "@/stores/uiStore";
+import { DisplayClip, buildDisplayClips } from "@/lib/clipUtils";
 
 
 function downsamplePeaks(fullPeaks: number[], targetPeakCount: number) {
@@ -94,8 +95,8 @@ const MIN_SAMPLES_PER_PIXEL = 128; // Ensures very short clips still have some d
 
 
 const waveformCache = new Map<string, number[]>();
-const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, allClipIds, forwardedRef }: {
-  item: main.TimelineItem;
+const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, allClipIds, forwardedRef }: {
+  clip: DisplayClip;
   index: string;
   isSelected: boolean;
   onClipClick: (id: string) => void;
@@ -109,34 +110,34 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
   // compute jobKey before state hooks
   const { startSeconds, endSeconds } = useMemo(() => {
     if (
-      typeof item.source_start_frame !== "number" ||
-      typeof item.source_end_frame !== "number" ||
+      typeof clip.source_start_frame !== "number" ||
+      typeof clip.source_end_frame !== "number" ||
       fps <= 0
     ) {
       return { startSeconds: 0, endSeconds: 0 };
     }
     const start =
-      item.type === "Compound" ? 0 : item.source_start_frame;
+      clip.type === "Compound" ? 0 : clip.source_start_frame;
     const end =
-      item.type === "Compound"
-        ? item.end_frame - item.start_frame
-        : item.source_end_frame;
+      clip.type === "Compound"
+        ? clip.end_frame - clip.start_frame
+        : clip.source_end_frame;
     return {
       startSeconds: start / fps,
       endSeconds: end / fps,
     };
-  }, [item, fps]);
+  }, [clip, fps]);
 
   const jobKey = useMemo(
     () =>
-      item.processed_file_name
+      clip.processed_file_name
         ? generateWaveformJobKey(
-          item.processed_file_name,
+          clip.processed_file_name,
           startSeconds,
           endSeconds
         )
         : "",
-    [item.processed_file_name, startSeconds, endSeconds]
+    [clip.processed_file_name, startSeconds, endSeconds]
   );
 
   // initialize from cache if present
@@ -146,37 +147,84 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
   const [isFetchingWaveform, setIsFetchingWaveform] = useState(false);
 
   // progress / error from zustand
-  const progress = useProgressStore((s) =>
-    item.processed_file_name
-      ? s.conversionProgress[item.processed_file_name]
-      : undefined
-  );
-  const hasError = useProgressStore((s) =>
-    item.processed_file_name
-      ? s.conversionErrors[item.processed_file_name]
-      : false
-  );
+  const progress = useProgressStore((s) => {
+    if (!clip.processed_file_name) return undefined;
+    const selfProgress = s.conversionProgress[clip.processed_file_name];
+    if (typeof selfProgress === "number" && selfProgress < 100) {
+      return selfProgress;
+    }
+    if (clip.is_linked_group && clip.constituent_processed_file_names) {
+      for (const fn of clip.constituent_processed_file_names) {
+        const itemProg = s.conversionProgress[fn];
+        if (typeof itemProg === "number" && itemProg < 100) {
+          return itemProg;
+        }
+      }
+    }
+    return selfProgress;
+  });
+  const hasError = useProgressStore((s) => {
+    if (!clip.processed_file_name) return false;
+    if (s.conversionErrors[clip.processed_file_name]) return true;
+    if (clip.is_linked_group && clip.constituent_processed_file_names) {
+      for (const fn of clip.constituent_processed_file_names) {
+        if (s.conversionErrors[fn]) return true;
+      }
+    }
+    return false;
+  });
   const waveformProgress = useProgressStore((s) => s.waveformProgress[jobKey]);
 
   const isConverting =
     typeof progress === "number" && progress >= 0 && progress < 100;
   const isLoading = isConverting || isFetchingWaveform;
-  const isModified = useIsClipModified(item.id);
+  const isModified = useIsClipModified(clip.id);
 
   const bypassed = useClipStore((s) =>
-    s.getParameter(item.id, "bypassed")
+    s.getParameter(clip.id, "bypassed")
   );
+  const timelineItems = useClipStore((s) => s.timelineItems);
+  const parameters = useClipStore((s) => s.parameters);
+  const activeGroupViewId = useClipStore((s) => {
+    if (!clip.is_linked_group) return clip.id;
+    if (
+      s.currentClipId === clip.id ||
+      clip.constituent_item_ids.includes(s.currentClipId || "")
+    ) {
+      return s.currentClipId || clip.id;
+    }
+    return s.groupActiveView[clip.id] || clip.id;
+  });
+
+  const constituentItems = useMemo(() => {
+    if (!clip.is_linked_group) return [];
+    return clip.constituent_item_ids
+      .map((id) => timelineItems[id])
+      .filter((it): it is main.TimelineItem => Boolean(it))
+      .sort((a, b) => a.track_index - b.track_index);
+  }, [clip.is_linked_group, clip.constituent_item_ids, timelineItems]);
+
+  const displayedClipName = useMemo(() => {
+    if (clip.is_linked_group && activeGroupViewId !== clip.id) {
+      const item = timelineItems[activeGroupViewId];
+      if (item) {
+        return item.name || `Clip on A${item.track_index}`;
+      }
+    }
+    return clip.name;
+  }, [clip.is_linked_group, clip.id, clip.name, activeGroupViewId, timelineItems]);
 
   // bypass toggle
-  const setBypassed = (val: boolean) =>
-    useClipStore.getState().setParameter(item.id, "bypassed", val);
+  const setBypassed = (val: boolean) => {
+    useClipStore.getState().setParameter(clip.id, "bypassed", val);
+  };
 
   // effect to fetch & cache waveform
   useEffect(() => {
     const clipDuration = endSeconds - startSeconds;
     if (
       waveformCache.has(jobKey) ||
-      !item.processed_file_name ||
+      !clip.processed_file_name ||
       clipDuration <= 0 ||
       isConverting
     ) {
@@ -193,7 +241,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
         if (cancelled) return;
 
         const fullResPeakData = await GetWaveform(
-          item.processed_file_name!,
+          clip.processed_file_name!,
           128,
           "linear",
           -60.0,
@@ -207,7 +255,7 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
         }
       } catch (e) {
         if (!cancelled)
-          console.error("Waveform fetch failed for", item.name, e);
+          console.error("Waveform fetch failed for", clip.name, e);
       } finally {
         if (!cancelled) setIsFetchingWaveform(false);
       }
@@ -219,18 +267,18 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
     };
   }, [
     jobKey,
-    item.processed_file_name,
+    clip.processed_file_name,
     startSeconds,
     endSeconds,
     isConverting,
   ]);
 
   const handleClipClick = useCallback(
-    () => onClipClick(item.id),
-    [item.id, onClipClick]
+    () => onClipClick(clip.is_linked_group ? activeGroupViewId : clip.id),
+    [clip.is_linked_group, clip.id, activeGroupViewId, onClipClick]
   );
 
-  const isNested = item.type && item.type !== null && item.type.length > 0
+  const isNested = clip.type && clip.type !== null && clip.type.length > 0;
 
   const handleBypassClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -250,15 +298,16 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
   };
 
   return (
-
     <ContextMenu>
       <div className={cn(
         "flex flex-col shrink-0 max-w-44 min-w-24 w-full",
       )}>
-        <div className="flex justify-between items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
+        <div className="flex justify-start items-center text-xs text-zinc-500 font-mono pr-2 pb-1 [@media(max-height:800px)]:pb-0.5 space-x-2">
           <span className={cn(bypassed ? "text-stone-500" : "text-stone-200", " p-1 rounded-xs border flex items-center")}>{index}</span>
-          <span className="flex items-center gap-1">{frameToTimecode(item.start_frame, fps)}</span>
-          <span className="flex items-center gap-0"><AlignJustifyIcon className="h-4 items-center text-gray-700" /> A{item.track_index}</span>
+          <span className="flex items-center gap-1 text-[0.6rem]">{frameToTimecode(clip.start_frame, fps)}</span>
+          <span className="flex items-center gap-1">
+            <AlignJustifyIcon className="h-4 items-center text-gray-700" /> {clip.track_label}
+          </span>
         </div>
 
         <ContextMenuTrigger className="flex">
@@ -313,7 +362,6 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
               )}
             </div>
 
-
             <div className={cn(
               "absolute inset-0 flex items-center justify-center  p-1 bottom-6 [@media(max-height:800px)]:bottom-5",
               bypassed ? "text-gray-600/50" : "text-teal-600",
@@ -333,19 +381,22 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
               "relative z-10 h-full flex flex-col justify-end p-2 pb-[0.450rem] [@media(max-height:800px)]:p-1.5 [@media(max-height:800px)]:pb-1 bg-linear-to-t from-black/50 via-black/20 to-transparent"
             )}>
               <div className="flex items-center space-x-1.5">
-                {isNested ? (
-                  <LayersIcon className="text-sm h-3.5 text-stone-400 p-0 mr-1" />
+                {clip.is_linked_group ? (
+                  <span title={`Linked Audio (${clip.track_label})`} className="inline-flex items-center shrink-0 mr-1">
+                    <ClipLinkIcon className="h-3.5 w-3.5 text-gray-300 p-0" />
+                  </span>
+                ) : isNested ? (
+                  <LayersIcon className="text-sm h-3.5 text-stone-400 p-0 mr-1 shrink-0" />
                 ) : (
-                  <AudioLinesIcon className={cn("text-sm h-3.5 text-stone-400 p-0 mr-1")} />
+                  <AudioLinesIcon className={cn("text-sm h-3.5 text-stone-400 p-0 mr-1 shrink-0")} />
                 )}
                 <div className={cn(
-
                   "flex items-baseline space-x-1")}>
                   <p className={cn(
                     "font-normal text-xs truncate max-w-28",
                     isSelected ? "text-zinc-200/90" : "text-gray-400"
                   )}>
-                    {truncateFilename(item.name)}</p>
+                    {truncateFilename(displayedClipName)}</p>
                   <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="absolute left-0.5 top-0.5" /></span>
                 </div>
               </div>
@@ -353,23 +404,81 @@ const AudioClip = memo(({ item, index, isSelected, onClipClick, disabled, fps, a
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="text-xs text-gray-300">
+          {clip.is_linked_group && (
+            <>
+              <ContextMenuItem
+                className="text-xs"
+                onClick={() => onClipClick(clip.id)}
+              >
+                {activeGroupViewId === clip.id ? (
+                  <CheckIcon className="w-[1.25em] h-[1.25em]" />
+                ) : (
+                  <div className="w-[1.25em]" />
+                )}
+                <span className="font-medium">Combined Overview</span>
+              </ContextMenuItem>
+              <DropdownMenuSeparator />
+              {constituentItems.map((item) => {
+                const itemParams = parameters[item.id];
+                const isItemBypassed = Boolean(itemParams?.bypassed);
+                const isItemOverridden = isConstituentClipOverridden(
+                  item.id,
+                  parameters
+                );
+                const isActiveView = activeGroupViewId === item.id;
+                return (
+                  <ContextMenuItem
+                    key={item.id}
+                    className="text-xs"
+                    onClick={() => onClipClick(item.id)}
+                  >
+                    {isActiveView ? (
+                      <CheckIcon className="w-[1.25em] h-[1.25em]" />
+                    ) : (
+                      <div className="w-[1.25em]" />
+                    )}
+                    <span className="text-zinc-400 font-mono text-[11px]">
+                      A{item.track_index}
+                    </span>
+                    <span className="truncate">
+                      {item.name || `Clip on A${item.track_index}`}
+                    </span>
+                    {isItemBypassed ? (
+                      <span className="text-orange-400 text-[10px] font-medium">
+                        (Bypassed)
+                      </span>
+                    ) : isItemOverridden ? (
+                      <span className="text-teal-400 text-[10px] font-medium">
+                        (Custom)
+                      </span>
+                    ) : null}
+                  </ContextMenuItem>
+                );
+              })}
+              <DropdownMenuSeparator />
+            </>
+          )}
           <ContextMenuItem className="text-xs" onClick={handleBypassClick}>
-            {(!bypassed) ? (
+            {bypassed ? (
               <CheckIcon className="w-[1.25em] h-[1.25em]" />
             ) : (
-              <div className="w-2" />
+              <div className="w-[1.25em]" />
             )}
-            Enable/Disable Clip
-
+            Bypass Clip
           </ContextMenuItem>
           <DropdownMenuSeparator />
-          <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-500">{item.name}</ContextMenuLabel>
+          {!clip.is_linked_group ? (
+            <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-400">
+              {clip.name}
+            </ContextMenuLabel>
+          ) : (
+            <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-400">
+              Linked Audio ({clip.track_label}) • {clip.constituent_item_ids.length} channels
+            </ContextMenuLabel>
+          )}
         </ContextMenuContent>
       </div>
     </ContextMenu>
-
-
-
   );
 });
 
@@ -399,7 +508,10 @@ function isPartiallyVisibleHorizontal(
 
 
 interface FileSelectorProps {
-  audioItems: main.TimelineItem[] | null | undefined; currentFileId: string | null;
+  displayClips?: DisplayClip[];
+  audioItems?: main.TimelineItem[] | null | undefined;
+  linkedAudioGroups?: { [_ in string]?: main.LinkedAudioGroup | null } | null;
+  currentFileId: string | null;
   onFileChange: (selectedItemId: string) => void;
   disabled?: boolean;
   className?: string;
@@ -407,7 +519,9 @@ interface FileSelectorProps {
 }
 
 const _ClipSelector: React.FC<FileSelectorProps> = ({
+  displayClips: propDisplayClips,
   audioItems,
+  linkedAudioGroups,
   currentFileId,
   onFileChange,
   fps,
@@ -416,15 +530,12 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
 }) => {
   const currentClipId = useClipStore((s) => s.currentClipId);
 
-  const sortedItems = useMemo(() => {
-    if (!audioItems || audioItems.length === 0) return [];
-    return [...audioItems]
-      .sort((a, b) => {
-        if (a.start_frame !== b.start_frame) return a.start_frame - b.start_frame;
-        if (a.track_index !== b.track_index) return a.track_index - b.track_index;
-        return a.end_frame - b.end_frame;
-      });
-  }, [audioItems]);
+  const displayClips = useMemo(() => {
+    if (propDisplayClips && propDisplayClips.length > 0) {
+      return propDisplayClips;
+    }
+    return buildDisplayClips(audioItems, linkedAudioGroups);
+  }, [propDisplayClips, audioItems, linkedAudioGroups]);
 
   const handleFileChange = useCallback((selectedItemId: string) => {
     onFileChange(selectedItemId);
@@ -435,7 +546,7 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   // ✨ Create a map to hold refs for each item's button
   const itemRefs = useRef(new Map<string, HTMLButtonElement | null>());
 
-  if (sortedItems.length === 0) {
+  if (displayClips.length === 0) {
     return (
       <div className={cn("flex flex-col items-center justify-center text-center p-8 bg-zinc-800/50 border-2 border-dashed border-zinc-700 rounded-sm", className)}>
         <AudioFileIcon className="h-10 w-10 text-zinc-500 mb-3" />
@@ -446,7 +557,7 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   }
   const currUiScale = useUiStore(s => s.uiScale);
   const columnVirtualizer = useVirtualizer({
-    count: sortedItems.length,
+    count: displayClips.length,
     getScrollElement: () => scrollAreaRef.current?.querySelector('[data-slot="scroll-area-viewport"]') ?? null,
     estimateSize: () => 150 * currUiScale,
     horizontal: true,
@@ -459,23 +570,24 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
   // Re-measure when uiScale or item count changes
   useLayoutEffect(() => {
     columnVirtualizer.measure?.();
-
-  }, [currUiScale, sortedItems.length]);
-
+  }, [currUiScale, displayClips.length]);
 
   useEffect(() => {
     if (!columnVirtualizer) return;
     if (!currentClipId) return;
 
-    const selectedIndex = sortedItems.findIndex(item => item.id === currentClipId);
+    const selectedIndex = displayClips.findIndex(
+      (clip) => clip.id === currentClipId || clip.constituent_item_ids?.includes(currentClipId)
+    );
     if (selectedIndex === -1) return;
 
+    const matchedClip = displayClips[selectedIndex];
     const viewport =
       scrollAreaRef.current?.querySelector<HTMLDivElement>(
         '[data-slot="scroll-area-viewport"]'
       );
 
-    const buttonEl = itemRefs.current.get(currentClipId);
+    const buttonEl = itemRefs.current.get(matchedClip.id);
 
     if (!viewport || !buttonEl) return;
 
@@ -493,7 +605,7 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
       });
     }
 
-  }, [currentClipId, sortedItems, columnVirtualizer]);
+  }, [currentClipId, displayClips, columnVirtualizer]);
 
   const virtualItems = columnVirtualizer.getVirtualItems();
 
@@ -573,8 +685,7 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
     };
   }, []);
 
-
-  const allClipIds = useMemo(() => sortedItems.map(item => item.id), [sortedItems]);
+  const allClipIds = useMemo(() => displayClips.map((clip) => clip.id), [displayClips]);
 
   return (
     <ScrollArea ref={scrollAreaRef} className={cn("w-full whitespace-nowrap pb-4 overflow-visible", className)}>
@@ -588,13 +699,16 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
         }}
       >
         {virtualItems.map((virtualItem) => {
-          const item = sortedItems[virtualItem.index];
-          const itemUniqueIdentifier = item.id || item.processed_file_name;
-          if (!itemUniqueIdentifier) return null;
+          const clip = displayClips[virtualItem.index];
+          if (!clip) return null;
+
+          const isSelected =
+            currentClipId === clip.id ||
+            Boolean(clip.constituent_item_ids?.includes(currentClipId || ""));
 
           return (
             <div
-              key={virtualItem.key}
+              key={clip.id}
               data-index={virtualItem.index}
               ref={columnVirtualizer.measureElement}
               style={{
@@ -607,17 +721,15 @@ const _ClipSelector: React.FC<FileSelectorProps> = ({
               }}
             >
               <AudioClip
-                forwardedRef={(el) => { itemRefs.current.set(item.id, el); }}
-                index={String(virtualItem.index + 1).padStart(String(sortedItems.length).length, '0')}
-                item={item}
-                isSelected={currentClipId === itemUniqueIdentifier}
+                forwardedRef={(el) => { itemRefs.current.set(clip.id, el); }}
+                index={String(virtualItem.index + 1).padStart(String(displayClips.length).length, '0')}
+                clip={clip}
+                isSelected={isSelected}
                 onClipClick={handleFileChange}
                 disabled={disabled}
                 fps={fps}
                 allClipIds={allClipIds}
               />
-
-
             </div>
           );
         })}

@@ -232,9 +232,12 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 
 	for i := range projectData.Timeline.AudioTrackItems {
 		item := &projectData.Timeline.AudioTrackItems[i]
-		//log.Printf("sourceFPS is %f", item.SourceFPS)
+		itemFPS := item.SourceFPS
+		if itemFPS <= floatEpsilon {
+			itemFPS = timelineFPS
+		}
 		// Ratio to convert source frames FROM timeline domain TO project domain for processing.
-		sourceToTimelineFpsRatio := item.SourceFPS / timelineFPS
+		sourceToTimelineFpsRatio := itemFPS / timelineFPS
 		itemSpecificSilencesInSeconds, silencesFound := allClipSilencesMap[item.ID]
 		if !silencesFound {
 			if len(item.EditInstructions) == 0 {
@@ -246,8 +249,8 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		var frameBasedSilences []SilenceInterval
 		if len(itemSpecificSilencesInSeconds) > 0 {
 			for _, silenceInSec := range itemSpecificSilencesInSeconds {
-				startFrame := silenceInSec.Start * item.SourceFPS
-				endFrame := silenceInSec.End * item.SourceFPS
+				startFrame := silenceInSec.Start * itemFPS
+				endFrame := silenceInSec.End * itemFPS
 				if endFrame > startFrame+floatEpsilon {
 					frameBasedSilences = append(frameBasedSilences, SilenceInterval{Start: startFrame, End: endFrame})
 				}
@@ -262,7 +265,7 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 			EndFrame:   item.EndFrame,
 		}
 
-		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, item.SourceFPS, timelineFPS, keepSilenceSegments)
+		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, itemFPS, timelineFPS, keepSilenceSegments)
 		// NO MORE CONVERSIONS. The returned source frames are already in the
 		// correct project FPS domain, which is what the Python script expects.
 		item.EditInstructions = editInstructions

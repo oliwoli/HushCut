@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/go-audio/audio"
@@ -41,7 +42,11 @@ func (a *App) resolvePublicAudioPath(webPath string) (string, error) {
 
 func (a *App) GetWaveform(filePath string, samplesPerPixel int, peakType string, minDb float64, clipStartSeconds float64, clipEndSeconds float64) (*PrecomputedWaveformData, error) {
 	maxDb := 0.0
-	if err := a.WaitForFile(filePath); err != nil {
+	if a.isLinkedAudioFile(filePath) {
+		if err := a.EnsureLinkedAudioMixdown(filePath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", filePath, err)
+		}
+	} else if err := a.WaitForFile(filePath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready for silence detection: %w", err)
 	}
 	data, err := a.GetOrGenerateWaveformWithCache(filePath, samplesPerPixel, peakType, minDb, maxDb, clipStartSeconds, clipEndSeconds)
@@ -101,7 +106,11 @@ func (a *App) GetOrGenerateWaveformWithCache(
 	}
 	a.updateFileUsage(localFSPath)
 
-	if err := a.WaitForFile(localFSPath); err != nil {
+	if a.isLinkedAudioFile(webInputPath) {
+		if err := a.EnsureLinkedAudioMixdown(localFSPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", webInputPath, err)
+		}
+	} else if err := a.WaitForFile(localFSPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file '%s' to be ready: %w", webInputPath, err)
 	}
 
@@ -133,13 +142,18 @@ func (a *App) GetOrGenerateWaveformWithCache(
 
 		var waveformData *PrecomputedWaveformData
 		var err error
-		switch peakType {
-		case "linear":
-			waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel)
-		case "logarithmic":
-			waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb)
-		default:
-			err = fmt.Errorf("unknown peakType: '%s'", peakType)
+		if a.isLinkedAudioFile(webInputPath) {
+			waveformData, err = a.computeLinkedGroupWaveform(webInputPath, samplesPerPixel, peakType, minDb, maxDb)
+		}
+		if waveformData == nil || err != nil {
+			switch peakType {
+			case "linear":
+				waveformData, err = a.ProcessWavToLinearPeaks(webInputPath, samplesPerPixel)
+			case "logarithmic":
+				waveformData, err = a.ProcessWavToLogarithmicPeaks(webInputPath, samplesPerPixel, minDb, maxDb)
+			default:
+				err = fmt.Errorf("unknown peakType: '%s'", peakType)
+			}
 		}
 		if err != nil {
 			return nil, err
@@ -156,6 +170,127 @@ func (a *App) GetOrGenerateWaveformWithCache(
 
 	cachedData := v.(*PrecomputedWaveformData)
 	return sliceWaveform(cachedData, clipStartSeconds, clipEndSeconds), nil
+}
+
+// computeLinkedGroupWaveform builds the combined waveform for a linked group as the pointwise
+// maximum across its constituent items' waveforms so that the waveform amplitude matches
+// per-track silence detection thresholds without summing gain boost or clipping.
+func (a *App) computeLinkedGroupWaveform(
+	webInputPath string,
+	samplesPerPixel int,
+	peakType string,
+	minDb float64,
+	maxDb float64,
+) (*PrecomputedWaveformData, error) {
+	base := filepath.Base(webInputPath)
+	parts := strings.Split(base, "_")
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid linked audio filename format: %s", base)
+	}
+	groupID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse group ID from %s: %w", base, err)
+	}
+
+	var pd *ProjectDataPayload
+	session := a.GetActiveTimelineSession()
+	if session != nil && session.Data != nil {
+		pd = session.Data
+	} else {
+		a.currentProjectMu.RLock()
+		pd = a.currentProject
+		a.currentProjectMu.RUnlock()
+	}
+	if pd == nil {
+		return nil, fmt.Errorf("no active project data for linked waveform %s", base)
+	}
+
+	var items []TimelineItem
+	for _, it := range pd.Timeline.AudioTrackItems {
+		if it.LinkGroupID != nil && *it.LinkGroupID == groupID {
+			items = append(items, it)
+		}
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no constituent items found for group %d", groupID)
+	}
+
+	fps := pd.Timeline.FPS
+	if fps <= 0 {
+		fps = 30.0
+	}
+
+	minStart := items[0].StartFrame
+	maxEnd := items[0].EndFrame
+	for _, it := range items {
+		if it.StartFrame < minStart {
+			minStart = it.StartFrame
+		}
+		if it.EndFrame > maxEnd {
+			maxEnd = it.EndFrame
+		}
+	}
+
+	groupDurationSec := (maxEnd - minStart) / fps
+	if groupDurationSec <= 0 {
+		return nil, fmt.Errorf("invalid group duration for group %d", groupID)
+	}
+
+	type itemPeakSlice struct {
+		offsetSec float64
+		wf        *PrecomputedWaveformData
+	}
+	var slices []itemPeakSlice
+	var peaksPerSec float64
+
+	for _, it := range items {
+		if it.ProcessedFileName == nil || *it.ProcessedFileName == "" || a.isLinkedAudioFile(*it.ProcessedFileName) {
+			continue
+		}
+		startSec := it.SourceStartFrame / fps
+		endSec := (it.SourceStartFrame + it.Duration) / fps
+		if endSec <= startSec {
+			continue
+		}
+		wf, wfErr := a.GetOrGenerateWaveformWithCache(*it.ProcessedFileName, samplesPerPixel, peakType, minDb, maxDb, startSec, endSec)
+		if wfErr != nil || wf == nil || len(wf.Peaks) == 0 || wf.Duration <= 0 {
+			continue
+		}
+		if peaksPerSec <= 0 {
+			peaksPerSec = float64(len(wf.Peaks)) / wf.Duration
+		}
+		slices = append(slices, itemPeakSlice{
+			offsetSec: (it.StartFrame - minStart) / fps,
+			wf:        wf,
+		})
+	}
+
+	if len(slices) == 0 || peaksPerSec <= 0 {
+		return nil, fmt.Errorf("no valid constituent waveforms for group %d", groupID)
+	}
+
+	totalPeaks := int(math.Round(groupDurationSec * peaksPerSec))
+	if totalPeaks < 1 {
+		totalPeaks = 1
+	}
+	combinedPeaks := make([]float64, totalPeaks)
+
+	for _, s := range slices {
+		offsetIdx := int(math.Round(s.offsetSec * peaksPerSec))
+		for i, p := range s.wf.Peaks {
+			targetIdx := offsetIdx + i
+			if targetIdx >= 0 && targetIdx < totalPeaks {
+				if p > combinedPeaks[targetIdx] {
+					combinedPeaks[targetIdx] = p
+				}
+			}
+		}
+	}
+
+	return &PrecomputedWaveformData{
+		Duration: groupDurationSec,
+		Peaks:    combinedPeaks,
+	}, nil
 }
 
 // struct for the output JSON matching WaveSurfer's needs for precomputed peaks
@@ -182,7 +317,11 @@ func (a *App) ProcessWavToLogarithmicPeaks(
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}
-	if err := a.WaitForFile(absPath); err != nil {
+	if a.isLinkedAudioFile(webInputPath) {
+		if err := a.EnsureLinkedAudioMixdown(absPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", webInputPath, err)
+		}
+	} else if err := a.WaitForFile(absPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
 
@@ -363,7 +502,11 @@ func (a *App) ProcessWavToLinearPeaks(
 	if err != nil {
 		return nil, fmt.Errorf("path resolution error: %w", err)
 	}
-	if err := a.WaitForFile(absPath); err != nil {
+	if a.isLinkedAudioFile(webInputPath) {
+		if err := a.EnsureLinkedAudioMixdown(absPath); err != nil {
+			return nil, fmt.Errorf("error ensuring linked audio mixdown for '%s': %w", webInputPath, err)
+		}
+	} else if err := a.WaitForFile(absPath); err != nil {
 		return nil, fmt.Errorf("error waiting for file to be ready: %w", err)
 	}
 

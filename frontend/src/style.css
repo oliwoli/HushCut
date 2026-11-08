@@ -340,11 +340,39 @@ div[part="minimap-overlay"] {
     100% { transform: rotate(-360deg) scale(1); }
   }
 
+  --animate-spin-rotate: spin-rotate 315ms cubic-bezier(0.1, 0.25, 0.07, 1.25);
+
+  @keyframes spin-rotate {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(-360deg); }
+  }
+
+  --animate-spin-scale: spin-scale 315ms cubic-bezier(0.1, 0.25, 0.07, 1.25);
+
+  @keyframes spin-scale {
+    0%   { transform: scale(0.7); }
+    100% { transform: scale(1); }
+  }
+
   --animate-press-tilt: press-tilt 600ms linear infinite both;
 
   @keyframes press-tilt {
     0%   { transform: rotate(0deg) scale(1.0); }
     100% { transform: rotate(-359deg) scale(0.95); }
+  }
+
+  --animate-press-rotate: press-rotate 600ms linear infinite both;
+
+  @keyframes press-rotate {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(-359deg); }
+  }
+
+  --animate-press-scale: press-scale 600ms linear infinite both;
+
+  @keyframes press-scale {
+    0%   { transform: scale(1.0); }
+    100% { transform: scale(0.95); }
   }
 
   --animate-sync-box: 125ms fade-in-and-fly-up 2000ms cubic-bezier(0, 0.99, 0.99, 1) forwards;
@@ -381,8 +409,16 @@ div[part="minimap-overlay"] {
   .animate-spin-ccw {
     animation: var(--animate-spin-ccw);
   }
-    .animate-press-tilt { animation: var(--animate-press-tilt); }
-    .animate-enter-calm-sm { animation: var(--animate-enter-calm-sm); }
+  .animate-spin-rotate {
+    animation: var(--animate-spin-rotate);
+  }
+  .animate-spin-scale {
+    animation: var(--animate-spin-scale);
+  }
+  .animate-press-tilt { animation: var(--animate-press-tilt); }
+  .animate-press-rotate { animation: var(--animate-press-rotate); }
+  .animate-press-scale { animation: var(--animate-press-scale); }
+  .animate-enter-calm-sm { animation: var(--animate-enter-calm-sm); }
 }
 
 
