@@ -91,6 +91,7 @@ export interface ClipStore {
   groupToClips: Record<string, string[]>;
   timelineItems: Record<string, main.TimelineItem>;
   currentClipId: string | null;
+  groupActiveView: Record<string, string>;
 
   liveDefaultParameters: ClipParameters;
   // This is the setting to enable/disable the feature.
@@ -146,6 +147,7 @@ const clampParameter = (key: keyof ClipParameters, val: number): number => {
 
 export const useClipStore = create<ClipStore>((set, get) => ({
   currentClipId: null,
+  groupActiveView: {},
   parameters: {},
   clipToGroup: {},
   groupToClips: {},
@@ -155,7 +157,26 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
   syncDefaultsToLastEdit: true, // The feature is ON by default
 
-  setCurrentClipId: (clipId) => set({ currentClipId: clipId }),
+  setCurrentClipId: (clipId) =>
+    set((state) => {
+      if (!clipId) {
+        return { currentClipId: null };
+      }
+      if (state.groupToClips?.[clipId]) {
+        return {
+          currentClipId: clipId,
+          groupActiveView: { ...state.groupActiveView, [clipId]: clipId },
+        };
+      }
+      const parentGroupId = state.clipToGroup?.[clipId];
+      if (parentGroupId) {
+        return {
+          currentClipId: clipId,
+          groupActiveView: { ...state.groupActiveView, [parentGroupId]: clipId },
+        };
+      }
+      return { currentClipId: clipId };
+    }),
   setClipToGroupMapping: (mapping, reverseMapping, itemsMap) =>
     set((state) => ({
       clipToGroup: mapping,

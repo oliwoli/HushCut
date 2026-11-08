@@ -52,7 +52,7 @@ func ComputeLinkedAudioHash(items []TimelineItem) string {
 	})
 
 	var b strings.Builder
-	b.WriteString("v1;")
+	b.WriteString("v2;")
 	for _, it := range sortedItems {
 		relStart := it.StartFrame - minStart
 		pName := ""

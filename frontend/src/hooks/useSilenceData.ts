@@ -206,10 +206,8 @@ export function useSilenceData(
           const itemStartFrame = item?.start_frame ?? activeFile.startFrame;
           const sourceStartFrame = item?.source_start_frame ?? activeFile.sourceStartFrame;
           const sourceEndFrame = item?.source_end_frame ?? activeFile.sourceEndFrame;
-          const itemFps = item?.source_fps && item.source_fps > 0 ? item.source_fps : timelineFps;
-
-          const clipStartSeconds = sourceStartFrame / itemFps;
-          const clipEndSeconds = sourceEndFrame / itemFps;
+          const clipStartSeconds = sourceStartFrame / timelineFps;
+          const clipEndSeconds = sourceEndFrame / timelineFps;
           const offsetSeconds = (itemStartFrame - groupMinStart) / timelineFps;
 
           if (clipEndSeconds <= clipStartSeconds) {

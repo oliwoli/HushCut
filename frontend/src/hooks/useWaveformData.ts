@@ -5,10 +5,22 @@ import { GetWaveform } from '@wails/go/main/App';
 import { main } from '@wails/go/models';
 import type { ActiveClip } from '../types';
 import { useAppState } from '@/stores/appSync';
+import { getClipParams, useClipStore } from '@/stores/clipStore';
+import { useStoreWithEqualityFn } from 'zustand/traditional';
+import deepEqual from 'fast-deep-equal';
 import { v5 as uuidv5 } from 'uuid';
 import { LRUCache } from "lru-cache";
 
 const MY_NAMESPACE = '1b671a64-40d5-491e-99b0-da01ff1f3341';
+
+interface GroupConstituentWaveformSpec {
+    id: string;
+    processedFileName: string;
+    sourceStartFrame: number;
+    sourceEndFrame: number;
+    startFrame: number;
+    thresholdOffsetDb: number;
+}
 
 // GLOBAL CACHE: Defined outside the hook.
 // This persists even if the component using the hook is unmounted/remounted (key change).
@@ -24,6 +36,10 @@ function getClipHash(activeClip: ActiveClip): string {
     return uuidv5(`${activeClip.processedFileName}-${activeClip.sourceStartFrame}-${activeClip.sourceEndFrame}`, MY_NAMESPACE);
 }
 
+function getItemHash(processedFileName: string, sourceStartFrame: number, sourceEndFrame: number): string {
+    return uuidv5(`${processedFileName}-${sourceStartFrame}-${sourceEndFrame}`, MY_NAMESPACE);
+}
+
 export function useWaveformData(
     activeClip: ActiveClip | null,
     fps: number | 30,
@@ -35,6 +51,46 @@ export function useWaveformData(
     const [error, setError] = useState<string | null>(null);
 
     const token = useAppState(s => s.token);
+    const clipId = activeClip?.id ?? '';
+
+    // Track active constituent clips and their relative threshold offsets (groupAvg - clipThreshold)
+    // when viewing a linked group in Combined Overview.
+    // Note: Adjusting a slider in Combined Overview offsets all clips and the group average equally,
+    // so `thresholdOffsetDb` remains constant during Combined Overview slider dragging.
+    const groupConstituentSpecs = useStoreWithEqualityFn(
+        useClipStore,
+        (s): GroupConstituentWaveformSpec[] | null => {
+            if (!clipId) return null;
+            const constituents = s.groupToClips?.[clipId];
+            if (!constituents || constituents.length === 0) return null;
+
+            const activeConstituents = constituents.filter((cid) => !getClipParams(s, cid).bypassed);
+            const targetConstituents = activeConstituents.length > 0 ? activeConstituents : constituents;
+
+            let sumThreshold = 0;
+            for (const cid of targetConstituents) {
+                sumThreshold += getClipParams(s, cid).threshold;
+            }
+            const avgThreshold = sumThreshold / targetConstituents.length;
+
+            const specs: GroupConstituentWaveformSpec[] = [];
+            for (const cid of targetConstituents) {
+                const item = s.timelineItems?.[cid];
+                if (!item || !item.processed_file_name) continue;
+                const cThresh = getClipParams(s, cid).threshold;
+                specs.push({
+                    id: cid,
+                    processedFileName: item.processed_file_name,
+                    sourceStartFrame: item.source_start_frame,
+                    sourceEndFrame: item.source_end_frame,
+                    startFrame: item.start_frame,
+                    thresholdOffsetDb: Math.round((avgThreshold - cThresh) * 100) / 100,
+                });
+            }
+            return specs.length > 0 ? specs : null;
+        },
+        deepEqual
+    );
 
     // 1. Stable Hash Calculation
     // We only recalculate if the specific frame/file properties change.
@@ -63,8 +119,6 @@ export function useWaveformData(
             return;
         }
 
-        const cacheKey = `${clipHash}-${fps}`;
-        
         // Helper to generate the URL
         const start = activeClip.sourceStartFrame / fps;
         const end = activeClip.sourceEndFrame / fps;
@@ -73,6 +127,144 @@ export function useWaveformData(
                 activeClip.processedFileName
             )}&start=${start}&end=${end}&token=${token}`;
 
+        // Linked Group Combined Overview: compute pointwise maximum envelope across active constituents
+        if (groupConstituentSpecs && groupConstituentSpecs.length > 0) {
+            const groupSig = groupConstituentSpecs
+                .map((c) => `${c.id}:${c.thresholdOffsetDb}`)
+                .join('|');
+            const groupCacheKey = `${clipHash}-${fps}-group-${groupSig}`;
+
+            if (globalWaveformCache.has(groupCacheKey)) {
+                const cachedGroupData = globalWaveformCache.get(groupCacheKey);
+                if (cachedGroupData) {
+                    setPeakData(cachedGroupData);
+                    setCutAudioSegmentUrl(generateUrl());
+                    setIsLoading(false);
+                    setError(null);
+                    return;
+                }
+            }
+
+            let isActive = true;
+            setIsLoading(true);
+            setError(null);
+
+            const fetchGroupWaveform = async () => {
+                try {
+                    if (end <= start) throw new Error("Invalid duration");
+                    const groupDuration = end - start;
+                    const groupMinStartFrame = activeClip.startFrame;
+
+                    const itemWaveforms = await Promise.all(
+                        groupConstituentSpecs.map(async (spec) => {
+                            const cStart = spec.sourceStartFrame / fps;
+                            const cEnd = spec.sourceEndFrame / fps;
+                            if (cEnd <= cStart) return null;
+
+                            const itemHash = getItemHash(
+                                spec.processedFileName,
+                                spec.sourceStartFrame,
+                                spec.sourceEndFrame
+                            );
+                            const itemCacheKey = `${itemHash}-${fps}`;
+                            let wf: main.PrecomputedWaveformData | null | undefined =
+                                globalWaveformCache.get(itemCacheKey);
+                            if (!wf) {
+                                wf = await GetWaveform(
+                                    spec.processedFileName,
+                                    128,
+                                    "logarithmic",
+                                    -60.0,
+                                    cStart,
+                                    cEnd
+                                );
+                                if (wf && wf.peaks?.length > 0) {
+                                    globalWaveformCache.set(itemCacheKey, wf);
+                                }
+                            }
+                            if (!wf || !wf.peaks || wf.peaks.length === 0 || wf.duration <= 0) {
+                                return null;
+                            }
+                            return { spec, wf };
+                        })
+                    );
+
+                    const validItems = itemWaveforms.filter(
+                        (entry): entry is { spec: GroupConstituentWaveformSpec; wf: main.PrecomputedWaveformData } =>
+                            entry !== null
+                    );
+
+                    if (validItems.length === 0) {
+                        // Fallback to direct GetWaveform on activeClip
+                        const fallbackData = await GetWaveform(
+                            activeClip.processedFileName,
+                            128,
+                            "logarithmic",
+                            -60.0,
+                            start,
+                            end
+                        );
+                        if (isActive && fallbackData && fallbackData.peaks?.length > 0) {
+                            globalWaveformCache.set(groupCacheKey, fallbackData);
+                            setPeakData(fallbackData);
+                            setCutAudioSegmentUrl(generateUrl());
+                        }
+                        return;
+                    }
+
+                    const peaksPerSec = validItems[0].wf.peaks.length / validItems[0].wf.duration;
+                    const totalPeaks = Math.max(1, Math.round(groupDuration * peaksPerSec));
+                    const combinedPeaks = new Array<number>(totalPeaks).fill(0);
+
+                    for (const { spec, wf } of validItems) {
+                        const offsetSec = (spec.startFrame - groupMinStartFrame) / fps;
+                        const offsetIdx = Math.round(offsetSec * peaksPerSec);
+                        const shiftVisual = spec.thresholdOffsetDb / 60.0;
+
+                        for (let i = 0; i < wf.peaks.length; i++) {
+                            const targetIdx = offsetIdx + i;
+                            if (targetIdx >= 0 && targetIdx < totalPeaks) {
+                                const rawPeak = wf.peaks[i];
+                                const adjPeak =
+                                    rawPeak > 0
+                                        ? Math.max(0, Math.min(1, rawPeak + shiftVisual))
+                                        : 0;
+                                if (adjPeak > combinedPeaks[targetIdx]) {
+                                    combinedPeaks[targetIdx] = adjPeak;
+                                }
+                            }
+                        }
+                    }
+
+                    if (isActive) {
+                        const combinedData = new main.PrecomputedWaveformData({
+                            duration: groupDuration,
+                            peaks: combinedPeaks,
+                        });
+                        globalWaveformCache.set(groupCacheKey, combinedData);
+                        setPeakData(combinedData);
+                        setCutAudioSegmentUrl(generateUrl());
+                    }
+                } catch (e: any) {
+                    if (isActive) {
+                        setPeakData(null);
+                        setCutAudioSegmentUrl(null);
+                        setError(e.message || "Error fetching group waveform");
+                    }
+                } finally {
+                    if (isActive) setIsLoading(false);
+                }
+            };
+
+            fetchGroupWaveform();
+
+            return () => {
+                isActive = false;
+            };
+        }
+
+        const cacheKey = `${clipHash}-${fps}`;
+        
         // A. CACHE HIT:
         // If data exists globally, load it immediately and DO NOT run any async logic.
         if (globalWaveformCache.has(cacheKey)) {
@@ -93,9 +285,6 @@ export function useWaveformData(
         
         setIsLoading(true);
         setError(null);
-        // Optional: Clear old data while loading. 
-        // setPeakData(null); 
-        // setCutAudioSegmentUrl(null);
 
         const fetchClipData = async () => {
             try {
@@ -140,7 +329,7 @@ export function useWaveformData(
         return () => {
             isActive = false;
         };
-    }, [clipHash, fps, httpPort, token]); // Dependencies are strictly primitives (except token)
+    }, [clipHash, fps, httpPort, token, groupConstituentSpecs]);
 
     return { cutAudioSegmentUrl, peakData, isLoading, error };
 }

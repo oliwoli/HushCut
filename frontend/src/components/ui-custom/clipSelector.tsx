@@ -12,8 +12,8 @@ import {
 } from "@/components/ui/context-menu"
 
 import { Progress } from "../ui/progress";
-import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, Check, CheckIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
-import { useClipStore, useIsClipModified } from "@/stores/clipStore";
+import { AlignJustifyIcon, AsteriskIcon, AudioLinesIcon, CheckIcon, LayersIcon, PowerIcon, PowerOffIcon } from "lucide-react";
+import { isConstituentClipOverridden, useClipStore, useIsClipModified } from "@/stores/clipStore";
 import { useVirtualizer, VirtualItem, Virtualizer } from '@tanstack/react-virtual';
 import { useProgressStore } from "@/stores/progressStore";
 import { ContextMenuLabel } from "@radix-ui/react-context-menu";
@@ -183,6 +183,36 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
   const bypassed = useClipStore((s) =>
     s.getParameter(clip.id, "bypassed")
   );
+  const timelineItems = useClipStore((s) => s.timelineItems);
+  const parameters = useClipStore((s) => s.parameters);
+  const activeGroupViewId = useClipStore((s) => {
+    if (!clip.is_linked_group) return clip.id;
+    if (
+      s.currentClipId === clip.id ||
+      clip.constituent_item_ids.includes(s.currentClipId || "")
+    ) {
+      return s.currentClipId || clip.id;
+    }
+    return s.groupActiveView[clip.id] || clip.id;
+  });
+
+  const constituentItems = useMemo(() => {
+    if (!clip.is_linked_group) return [];
+    return clip.constituent_item_ids
+      .map((id) => timelineItems[id])
+      .filter((it): it is main.TimelineItem => Boolean(it))
+      .sort((a, b) => a.track_index - b.track_index);
+  }, [clip.is_linked_group, clip.constituent_item_ids, timelineItems]);
+
+  const displayedClipName = useMemo(() => {
+    if (clip.is_linked_group && activeGroupViewId !== clip.id) {
+      const item = timelineItems[activeGroupViewId];
+      if (item) {
+        return item.name || `Clip on A${item.track_index}`;
+      }
+    }
+    return clip.name;
+  }, [clip.is_linked_group, clip.id, clip.name, activeGroupViewId, timelineItems]);
 
   // bypass toggle
   const setBypassed = (val: boolean) => {
@@ -244,8 +274,8 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
   ]);
 
   const handleClipClick = useCallback(
-    () => onClipClick(clip.id),
-    [clip.id, onClipClick]
+    () => onClipClick(clip.is_linked_group ? activeGroupViewId : clip.id),
+    [clip.is_linked_group, clip.id, activeGroupViewId, onClipClick]
   );
 
   const isNested = clip.type && clip.type !== null && clip.type.length > 0;
@@ -366,7 +396,7 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
                     "font-normal text-xs truncate max-w-28",
                     isSelected ? "text-zinc-200/90" : "text-gray-400"
                   )}>
-                    {truncateFilename(clip.name)}</p>
+                    {truncateFilename(displayedClipName)}</p>
                   <span className={cn("text-orange-400 text-base", !isModified && "opacity-0")}><AsteriskIcon size={14} className="absolute left-0.5 top-0.5" /></span>
                 </div>
               </div>
@@ -374,18 +404,75 @@ const AudioClip = memo(({ clip, index, isSelected, onClipClick, disabled, fps, a
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="text-xs text-gray-300">
+          {clip.is_linked_group && (
+            <>
+              <ContextMenuItem
+                className="text-xs"
+                onClick={() => onClipClick(clip.id)}
+              >
+                {activeGroupViewId === clip.id ? (
+                  <CheckIcon className="w-[1.25em] h-[1.25em]" />
+                ) : (
+                  <div className="w-[1.25em]" />
+                )}
+                <span className="font-medium">Combined Overview</span>
+              </ContextMenuItem>
+              <DropdownMenuSeparator />
+              {constituentItems.map((item) => {
+                const itemParams = parameters[item.id];
+                const isItemBypassed = Boolean(itemParams?.bypassed);
+                const isItemOverridden = isConstituentClipOverridden(
+                  item.id,
+                  parameters
+                );
+                const isActiveView = activeGroupViewId === item.id;
+                return (
+                  <ContextMenuItem
+                    key={item.id}
+                    className="text-xs"
+                    onClick={() => onClipClick(item.id)}
+                  >
+                    {isActiveView ? (
+                      <CheckIcon className="w-[1.25em] h-[1.25em]" />
+                    ) : (
+                      <div className="w-[1.25em]" />
+                    )}
+                    <span className="text-zinc-400 font-mono text-[11px]">
+                      A{item.track_index}
+                    </span>
+                    <span className="truncate">
+                      {item.name || `Clip on A${item.track_index}`}
+                    </span>
+                    {isItemBypassed ? (
+                      <span className="text-orange-400 text-[10px] font-medium">
+                        (Bypassed)
+                      </span>
+                    ) : isItemOverridden ? (
+                      <span className="text-teal-400 text-[10px] font-medium">
+                        (Custom)
+                      </span>
+                    ) : null}
+                  </ContextMenuItem>
+                );
+              })}
+              <DropdownMenuSeparator />
+            </>
+          )}
           <ContextMenuItem className="text-xs" onClick={handleBypassClick}>
-            {(!bypassed) ? (
+            {bypassed ? (
               <CheckIcon className="w-[1.25em] h-[1.25em]" />
             ) : (
-              <div className="w-2" />
+              <div className="w-[1.25em]" />
             )}
-            Enable/Disable Clip
+            Bypass Clip
           </ContextMenuItem>
           <DropdownMenuSeparator />
-          <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-400">{clip.name}</ContextMenuLabel>
-          {clip.is_linked_group && (
-            <ContextMenuLabel className="text-[0.65rem] font-extralight text-sky-400">
+          {!clip.is_linked_group ? (
+            <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-400">
+              {clip.name}
+            </ContextMenuLabel>
+          ) : (
+            <ContextMenuLabel className="text-[0.65rem] font-extralight text-gray-400">
               Linked Audio ({clip.track_label}) • {clip.constituent_item_ids.length} channels
             </ContextMenuLabel>
           )}

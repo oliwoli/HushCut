@@ -310,7 +310,7 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                         ) : isGroup ? (
                             <div className="flex items-center gap-2 min-w-0">
                                 <Select value={selectValue} onValueChange={handleSelectChange}>
-                                    <SelectTrigger className="h-8 min-w-[200px] max-w-[280px] sm:min-w-[220px] sm:max-w-[340px]">
+                                    <SelectTrigger className="h-8 min-w-50 max-w-70 sm:min-w-55 sm:max-w-85">
                                         <SelectValue placeholder="Select view..." />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -349,7 +349,7 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                                 {!isLocalView && (
                                     <Tooltip delayDuration={300}>
                                         <TooltipTrigger asChild>
-                                            <InfoIcon className="h-3.5 w-3.5 text-zinc-500 hover:text-teal-400 cursor-pointer shrink-0" />
+                                            <InfoIcon className="h-3.5 w-3.5 text-zinc-600/60 hover:text-teal-600 shrink-0" />
                                         </TooltipTrigger>
                                         <TooltipContent className="max-w-xs text-xs">
                                             <p className="font-semibold mb-0.5">Combined Overview</p>
@@ -367,7 +367,7 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                             <Tooltip delayDuration={400}>
                                 <TooltipTrigger asChild>
                                     <span
-                                        className="text-sm font-medium text-zinc-200 tracking-tight truncate max-w-[280px] sm:max-w-[360px] block cursor-default"
+                                        className="text-sm font-medium text-zinc-200 tracking-tight truncate max-w-70 sm:max-w-90 block cursor-default"
                                     >
                                         {truncateFilename(clipFullName, 35)}
                                     </span>
@@ -394,7 +394,7 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                                 type="button"
                                 onClick={() => setBypassed(!bypassed)}
                                 className={cn(
-                                    "h-8 px-2.5 text-xs flex items-center gap-1.5 border transition-colors cursor-pointer shrink-0",
+                                    "h-8 px-2.5 w-26 text-xs flex items-center gap-1.5 border transition-colors cursor-pointer shrink-0",
                                     bypassed
                                         ? "border-orange-500/50 bg-orange-950/30 text-orange-400 hover:bg-orange-950/50 hover:text-orange-300"
                                         : "border-zinc-700 bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100"
