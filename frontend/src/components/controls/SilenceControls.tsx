@@ -1,11 +1,21 @@
 // components/SilenceControls.tsx
 
-import { defaultParameters, useClipParameter, useClipStore } from '@/stores/clipStore';
-import { InfoIcon, Link, PowerIcon, PowerOffIcon, Unlink } from 'lucide-react';
-import React, { useCallback, useMemo } from 'react';
+import { defaultParameters, isConstituentClipOverridden, useClipParameter, useClipStore, useHasGroupOverrides } from '@/stores/clipStore';
+import { Info, InfoIcon, Link, PowerIcon, PowerOffIcon, Unlink } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
 
 // Import your reusable UI components
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Label } from '@/components/ui/label';
 import SliderZag from '@/components/ui/sliderZag';
 import ResetButton from './ResetButton';
@@ -247,9 +257,26 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
     }, [isGroup, audioItems, activeDisplayClip]);
 
     const isLocalView = isGroup && activeDisplayClip != null && currentClipId !== activeDisplayClip.id;
+    const hasGroupOverrides = useHasGroupOverrides(activeDisplayClip?.constituent_item_ids);
+    const [resetDialogOpen, setResetDialogOpen] = useState(false);
 
     // Per-clip bypass in Local View
     const [bypassed, setBypassed] = useClipParameter("bypassed");
+
+    const handleGlobalReset = useCallback(() => {
+        if (!currentClipId) return;
+        if (isGroup && !isLocalView && hasGroupOverrides) {
+            setResetDialogOpen(true);
+            return;
+        }
+        useClipStore.getState().resetAllParametersToDefault(currentClipId);
+    }, [currentClipId, isGroup, isLocalView, hasGroupOverrides]);
+
+    const handleConfirmGlobalReset = useCallback(() => {
+        if (!currentClipId) return;
+        useClipStore.getState().resetAllParametersToDefault(currentClipId);
+        setResetDialogOpen(false);
+    }, [currentClipId]);
 
     const selectValue = isLocalView ? (currentClipId || "") : (activeDisplayClip?.id || "combined");
 
@@ -294,9 +321,9 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                                         {constituentItems.map((item) => {
                                             const itemParams = parameters[item.id];
                                             const isItemBypassed = Boolean(itemParams?.bypassed);
-                                            const isItemOverridden = Object.prototype.hasOwnProperty.call(
-                                                parameters,
-                                                item.id
+                                            const isItemOverridden = isConstituentClipOverridden(
+                                                item.id,
+                                                parameters
                                             );
                                             return (
                                                 <SelectItem key={item.id} value={item.id}>
@@ -327,6 +354,9 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                                         <TooltipContent className="max-w-xs text-xs">
                                             <p className="font-semibold mb-0.5">Combined Overview</p>
                                             <p className="text-zinc-300">
+                                                This overview shows you what the edits are going to be like for all clips in the group.
+                                            </p>
+                                            <p className="text-zinc-300">
                                                 Sliders display the average across all clips in this group. Adjusting a parameter offsets all clips relatively, preserving individual adjustments made in Local View.
                                             </p>
                                         </TooltipContent>
@@ -349,41 +379,80 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                         )}
                     </div>
 
-                    {/* Right: Bypass Button (shown for both grouped and normal clips) */}
+                    {/* Right: Global Reset + Bypass Button (shown for both grouped and normal clips) */}
                     {activeDisplayClip && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            type="button"
-                            onClick={() => setBypassed(!bypassed)}
-                            className={cn(
-                                "h-8 px-2.5 text-xs flex items-center gap-1.5 border transition-colors cursor-pointer shrink-0",
-                                bypassed
-                                    ? "border-orange-500/50 bg-orange-950/30 text-orange-400 hover:bg-orange-950/50 hover:text-orange-300"
-                                    : "border-zinc-700 bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100"
-                            )}
-                            title={
-                                bypassed
-                                    ? "Enable silence detection for this clip"
-                                    : "Disregard (bypass) this clip during silence detection"
-                            }
-                        >
-                            {bypassed ? (
-                                <>
-                                    <PowerOffIcon className="h-3.5 w-3.5 text-orange-400" />
-                                    <span>Bypassed</span>
-                                </>
-                            ) : (
-                                <>
-                                    <PowerIcon className="h-3.5 w-3.5 text-zinc-400" />
-                                    <span>Bypass Clip</span>
-                                </>
-                            )}
-                        </Button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                            <ResetButton
+                                showPlus
+                                onClick={handleGlobalReset}
+                                disabled={!currentClipId}
+                                title="Reset all parameters to default"
+                            />
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                type="button"
+                                onClick={() => setBypassed(!bypassed)}
+                                className={cn(
+                                    "h-8 px-2.5 text-xs flex items-center gap-1.5 border transition-colors cursor-pointer shrink-0",
+                                    bypassed
+                                        ? "border-orange-500/50 bg-orange-950/30 text-orange-400 hover:bg-orange-950/50 hover:text-orange-300"
+                                        : "border-zinc-700 bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100"
+                                )}
+                                title={
+                                    bypassed
+                                        ? "Enable silence detection for this clip"
+                                        : "Disregard (bypass) this clip during silence detection"
+                                }
+                            >
+                                {bypassed ? (
+                                    <>
+                                        <PowerOffIcon className="h-3.5 w-3.5 text-orange-400" />
+                                        <span>Bypassed</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <PowerIcon className="h-3.5 w-3.5 text-zinc-400" />
+                                        <span>Bypass Clip</span>
+                                    </>
+                                )}
+                            </Button>
+                        </div>
                     )}
                 </div>
                 <Separator aria-orientation="horizontal" className="h-px bg-zinc-700/80" />
             </div>
+
+            <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+                <AlertDialogContent className="overflow-hidden rounded-sm">
+                    <div className="absolute top-0 w-full h-1 bg-teal-800" />
+                    <div className="w-5 h-5 px-0 p-0 absolute top-12 left-5">
+                        <Info className="fill-teal-950/60 w-7 h-7 text-teal-700 mb-1 text-center" />
+                    </div>
+                    <AlertDialogHeader className="pl-11 gap-1 mt-2">
+                        <AlertDialogTitle className="mb-0 gap-2">
+                            Reset All Parameters?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="mt-0">
+                            Individual clips in this group have custom settings applied. Resetting in Combined Overview will reset all parameters to their default values and overwrite per-clip adjustments.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter className="mt-1">
+                        <AlertDialogCancel className="cursor-pointer">
+                            Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={handleConfirmGlobalReset}
+                            className={cn(
+                                buttonVariants({ variant: "default" }),
+                                "bg-teal-700 text-white hover:bg-teal-600 focus-visible:border-0 focus-visible:ring-teal-600 focus-visible:ring-2 cursor-pointer"
+                            )}
+                        >
+                            Reset All
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             <div>
                 <div className="flex flex-wrap gap-6 lg:flex-row lg:items-start lg:gap-6 justify-between transition-all duration-200">
