@@ -1,13 +1,14 @@
-import { AudioWaveformIcon, ChevronLeftIcon, ChevronRightIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, SkipForwardIcon } from "lucide-react";
+import { AudioWaveformIcon, ChevronLeftIcon, ChevronRightIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, RotateCcwIcon, SkipForwardIcon } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
+import { createPortal } from "react-dom";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
 import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 
-import { useClipParameter, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
+import { useClipParameter, useClipStore, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
 
-import { ActiveClip } from "@/types";
+import { ActiveClip, SilencePeriod } from "@/types";
 import { useSilenceData } from "@/hooks/useSilenceData";
 //import { frameToTimecode, secToFrames } from "@/lib/utils";
 
@@ -119,11 +120,6 @@ const getFrameFromTime = (time: number, frameRate: number): number => {
   if (!time || !frameRate) return 0;
   return Math.floor((time % 1) * frameRate);
 };
-
-interface SilencePeriod {
-  start: number;
-  end: number;
-}
 
 interface TimecodeDisplayProps {
   time: number;
@@ -856,6 +852,36 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     ws.zoom(currentZoom);
   }, [dimensions]);
 
+  const [regionContextMenu, setRegionContextMenu] = useState<{
+    x: number;
+    y: number;
+    modificationIds: string[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!regionContextMenu) return;
+    const handleClose = () => setRegionContextMenu(null);
+    const handleKeyDownClose = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRegionContextMenu(null);
+    };
+    window.addEventListener("mousedown", handleClose);
+    window.addEventListener("wheel", handleClose, { passive: true });
+    window.addEventListener("keydown", handleKeyDownClose);
+    return () => {
+      window.removeEventListener("mousedown", handleClose);
+      window.removeEventListener("wheel", handleClose);
+      window.removeEventListener("keydown", handleKeyDownClose);
+    };
+  }, [regionContextMenu]);
+
+  const handleResetModifiedRegion = useCallback(() => {
+    if (!regionContextMenu || !activeClip?.id) return;
+    useClipStore
+      .getState()
+      .removeRegionModifications(activeClip.id, regionContextMenu.modificationIds);
+    setRegionContextMenu(null);
+  }, [regionContextMenu, activeClip?.id]);
+
   const updateSilenceRegions = useCallback(
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
       const currentRegionsPlugin = regionsPluginRef.current;
@@ -902,13 +928,137 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
             if (finalStart < finalEnd) {
               try {
-                regionsPluginRef.current!.addRegion({
-                  id: `silence-marker_${index}_${period.start}-${period.end}`,
+                const isModified = Boolean(period.isModified);
+                const baseRegionId = `silence-marker_${index}_${period.start}-${period.end}`;
+                const regionId = isModified
+                  ? `${baseRegionId} region-modified`
+                  : baseRegionId;
+
+                const region = regionsPluginRef.current!.addRegion({
+                  id: regionId,
                   start: finalStart,
                   end: finalEnd,
-                  color: "rgba(250, 7, 2, 0.15)",
+                  color: isModified
+                    ? "rgba(139, 92, 246, 0.25)"
+                    : "rgba(250, 7, 2, 0.15)",
                   drag: false,
-                  resize: false,
+                  resize: true,
+                  minLength: 0.01,
+                });
+
+                const el = region.element;
+                if (el) {
+                  // Allow left-clicks and drag-to-seek on the region body (not on handles) to pass through to WaveSurfer
+                  el.addEventListener(
+                    "pointerdown",
+                    (ev: PointerEvent) => {
+                      if (ev.target === el && ev.button === 0) {
+                        Object.defineProperty(ev, "button", {
+                          value: -1,
+                          configurable: true,
+                        });
+                      }
+                    },
+                    { capture: true }
+                  );
+                  el.addEventListener(
+                    "pointerdown",
+                    (ev: PointerEvent) => {
+                      if (ev.target === el && ev.button === -1) {
+                        Object.defineProperty(ev, "button", {
+                          value: 0,
+                          configurable: true,
+                        });
+                      }
+                    },
+                    { capture: false }
+                  );
+
+                  if (
+                    isModified &&
+                    period.modificationIds &&
+                    period.modificationIds.length > 0
+                  ) {
+                    el.addEventListener("contextmenu", (e: MouseEvent) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setRegionContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        modificationIds: period.modificationIds || [],
+                      });
+                    });
+                  }
+                }
+
+                const setHandlesVisible = (visible: boolean) => {
+                  if (!region.element) return;
+                  const handles = region.element.querySelectorAll(
+                    '[part*="region-handle"]'
+                  );
+                  handles.forEach((h) => {
+                    const currentPart = h.getAttribute("part") || "";
+                    const tokens = currentPart.split(/\s+/).filter(Boolean);
+                    const hasToken = tokens.includes("region-handle-visible");
+                    if (visible && !hasToken) {
+                      h.setAttribute(
+                        "part",
+                        [...tokens, "region-handle-visible"].join(" ")
+                      );
+                    } else if (!visible && hasToken) {
+                      h.setAttribute(
+                        "part",
+                        tokens
+                          .filter((t) => t !== "region-handle-visible")
+                          .join(" ")
+                      );
+                    }
+                  });
+                };
+
+                region.on("over", () => setHandlesVisible(true));
+                region.on("leave", () => setHandlesVisible(false));
+
+                region.on("update-end", (side?: "start" | "end") => {
+                  if (!activeClip?.id) return;
+
+                  region.setOptions({
+                    color: "rgba(139, 92, 246, 0.25)",
+                    id: `${baseRegionId} region-modified`,
+                  });
+
+                  const fallbackCenter =
+                    ((period.rawStart ?? period.start) +
+                      (period.rawEnd ?? period.end)) /
+                    2;
+
+                  if (side === "start") {
+                    const newSourceStart =
+                      region.start + clipOriginalStartSecondsRef.current;
+                    const baseStart = period.baseStart ?? period.start;
+                    const deltaStart = newSourceStart - baseStart;
+                    const centerTime = period.startCenterTime ?? fallbackCenter;
+                    useClipStore
+                      .getState()
+                      .upsertRegionModification(activeClip.id, {
+                        id: period.startModId,
+                        centerTime,
+                        deltaStart,
+                      });
+                  } else if (side === "end") {
+                    const newSourceEnd =
+                      region.end + clipOriginalStartSecondsRef.current;
+                    const baseEnd = period.baseEnd ?? period.end;
+                    const deltaEnd = newSourceEnd - baseEnd;
+                    const centerTime = period.endCenterTime ?? fallbackCenter;
+                    useClipStore
+                      .getState()
+                      .upsertRegionModification(activeClip.id, {
+                        id: period.endModId,
+                        centerTime,
+                        deltaEnd,
+                      });
+                  }
                 });
               } catch (e) {
                 console.warn(`Failed to add region: ${(e as Error).message}`);
@@ -919,7 +1069,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         addRegionsTimeoutRef.current = null;
       }, 0);
     },
-    [clipOriginalStartSeconds, duration]
+    [clipOriginalStartSeconds, duration, activeClip?.id]
   );
 
   useEffect(() => {
@@ -1231,6 +1381,28 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           </div>
         </div>
       </div>
+      {regionContextMenu &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: Math.min(regionContextMenu.y, window.innerHeight - 52),
+              left: Math.min(regionContextMenu.x, window.innerWidth - 190),
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="bg-popover text-popover-foreground z-50 min-w-[10rem] overflow-hidden rounded-md border p-1 shadow-md animate-in fade-in-0 zoom-in-95"
+          >
+            <button
+              type="button"
+              onClick={handleResetModifiedRegion}
+              className="hover:bg-accent hover:text-accent-foreground relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none"
+            >
+              <RotateCcwIcon className="h-4 w-4 text-violet-400" />
+              <span>Reset Region</span>
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

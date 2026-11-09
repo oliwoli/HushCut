@@ -2,6 +2,25 @@
 export interface SilencePeriod {
   start: number;
   end: number;
+  rawStart?: number;
+  rawEnd?: number;
+  baseStart?: number;
+  baseEnd?: number;
+  startCenterTime?: number;
+  endCenterTime?: number;
+  startModId?: string;
+  endModId?: string;
+  startModified?: boolean;
+  endModified?: boolean;
+  isModified?: boolean;
+  modificationIds?: string[];
+}
+
+export interface RegionModification {
+  id: string;
+  centerTime: number;
+  deltaStart: number;
+  deltaEnd: number;
 }
 
 export interface ActiveClip {

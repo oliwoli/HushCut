@@ -6,6 +6,8 @@ import deepEqual from 'fast-deep-equal';
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import type { main } from "@wails/go/models";
 import type { TimecodeInstance } from "smpte-timecode";
+import type { RegionModification } from "../types.ts";
+import { MODIFICATION_DELTA_EPSILON, REGION_MODIFICATION_EPSILON_SECONDS } from "../lib/clipUtils.ts";
 
 
 interface PlaybackState {
@@ -87,6 +89,7 @@ export interface ClipParameters {
 // Export the main store interface
 export interface ClipStore {
   parameters: Record<string, ClipParameters>;
+  regionModifications: Record<string, RegionModification[]>;
   clipToGroup: Record<string, string>;
   groupToClips: Record<string, string[]>;
   timelineItems: Record<string, main.TimelineItem>;
@@ -110,6 +113,14 @@ export interface ClipStore {
   setParameter: <K extends keyof ClipParameters>(clipId: string, key: K, value: ClipParameters[K]) => void;
   setAllParameters: (clipId: string, newParams: Partial<ClipParameters>) => void;
   setSyncDefaults: (enabled: boolean) => void;
+
+  getRegionModifications: (clipId: string) => RegionModification[];
+  upsertRegionModification: (
+    clipId: string,
+    mod: { id?: string; centerTime: number; deltaStart?: number; deltaEnd?: number }
+  ) => void;
+  removeRegionModifications: (clipId: string, modIds: string[]) => void;
+  clearRegionModifications: (clipId: string) => void;
 }
 
 export const getClipParams = (state: ClipStore, clipId: string): ClipParameters => {
@@ -149,6 +160,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
   currentClipId: null,
   groupActiveView: {},
   parameters: {},
+  regionModifications: {},
   clipToGroup: {},
   groupToClips: {},
   timelineItems: {},
@@ -186,10 +198,12 @@ export const useClipStore = create<ClipStore>((set, get) => ({
   clearClipOverrides: (clipIds) => {
     set((state) => {
       const newParams = { ...state.parameters };
+      const newMods = { ...state.regionModifications };
       for (const id of clipIds) {
         delete newParams[id];
+        delete newMods[id];
       }
-      return { parameters: newParams };
+      return { parameters: newParams, regionModifications: newMods };
     });
   },
   resetParameterToDefault: (clipId, key) => {
@@ -283,6 +297,8 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     set((state) => {
       const constituents = state.groupToClips?.[clipId];
       const newParams = { ...state.parameters };
+      const newMods = { ...state.regionModifications };
+      delete newMods[clipId];
 
       if (constituents && constituents.length > 0) {
         const groupBypassed = Boolean(state.parameters[clipId]?.bypassed);
@@ -304,6 +320,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
         }
 
         for (const cid of constituents) {
+          delete newMods[cid];
           if (newParams[cid]?.bypassed) {
             newParams[cid] = {
               ...defaultParameters,
@@ -316,6 +333,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
         return {
           parameters: newParams,
+          regionModifications: newMods,
           liveDefaultParameters: newLiveDefaults,
         };
       }
@@ -349,11 +367,105 @@ export const useClipStore = create<ClipStore>((set, get) => ({
 
       return {
         parameters: newParams,
+        regionModifications: newMods,
         liveDefaultParameters: newLiveDefaults,
       };
     });
   },
   setSyncDefaults: (enabled) => set({ syncDefaultsToLastEdit: enabled }),
+
+  getRegionModifications: (clipId) => {
+    const state = get();
+    return state.regionModifications[clipId] ?? [];
+  },
+
+  upsertRegionModification: (clipId, mod) => {
+    set((state) => {
+      const existingList = [...(state.regionModifications[clipId] ?? [])];
+      let targetIdx = -1;
+
+      if (mod.id) {
+        targetIdx = existingList.findIndex((m) => m.id === mod.id);
+      }
+      if (targetIdx === -1) {
+        let bestDist = Infinity;
+        for (let i = 0; i < existingList.length; i++) {
+          const dist = Math.abs(existingList[i].centerTime - mod.centerTime);
+          if (dist <= REGION_MODIFICATION_EPSILON_SECONDS && dist < bestDist) {
+            bestDist = dist;
+            targetIdx = i;
+          }
+        }
+      }
+
+      if (targetIdx !== -1) {
+        const prev = existingList[targetIdx];
+        const nextDeltaStart = mod.deltaStart !== undefined ? mod.deltaStart : prev.deltaStart;
+        const nextDeltaEnd = mod.deltaEnd !== undefined ? mod.deltaEnd : prev.deltaEnd;
+        if (
+          Math.abs(nextDeltaStart) <= MODIFICATION_DELTA_EPSILON &&
+          Math.abs(nextDeltaEnd) <= MODIFICATION_DELTA_EPSILON
+        ) {
+          existingList.splice(targetIdx, 1);
+        } else {
+          existingList[targetIdx] = {
+            ...prev,
+            centerTime: mod.centerTime,
+            deltaStart: Math.round(nextDeltaStart * 10000) / 10000,
+            deltaEnd: Math.round(nextDeltaEnd * 10000) / 10000,
+          };
+        }
+      } else {
+        const nextDeltaStart = mod.deltaStart ?? 0;
+        const nextDeltaEnd = mod.deltaEnd ?? 0;
+        if (
+          Math.abs(nextDeltaStart) > MODIFICATION_DELTA_EPSILON ||
+          Math.abs(nextDeltaEnd) > MODIFICATION_DELTA_EPSILON
+        ) {
+          existingList.push({
+            id: mod.id || `mod_${Math.round(mod.centerTime * 1000)}_${Math.random().toString(36).slice(2, 7)}`,
+            centerTime: mod.centerTime,
+            deltaStart: Math.round(nextDeltaStart * 10000) / 10000,
+            deltaEnd: Math.round(nextDeltaEnd * 10000) / 10000,
+          });
+        }
+      }
+
+      const newMods = { ...state.regionModifications };
+      if (existingList.length === 0) {
+        delete newMods[clipId];
+      } else {
+        newMods[clipId] = existingList;
+      }
+      return { regionModifications: newMods };
+    });
+  },
+
+  removeRegionModifications: (clipId, modIds) => {
+    if (!modIds || modIds.length === 0) return;
+    set((state) => {
+      const existingList = state.regionModifications[clipId];
+      if (!existingList || existingList.length === 0) return state;
+      const idSet = new Set(modIds);
+      const filtered = existingList.filter((m) => !idSet.has(m.id));
+      const newMods = { ...state.regionModifications };
+      if (filtered.length === 0) {
+        delete newMods[clipId];
+      } else {
+        newMods[clipId] = filtered;
+      }
+      return { regionModifications: newMods };
+    });
+  },
+
+  clearRegionModifications: (clipId) => {
+    set((state) => {
+      if (!state.regionModifications[clipId]) return state;
+      const newMods = { ...state.regionModifications };
+      delete newMods[clipId];
+      return { regionModifications: newMods };
+    });
+  },
   getParameter: (clipId, key) => {
     const state = get();
     const constituents = state.groupToClips?.[clipId];
@@ -536,26 +648,55 @@ export function useIsClipModified(clipIdToCheck?: string): boolean {
       const clipId = clipIdToCheck ?? state.currentClipId;
       if (!clipId) return false;
 
-      // A clip can't be "modified" if it doesn't have its own specific parameters.
-      // This is the crucial first check.
+      if ((state.regionModifications[clipId]?.length ?? 0) > 0) {
+        return true;
+      }
+
+      const constituents = state.groupToClips?.[clipId];
+      if (constituents && constituents.length > 0) {
+        for (const cid of constituents) {
+          if ((state.regionModifications[cid]?.length ?? 0) > 0) {
+            return true;
+          }
+        }
+      }
+
+      // Check if the clip has its own specific parameters.
       if (!Object.prototype.hasOwnProperty.call(state.parameters, clipId)) {
         return false;
       }
 
-      // The clip has its own parameters, so let's get them.
       const clipParams = state.parameters[clipId];
       const staticDefaults = defaultParameters;
 
-      // Now, we check if any of the clip's OWN parameters (excluding 'bypassed')
+      // Check if any of the clip's OWN parameters (excluding 'bypassed')
       // have a value that is different from the static, hardcoded default.
       return (Object.keys(clipParams) as (keyof ClipParameters)[]).some(key => {
         if (key === 'bypassed') {
           return false; // Always ignore the 'bypassed' key in the comparison.
         }
-        // If the clip's value for this key is different from the default,
-        // then the clip is considered modified.
         return clipParams[key] !== staticDefaults[key];
       });
+    }
+  );
+}
+
+export function useHasRegionModifications(
+  clipId?: string | null,
+  constituentIds?: string[]
+): boolean {
+  return useStoreWithEqualityFn(
+    useClipStore,
+    (state) => {
+      if (clipId && (state.regionModifications[clipId]?.length ?? 0) > 0) {
+        return true;
+      }
+      if (constituentIds && constituentIds.length > 0) {
+        return constituentIds.some(
+          (id) => (state.regionModifications[id]?.length ?? 0) > 0
+        );
+      }
+      return false;
     }
   );
 }
@@ -566,7 +707,7 @@ export function useHasGroupOverrides(constituentIds?: string[]): boolean {
     (state) => {
       if (!constituentIds || constituentIds.length === 0) return false;
       return constituentIds.some((id) =>
-        isConstituentClipOverridden(id, state.parameters, state.clipToGroup)
+        isConstituentClipOverridden(id, state.parameters, state.clipToGroup, state.regionModifications)
       );
     }
   );
@@ -575,8 +716,13 @@ export function useHasGroupOverrides(constituentIds?: string[]): boolean {
 export function isConstituentClipOverridden(
   clipId: string,
   parameters: Record<string, ClipParameters>,
-  clipToGroup?: Record<string, string>
+  clipToGroup?: Record<string, string>,
+  regionModifications?: Record<string, RegionModification[]>
 ): boolean {
+  const regMods = regionModifications ?? useClipStore.getState().regionModifications;
+  if ((regMods?.[clipId]?.length ?? 0) > 0) {
+    return true;
+  }
   const clipParams = parameters[clipId];
   if (!clipParams) return false;
   const groupMap = clipToGroup ?? useClipStore.getState().clipToGroup;
