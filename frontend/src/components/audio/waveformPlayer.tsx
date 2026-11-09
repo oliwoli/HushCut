@@ -377,6 +377,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const panInitialScrollLeftRef = useRef(0); // To store initial scrollLeft of the waveform
   const originalCursorRef = useRef(""); // To store the original cursor style
   const scrollPositionRef = useRef(0);
+  const userScrolledAwayRef = useRef(false);
+  const lastUserScrollTimeRef = useRef(0);
+  const isProgrammaticScrollRef = useRef(false);
   const prevAudioUrlRef = useRef<string | undefined>(undefined);
   const isNewClipRef = useRef(false);
 
@@ -449,6 +452,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       barAlign: "bottom",
     });
 
+    const containerHeight = waveformContainerRef.current?.clientHeight || 128;
+
     const wsOptions: WaveSurferOptions = {
       container: waveformContainerRef.current,
       dragToSeek: true,
@@ -456,7 +461,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       progressColor: peakData.duration < 1 ? "#9d9c9e" : "#6f7175",
       cursorColor: "#e64b3d",
       cursorWidth: 2,
-      height: "auto",
+      height: containerHeight,
       width: "auto",
       fillParent: true,
       barAlign: "bottom",
@@ -469,7 +474,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       backend: "MediaElement",
       mediaControls: false,
       autoCenter: false,
-      autoScroll: true,
+      autoScroll: false,
       hideScrollbar: true,
       minPxPerSec: 15,
     };
@@ -477,6 +482,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       if (!isPanningRef.current || !wavesurferRef.current) return;
 
       event.preventDefault();
+      lastUserScrollTimeRef.current = Date.now();
+      userScrolledAwayRef.current = true;
       const wsInstance = wavesurferRef.current;
       const deltaX = event.clientX - panStartXRef.current;
       const newScrollLeft = panInitialScrollLeftRef.current - deltaX;
@@ -510,6 +517,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if (!scrollWrapper) return;
 
         isPanningRef.current = true;
+        lastUserScrollTimeRef.current = Date.now();
+        userScrolledAwayRef.current = true;
         panStartXRef.current = event.clientX;
         panInitialScrollLeftRef.current = wsInstance.getScroll();
 
@@ -524,6 +533,64 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const ws = WaveSurfer.create(wsOptions);
       wavesurferRef.current = ws;
 
+      // Protect against WaveSurfer v8 resetting scrollLeft to 0 on canvas innerHTML clear
+      const renderer = (ws as any).renderer;
+      if (renderer && typeof renderer.reRender === "function") {
+        const origReRender = renderer.reRender.bind(renderer);
+        renderer.reRender = () => {
+          const prevScroll = ws.getScroll();
+          origReRender();
+          if (prevScroll > 0 && ws.getScroll() === 0) {
+            ws.setScroll(prevScroll);
+          }
+        };
+      }
+
+      // Override scrollIntoView so that user horizontal scrolling during playback is uninterrupted
+      if (renderer && typeof renderer.scrollIntoView === "function") {
+        renderer.scrollIntoView = (
+          progress: number,
+          duration: number,
+          isPlaying: boolean,
+          _previousProgress?: number
+        ) => {
+          if (!renderer.scrollContainer || duration <= 0 || !isPlaying) return;
+
+          const { scrollLeft, scrollWidth, clientWidth } = renderer.scrollContainer;
+          const progressWidth = progress * scrollWidth;
+          const startEdge = scrollLeft;
+          const endEdge = scrollLeft + clientWidth;
+
+          // 1. If user is actively scrolling / panning, or scrolled recently (within 1.5s), never snap back
+          const isRecentlyScrolled = Date.now() - lastUserScrollTimeRef.current < 1500;
+          if (isRecentlyScrolled || isPanningRef.current) {
+            userScrolledAwayRef.current = true;
+            return;
+          }
+
+          // 2. Check if playhead is currently inside the visible viewport
+          const isInView = progressWidth >= startEdge && progressWidth <= endEdge;
+          if (isInView) {
+            userScrolledAwayRef.current = false;
+            return;
+          }
+
+          // 3. If user intentionally scrolled away from playhead, do not snap back
+          if (userScrolledAwayRef.current) {
+            return;
+          }
+
+          // 4. Playhead naturally advanced past the right edge while following playback
+          if (progressWidth > endEdge) {
+            isProgrammaticScrollRef.current = true;
+            renderer.scrollContainer.scrollLeft = Math.max(0, progressWidth - 50);
+            requestAnimationFrame(() => {
+              isProgrammaticScrollRef.current = false;
+            });
+          }
+        };
+      }
+
       // Restore time and scroll if it's a resize of the same clip
       if (!audioUrlChanged) {
         if (currentTimeRef.current > 0) {
@@ -535,6 +602,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         setDisplayedTime(currentTimeRef.current);
         lastRenderedFrameRef.current = getFrameFromTime(currentTimeRef.current, projectFrameRate);
       }
+
+      ws.on("scroll", () => {
+        scrollPositionRef.current = ws.getScroll();
+        if (!isProgrammaticScrollRef.current) {
+          lastUserScrollTimeRef.current = Date.now();
+        }
+      });
 
       ws.on("ready", () => {
         setPlaybackRate(1.0);
@@ -593,13 +667,24 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
       ws.on("play", () => {
+        ws.options.autoScroll = true;
         isPlayingRef.current = true;
         setPlaybackState({ isPlaying: true });
         setIsPlaying(true);
         // cursed webkit fix
         ws.setVolume(1);
+
+        const r = (ws as any).renderer;
+        if (r?.scrollContainer) {
+          const { scrollLeft, scrollWidth, clientWidth } = r.scrollContainer;
+          const playheadPx = (ws.getCurrentTime() / (ws.getDuration() || 1)) * scrollWidth;
+          userScrolledAwayRef.current = playheadPx < scrollLeft || playheadPx > scrollLeft + clientWidth;
+        } else {
+          userScrolledAwayRef.current = false;
+        }
       });
       ws.on("pause", () => {
+        ws.options.autoScroll = false;
         if (wavesurferRef.current) {
           wavesurferRef.current.setPlaybackRate(1.0, true);
         }
@@ -631,6 +716,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         setIsPlaying(false);
       });
       ws.on("finish", () => {
+        ws.options.autoScroll = false;
         isPlayingRef.current = false;
         setPlaybackState({ isPlaying: false });
         setIsPlaying(false);
@@ -642,6 +728,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
       ws.on("interaction", (newTime: number) => {
         isUserSeekingRef.current = true;
+        userScrolledAwayRef.current = false;
         ws.setTime(newTime); // Ensure wavesurfer time is set
         currentTimeRef.current = newTime;
         setDisplayedTime(newTime);
@@ -711,35 +798,72 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         scrollWrapper.addEventListener("mousedown", handleWaveformMouseDown);
 
         scrollWrapper.addEventListener("wheel", (e) => {
-          // Only prevent default and zoom if it's a vertical scroll gesture
-          if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
-
-          e.preventDefault();
-
           const ws = wavesurferRef.current;
           if (!ws) return;
 
-          // The exponential zoom factor. Adjust for sensitivity.
-          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
+          // 1. Shift + Wheel is standard horizontal scrolling
+          if (e.shiftKey) {
+            e.preventDefault();
+            const delta = e.deltaY || e.deltaX;
+            ws.setScroll(ws.getScroll() + delta);
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
+            return;
+          }
 
+          // 2. Trackpad / horizontal mouse swipe
+          const absX = Math.abs(e.deltaX);
+          const absY = Math.abs(e.deltaY);
+
+          const isHorizontalGesture = absX > 0 && !e.ctrlKey;
+          const recentlyScrolledHorizontally = Date.now() - lastUserScrollTimeRef.current < 200;
+
+          if (isHorizontalGesture) {
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
+            // Allow native horizontal trackpad scroll to operate without interference
+            return;
+          }
+
+          if (recentlyScrolledHorizontally && !e.ctrlKey) {
+            // Guard against trailing vertical jitter when lifting fingers from trackpad swipe
+            return;
+          }
+
+          // 3. Zoom gestures:
+          // Either pinch-to-zoom (e.ctrlKey on trackpad) or pure vertical mouse wheel
+          const isPinchToZoom = e.ctrlKey;
+          const isVerticalWheelZoom = absY > 0 && absX === 0;
+
+          if (!isPinchToZoom && !isVerticalWheelZoom) {
+            return;
+          }
+
+          e.preventDefault();
+
+          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
           const currentZoom = ws.options.minPxPerSec || 15;
           const newZoom = currentZoom * zoomFactor;
 
-          // Set min and max zoom levels
-          const maxZoom = 150; // or whatever max you prefer
+          const maxZoom = 150;
           const minZoom = 1;
           const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
-          if (finalZoom == currentZoom) return;
+          if (Math.abs(finalZoom - currentZoom) < 0.001) return;
+
+          // Center zoom on mouse cursor pointer
+          const rect = scrollWrapper.getBoundingClientRect();
+          const pointerX = e.clientX - rect.left;
+          const currentScroll = ws.getScroll();
+          const scale = finalZoom / currentZoom;
+          const targetScroll = (currentScroll + pointerX) * scale - pointerX;
 
           ws.zoom(finalZoom);
+          ws.setScroll(Math.max(0, targetScroll));
+          scrollPositionRef.current = Math.max(0, targetScroll);
 
-          // We still trigger this to update the silence regions, which is debounced.
           setZoomTrigger((p) => p + 1);
-
-          // If it's primarily a horizontal scroll, we don't call preventDefault(),
-          // allowing the browser's native horizontal scroll to work.
-        });
+        }, { passive: false });
       }
     } catch (error: any) {
       console.error(
@@ -755,32 +879,42 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const minimapWrapper = minimapContainerRef.current;
       if (minimapWrapper) {
         minimapWrapper.addEventListener("wheel", (e) => {
-          // Only prevent default and zoom if it's a vertical scroll gesture
-          if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
-
-          e.preventDefault();
-
           const ws = wavesurferRef.current;
           if (!ws) return;
 
-          // The exponential zoom factor. Adjust for sensitivity.
-          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
+          if (e.shiftKey || Math.abs(e.deltaX) > 0) {
+            e.preventDefault();
+            const delta = e.deltaX || e.deltaY;
+            ws.setScroll(ws.getScroll() + delta);
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
+            return;
+          }
 
+          e.preventDefault();
+
+          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
           const currentZoom = ws.options.minPxPerSec || 15;
           const newZoom = currentZoom * zoomFactor;
 
-          // Set min and max zoom levels
-          const maxZoom = 150; // or whatever max you prefer
+          const maxZoom = 150;
           const minZoom = 1;
           const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
-          if (finalZoom == currentZoom) return;
+          if (Math.abs(finalZoom - currentZoom) < 0.001) return;
+
+          const currentScroll = ws.getScroll();
+          const containerWidth = ws.getWidth();
+          const centerX = containerWidth / 2;
+          const scale = finalZoom / currentZoom;
+          const targetScroll = (currentScroll + centerX) * scale - centerX;
 
           ws.zoom(finalZoom);
+          ws.setScroll(Math.max(0, targetScroll));
+          scrollPositionRef.current = Math.max(0, targetScroll);
 
-          // We still trigger this to update the silence regions, which is debounced.
           setZoomTrigger((p) => p + 1);
-        });
+        }, { passive: false });
       }
 
       const onMinimapDrag = (relativeX: number) => {
@@ -789,6 +923,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         const mainDuration = mainWs.getDuration();
         if (mainDuration > 0) {
           isUserSeekingRef.current = true;
+          lastUserScrollTimeRef.current = Date.now();
+          userScrolledAwayRef.current = true;
           const newTime = relativeX * mainDuration;
           currentTimeRef.current = newTime;
           setDisplayedTime(newTime);
@@ -810,6 +946,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           const mainDuration = mainWs.getDuration();
           if (mainDuration > 0) {
             isUserSeekingRef.current = true;
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
             const newTime = relativeX * mainDuration;
             // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
             currentTimeRef.current = newTime;
@@ -845,11 +983,29 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     };
   }, [audioUrl, cutAudioSegmentUrl, peakData]);
 
+  const prevDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+
   useEffect(() => {
     const ws = wavesurferRef.current;
-    if (!ws) return;
-    const currentZoom = ws.options.minPxPerSec;
+    if (!ws || !dimensions) return;
+    const prev = prevDimensionsRef.current;
+    if (prev && prev.width === dimensions.width && prev.height === dimensions.height) {
+      return;
+    }
+    prevDimensionsRef.current = { width: dimensions.width, height: dimensions.height };
+    if (!prev) return;
+
+    const prevScroll = ws.getScroll();
+    if (dimensions.height) {
+      ws.options.height = dimensions.height;
+    }
+    const currentZoom = ws.options.minPxPerSec || 15;
     ws.zoom(currentZoom);
+    if (prevScroll > 0) {
+      requestAnimationFrame(() => {
+        ws.setScroll(prevScroll);
+      });
+    }
   }, [dimensions]);
 
   const [regionContextMenu, setRegionContextMenu] = useState<{
@@ -1103,7 +1259,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
     if (finalZoom !== ws.options.minPxPerSec) {
+      const currentZoom = ws.options.minPxPerSec || 15;
+      const currentScroll = ws.getScroll();
+      const containerWidth = ws.getWidth();
+      const centerX = containerWidth / 2;
+      const scale = finalZoom / currentZoom;
+      const targetScroll = (currentScroll + centerX) * scale - centerX;
+
       ws.zoom(finalZoom);
+      ws.setScroll(Math.max(0, targetScroll));
+      scrollPositionRef.current = Math.max(0, targetScroll);
+
       setZoomTrigger((p) => p + 1);
     }
   };
