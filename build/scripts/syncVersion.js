@@ -55,8 +55,6 @@ function generatePlist(isDev) {
 		<string>A Silence Remover Plugin for DaVinci Resolve.</string>
 		<key>CFBundleIconFile</key>
 		<string>icons</string>
-		<key>CFBundleIconName</key>
-		<string>appicon</string>
 		<key>CFBundleIdentifier</key>
 		<string>com.oliwoli.hushcut</string>
 		<key>CFBundleName</key>

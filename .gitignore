@@ -1,7 +1,6 @@
 bin/
 .task/
 build/bin/
-!build/darwin/Assets.car
 !build/darwin/icons.icns
 build/darwin/*.png
 build/darwin/*.plist

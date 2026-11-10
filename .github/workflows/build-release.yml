@@ -164,6 +164,10 @@ jobs:
         run: |
           go build -tags production -trimpath -ldflags="-w -s" -o bin/HushCut .
 
+      - name: Install create-dmg for macOS
+        if: matrix.label == 'macos'
+        run: npm install --global --allow-scripts=fs-xattr,macos-alias create-dmg || npm install --global create-dmg
+
       - name: Sign macOS binary, create DMG and notarize
         if: matrix.label == 'macos'
         env:
@@ -191,13 +195,13 @@ jobs:
           echo "Verifying HushCut.app signature..."
           codesign --verify --deep --strict --verbose=2 "bin/HushCut.app"
 
-          # 5. Create DMG
-          echo "Creating DMG with Applications shortcut..."
-          mkdir -p dmg_root
-          cp -R bin/HushCut.app dmg_root/
-          ln -s /Applications dmg_root/Applications
-          hdiutil create -volname "HushCut" -srcfolder dmg_root -ov -format UDZO "bin/HushCut-macOS.dmg"
-          rm -rf dmg_root
+          # 5. Create Styled DMG
+          echo "Creating styled DMG..."
+          cd bin
+          rm -f HushCut*.dmg
+          create-dmg HushCut.app --overwrite --no-code-sign
+          mv HushCut*.dmg HushCut-macOS.dmg
+          cd ..
 
           # 6. Sign DMG
           echo "Signing DMG..."
