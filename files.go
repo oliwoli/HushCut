@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -12,10 +11,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func moveFile(sourcePath, destPath string) error {
@@ -128,7 +126,7 @@ func (a *App) installLuaScript() {
 		return
 	}
 
-	platform := runtime.Environment(a.ctx).Platform
+	platform := runtime.GOOS
 	var destScriptsDir string
 	switch platform {
 	case "darwin":
@@ -192,11 +190,11 @@ type FFBinariesResponse struct {
 }
 
 type downloadProgressWriter struct {
-	tracker     *ProgressTracker
-	totalBytes  int64
-	written     int64
-	filePath    string
-	emitContext context.Context
+	tracker    *ProgressTracker
+	totalBytes int64
+	written    int64
+	filePath   string
+	app        *App
 }
 
 func (pw *downloadProgressWriter) Write(p []byte) (int, error) {
@@ -213,7 +211,7 @@ func (pw *downloadProgressWriter) Write(p []byte) (int, error) {
 		pw.tracker.Percentage = pct
 		pw.tracker.mu.Unlock()
 
-		runtime.EventsEmit(pw.emitContext, "download:progress", ProgressStatus{
+		pw.app.emitEvent("download:progress", ProgressStatus{
 			FilePath:   pw.filePath,
 			Percentage: pct,
 			TaskType:   "download",
@@ -229,8 +227,8 @@ func (a *App) DownloadFFmpeg() error {
 	}
 
 	// Determine the platform and architecture to select the correct binary
-	platform := runtime.Environment(a.ctx).Platform // "darwin", "windows", "linux"
-	arch := runtime.Environment(a.ctx).Arch         // "amd64", "arm64", etc.
+	platform := runtime.GOOS // "darwin", "windows", "linux"
+	arch := runtime.GOARCH   // "amd64", "arm64", etc.
 
 	var platformKey string
 	switch platform {
@@ -346,10 +344,10 @@ func (a *App) DownloadFFmpeg() error {
 
 	// Wrap the writer with progress tracking
 	pw := &downloadProgressWriter{
-		tracker:     tracker,
-		totalBytes:  contentLength,
-		filePath:    downloadPath,
-		emitContext: a.ctx,
+		tracker:    tracker,
+		totalBytes: contentLength,
+		filePath:   downloadPath,
+		app:        a,
 	}
 
 	_, err = io.Copy(io.MultiWriter(out, pw), downloadResp.Body)
@@ -364,7 +362,7 @@ func (a *App) DownloadFFmpeg() error {
 	tracker.mu.Lock()
 	tracker.Percentage = 100
 	tracker.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "progress:done", ProgressStatus{
+	a.emitEvent("progress:done", ProgressStatus{
 		FilePath:   downloadPath,
 		Percentage: 100,
 		TaskType:   "download",
@@ -396,7 +394,7 @@ func (a *App) DownloadFFmpeg() error {
 	// Update the app state
 	a.ffmpegStatus = StatusReady
 	a.signalFfmpegReady()
-	runtime.EventsEmit(a.ctx, "ffmpeg:installed", nil)
+	a.emitEvent("ffmpeg:installed", nil)
 
 	log.Println("FFmpeg download and installation complete.")
 	return nil

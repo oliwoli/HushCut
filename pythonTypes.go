@@ -65,8 +65,9 @@ type TimelineItem struct {
 	Duration          float64                    `json:"duration"`
 	EditInstructions  []EditInstruction          `json:"edit_instructions"`
 	SourceChannel     *SourceChannel             `json:"source_channel,omitempty"`
-	LinkGroupID       int                        `json:"link_group_id,omitempty"`
-	Type              string                     `json:"type,omitempty"` // "Compound", "Timeline"
+	LinkGroupID            *int                       `json:"link_group_id,omitempty"`
+	GroupProcessedFileName *string                    `json:"group_processed_file_name,omitempty"`
+	Type                   string                     `json:"type,omitempty"` // "Compound", "Timeline"
 	NestedClips       []*NestedAudioTimelineItem `json:"nested_clips,omitempty"`
 }
 
@@ -86,15 +87,27 @@ type FileData struct {
 	FileSource         FileSource         `json:"fileSource"`
 }
 
+// LinkedAudioGroup represents a precomputed mixdown group for multiple linked audio items.
+type LinkedAudioGroup struct {
+	GroupID           int      `json:"group_id"`
+	ProcessedFileName string   `json:"processed_file_name"`
+	StartFrame        float64  `json:"start_frame"`
+	EndFrame          float64  `json:"end_frame"`
+	Duration          float64  `json:"duration"`
+	TrackIndices      []int    `json:"track_indices"`
+	ItemIDs           []string `json:"item_ids"`
+}
+
 // Timeline corresponds to the Python Timeline TypedDict.
 type Timeline struct {
-	Name            string         `json:"name"`
-	FPS             float64        `json:"fps"`
-	ProjectFPS      float64        `json:"project_fps"`
-	StartTimecode   string         `json:"start_timecode"`
-	CurrTimecode    string         `json:"curr_timecode"`
-	VideoTrackItems []TimelineItem `json:"video_track_items"`
-	AudioTrackItems []TimelineItem `json:"audio_track_items"`
+	Name              string                    `json:"name"`
+	FPS               float64                   `json:"fps"`
+	ProjectFPS        float64                   `json:"project_fps"`
+	StartTimecode     string                    `json:"start_timecode"`
+	CurrTimecode      string                    `json:"curr_timecode"`
+	VideoTrackItems   []TimelineItem            `json:"video_track_items"`
+	AudioTrackItems   []TimelineItem            `json:"audio_track_items"`
+	LinkedAudioGroups map[int]*LinkedAudioGroup `json:"linked_audio_groups,omitempty"`
 }
 
 // ProjectDataPayload is the Go equivalent of the Python ProjectData TypedDict.

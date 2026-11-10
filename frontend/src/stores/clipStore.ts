@@ -4,8 +4,10 @@ import { create } from "zustand";
 import { useCallback, useMemo } from 'react';
 import deepEqual from 'fast-deep-equal';
 import { useStoreWithEqualityFn } from "zustand/traditional";
-import { main } from "@wails/go/models";
-import { TimecodeInstance } from "smpte-timecode";
+import type { main } from "@wails/go/models";
+import type { TimecodeInstance } from "smpte-timecode";
+import type { RegionModification } from "../types.ts";
+import { MODIFICATION_DELTA_EPSILON, REGION_MODIFICATION_EPSILON_SECONDS } from "../lib/clipUtils.ts";
 
 
 interface PlaybackState {
@@ -24,18 +26,26 @@ interface GlobalStore {
   makeNewTimeline: boolean;
   isThresholdDragging: boolean;
   keepSilence: boolean;
+  skipSilences: boolean;
+  autoAdvanceClip: boolean;
   setMakeNewTimeline: (value: boolean) => void;
   setIsThresholdDragging: (value: boolean) => void;
   setKeepSilence: (value: boolean) => void;
+  setSkipSilences: (value: boolean) => void;
+  setAutoAdvanceClip: (value: boolean) => void;
 }
 
 export const useGlobalStore = create<GlobalStore>((set) => ({
   makeNewTimeline: true,
   isThresholdDragging: false,
   keepSilence: false,
+  skipSilences: true,
+  autoAdvanceClip: false,
   setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
   setIsThresholdDragging: (value) => set({ isThresholdDragging: value }),
-  setKeepSilence: (value) => set({ keepSilence: value})
+  setKeepSilence: (value) => set({ keepSilence: value}),
+  setSkipSilences: (value) => set({ skipSilences: value }),
+  setAutoAdvanceClip: (value) => set({ autoAdvanceClip: value }),
 }));
 
 interface TimecodeStore {
@@ -83,48 +93,491 @@ export interface ClipParameters {
 // Export the main store interface
 export interface ClipStore {
   parameters: Record<string, ClipParameters>;
+  regionModifications: Record<string, RegionModification[]>;
+  clipToGroup: Record<string, string>;
+  groupToClips: Record<string, string[]>;
+  timelineItems: Record<string, main.TimelineItem>;
   currentClipId: string | null;
+  groupActiveView: Record<string, string>;
 
   liveDefaultParameters: ClipParameters;
   // This is the setting to enable/disable the feature.
   syncDefaultsToLastEdit: boolean;
+  pendingAutoPlay: boolean;
 
   setCurrentClipId: (clipId: string | null) => void;
+  setClipToGroupMapping: (
+    mapping: Record<string, string>,
+    reverseMapping?: Record<string, string[]>,
+    itemsMap?: Record<string, main.TimelineItem>
+  ) => void;
+  clearClipOverrides: (clipIds: string[]) => void;
+  resetParameterToDefault: (clipId: string, key: keyof ClipParameters) => void;
+  resetAllParametersToDefault: (clipId: string) => void;
   getParameter: <K extends keyof ClipParameters>(clipId: string, key: K) => ClipParameters[K];
   setParameter: <K extends keyof ClipParameters>(clipId: string, key: K, value: ClipParameters[K]) => void;
   setAllParameters: (clipId: string, newParams: Partial<ClipParameters>) => void;
   setSyncDefaults: (enabled: boolean) => void;
+  setPendingAutoPlay: (enabled: boolean) => void;
+
+  getRegionModifications: (clipId: string) => RegionModification[];
+  upsertRegionModification: (
+    clipId: string,
+    mod: { id?: string; centerTime: number; deltaStart?: number; deltaEnd?: number }
+  ) => void;
+  removeRegionModifications: (clipId: string, modIds: string[]) => void;
+  clearRegionModifications: (clipId: string) => void;
 }
 
-const getClipParams = (state: ClipStore, clipId: string) => 
-  state.parameters[clipId] ?? state.liveDefaultParameters;
+export const getClipParams = (state: ClipStore, clipId: string): ClipParameters => {
+  if (state.parameters[clipId]) {
+    return state.parameters[clipId];
+  }
+  const groupKey = state.clipToGroup?.[clipId];
+  if (groupKey && state.parameters[groupKey]) {
+    return {
+      ...state.parameters[groupKey],
+      bypassed: false,
+    };
+  }
+  return state.liveDefaultParameters;
+};
+
+const NUMERIC_PARAM_KEYS: (keyof ClipParameters)[] = [
+  'threshold',
+  'minDuration',
+  'paddingLeft',
+  'paddingRight',
+  'minContent',
+];
+
+const clampParameter = (key: keyof ClipParameters, val: number): number => {
+  const rounded = Math.round(val * 1000) / 1000;
+  if (key === 'threshold') {
+    return Math.max(-60, Math.min(0, rounded));
+  }
+  if (key === 'minDuration') {
+    return Math.max(0, Math.min(2, rounded));
+  }
+  return Math.max(0, Math.min(1, rounded));
+};
 
 export const useClipStore = create<ClipStore>((set, get) => ({
   currentClipId: null,
+  groupActiveView: {},
   parameters: {},
+  regionModifications: {},
+  clipToGroup: {},
+  groupToClips: {},
+  timelineItems: {},
 
   liveDefaultParameters: { ...defaultParameters }, // Start with the hardcoded defaults
 
   syncDefaultsToLastEdit: true, // The feature is ON by default
+  pendingAutoPlay: false,
 
-  setCurrentClipId: (clipId) => set({ currentClipId: clipId }),
+  setCurrentClipId: (clipId) =>
+    set((state) => {
+      if (!clipId) {
+        return { currentClipId: null };
+      }
+      if (state.groupToClips?.[clipId]) {
+        return {
+          currentClipId: clipId,
+          groupActiveView: { ...state.groupActiveView, [clipId]: clipId },
+        };
+      }
+      const parentGroupId = state.clipToGroup?.[clipId];
+      if (parentGroupId) {
+        return {
+          currentClipId: clipId,
+          groupActiveView: { ...state.groupActiveView, [parentGroupId]: clipId },
+        };
+      }
+      return { currentClipId: clipId };
+    }),
+  setClipToGroupMapping: (mapping, reverseMapping, itemsMap) =>
+    set((state) => ({
+      clipToGroup: mapping,
+      groupToClips: reverseMapping ?? {},
+      timelineItems: itemsMap ?? state.timelineItems,
+    })),
+  clearClipOverrides: (clipIds) => {
+    set((state) => {
+      const newParams = { ...state.parameters };
+      const newMods = { ...state.regionModifications };
+      for (const id of clipIds) {
+        delete newParams[id];
+        delete newMods[id];
+      }
+      return { parameters: newParams, regionModifications: newMods };
+    });
+  },
+  resetParameterToDefault: (clipId, key) => {
+    set((state) => {
+      const constituents = state.groupToClips?.[clipId];
+      const defVal = defaultParameters[key];
+      const newParams = { ...state.parameters };
+
+      if (constituents && constituents.length > 0) {
+        const groupParams = { ...getClipParams(state, clipId), [key]: defVal };
+        if (key === 'paddingLeft' || key === 'paddingRight') {
+          groupParams.paddingLeft = defaultParameters.paddingLeft;
+          groupParams.paddingRight = defaultParameters.paddingRight;
+        }
+        newParams[clipId] = groupParams;
+
+        for (const cid of constituents) {
+          if (newParams[cid]) {
+            const cur = { ...newParams[cid], [key]: defVal };
+            if (key === 'paddingLeft' || key === 'paddingRight') {
+              cur.paddingLeft = defaultParameters.paddingLeft;
+              cur.paddingRight = defaultParameters.paddingRight;
+            }
+            const hasOtherDifferences = (Object.keys(cur) as (keyof ClipParameters)[]).some(
+              (k) => k !== 'paddingLocked' && cur[k] !== groupParams[k]
+            );
+            if (!hasOtherDifferences && !cur.bypassed) {
+              delete newParams[cid];
+            } else {
+              newParams[cid] = cur;
+            }
+          }
+        }
+        const newLiveDefaults = state.syncDefaultsToLastEdit
+          ? {
+              ...state.liveDefaultParameters,
+              [key]: defVal,
+              ...(key === 'paddingLeft' || key === 'paddingRight'
+                ? {
+                    paddingLeft: defaultParameters.paddingLeft,
+                    paddingRight: defaultParameters.paddingRight,
+                  }
+                : {}),
+            }
+          : state.liveDefaultParameters;
+        return { parameters: newParams, liveDefaultParameters: newLiveDefaults };
+      }
+
+      const parentGroupId = state.clipToGroup?.[clipId];
+      const newLiveDefaults =
+        state.syncDefaultsToLastEdit && !parentGroupId
+          ? {
+              ...state.liveDefaultParameters,
+              [key]: defVal,
+              ...(key === 'paddingLeft' || key === 'paddingRight'
+                ? {
+                    paddingLeft: defaultParameters.paddingLeft,
+                    paddingRight: defaultParameters.paddingRight,
+                  }
+                : {}),
+            }
+          : state.liveDefaultParameters;
+
+      const baseParams =
+        parentGroupId && newParams[parentGroupId]
+          ? newParams[parentGroupId]
+          : newLiveDefaults;
+
+      const cur = { ...getClipParams(state, clipId), [key]: defVal };
+      if (key === 'paddingLeft' || key === 'paddingRight') {
+        cur.paddingLeft = defaultParameters.paddingLeft;
+        cur.paddingRight = defaultParameters.paddingRight;
+      }
+      const hasOtherDifferences =
+        NUMERIC_PARAM_KEYS.some((k) => cur[k] !== baseParams[k]) ||
+        cur.paddingLocked !== baseParams.paddingLocked;
+
+      if (!hasOtherDifferences && !cur.bypassed) {
+        delete newParams[clipId];
+      } else {
+        newParams[clipId] = cur;
+      }
+
+      return {
+        parameters: newParams,
+        liveDefaultParameters: newLiveDefaults,
+      };
+    });
+  },
+  resetAllParametersToDefault: (clipId) => {
+    set((state) => {
+      const constituents = state.groupToClips?.[clipId];
+      const newParams = { ...state.parameters };
+      const newMods = { ...state.regionModifications };
+      delete newMods[clipId];
+
+      if (constituents && constituents.length > 0) {
+        const groupBypassed = Boolean(state.parameters[clipId]?.bypassed);
+        const newLiveDefaults = state.syncDefaultsToLastEdit
+          ? { ...defaultParameters, bypassed: state.liveDefaultParameters.bypassed }
+          : state.liveDefaultParameters;
+
+        const hasDiffFromLive =
+          NUMERIC_PARAM_KEYS.some((k) => defaultParameters[k] !== newLiveDefaults[k]) ||
+          defaultParameters.paddingLocked !== newLiveDefaults.paddingLocked;
+
+        if (!hasDiffFromLive && !groupBypassed) {
+          delete newParams[clipId];
+        } else {
+          newParams[clipId] = {
+            ...defaultParameters,
+            bypassed: groupBypassed,
+          };
+        }
+
+        for (const cid of constituents) {
+          delete newMods[cid];
+          if (newParams[cid]?.bypassed) {
+            newParams[cid] = {
+              ...defaultParameters,
+              bypassed: true,
+            };
+          } else {
+            delete newParams[cid];
+          }
+        }
+
+        return {
+          parameters: newParams,
+          regionModifications: newMods,
+          liveDefaultParameters: newLiveDefaults,
+        };
+      }
+
+      const parentGroupId = state.clipToGroup?.[clipId];
+      const clipBypassed = Boolean(getClipParams(state, clipId).bypassed);
+      const resetClipParams: ClipParameters = {
+        ...defaultParameters,
+        bypassed: clipBypassed,
+      };
+
+      const newLiveDefaults =
+        state.syncDefaultsToLastEdit && !parentGroupId
+          ? { ...defaultParameters, bypassed: state.liveDefaultParameters.bypassed }
+          : state.liveDefaultParameters;
+
+      const baseParams =
+        parentGroupId && newParams[parentGroupId]
+          ? newParams[parentGroupId]
+          : newLiveDefaults;
+
+      const hasDiffFromBase =
+        NUMERIC_PARAM_KEYS.some((k) => resetClipParams[k] !== baseParams[k]) ||
+        resetClipParams.paddingLocked !== baseParams.paddingLocked;
+
+      if (!hasDiffFromBase && !clipBypassed) {
+        delete newParams[clipId];
+      } else {
+        newParams[clipId] = resetClipParams;
+      }
+
+      return {
+        parameters: newParams,
+        regionModifications: newMods,
+        liveDefaultParameters: newLiveDefaults,
+      };
+    });
+  },
   setSyncDefaults: (enabled) => set({ syncDefaultsToLastEdit: enabled }),
-  getParameter: (clipId, key) => getClipParams(get(), clipId)[key],
+  setPendingAutoPlay: (enabled) => set({ pendingAutoPlay: enabled }),
 
+  getRegionModifications: (clipId) => {
+    const state = get();
+    return state.regionModifications[clipId] ?? [];
+  },
+
+  upsertRegionModification: (clipId, mod) => {
+    set((state) => {
+      const existingList = [...(state.regionModifications[clipId] ?? [])];
+      let targetIdx = -1;
+
+      if (mod.id) {
+        targetIdx = existingList.findIndex((m) => m.id === mod.id);
+      }
+      if (targetIdx === -1) {
+        let bestDist = Infinity;
+        for (let i = 0; i < existingList.length; i++) {
+          const dist = Math.abs(existingList[i].centerTime - mod.centerTime);
+          if (dist <= REGION_MODIFICATION_EPSILON_SECONDS && dist < bestDist) {
+            bestDist = dist;
+            targetIdx = i;
+          }
+        }
+      }
+
+      if (targetIdx !== -1) {
+        const prev = existingList[targetIdx];
+        const nextDeltaStart = mod.deltaStart !== undefined ? mod.deltaStart : prev.deltaStart;
+        const nextDeltaEnd = mod.deltaEnd !== undefined ? mod.deltaEnd : prev.deltaEnd;
+        if (
+          Math.abs(nextDeltaStart) <= MODIFICATION_DELTA_EPSILON &&
+          Math.abs(nextDeltaEnd) <= MODIFICATION_DELTA_EPSILON
+        ) {
+          existingList.splice(targetIdx, 1);
+        } else {
+          existingList[targetIdx] = {
+            ...prev,
+            centerTime: mod.centerTime,
+            deltaStart: Math.round(nextDeltaStart * 10000) / 10000,
+            deltaEnd: Math.round(nextDeltaEnd * 10000) / 10000,
+          };
+        }
+      } else {
+        const nextDeltaStart = mod.deltaStart ?? 0;
+        const nextDeltaEnd = mod.deltaEnd ?? 0;
+        if (
+          Math.abs(nextDeltaStart) > MODIFICATION_DELTA_EPSILON ||
+          Math.abs(nextDeltaEnd) > MODIFICATION_DELTA_EPSILON
+        ) {
+          existingList.push({
+            id: mod.id || `mod_${Math.round(mod.centerTime * 1000)}_${Math.random().toString(36).slice(2, 7)}`,
+            centerTime: mod.centerTime,
+            deltaStart: Math.round(nextDeltaStart * 10000) / 10000,
+            deltaEnd: Math.round(nextDeltaEnd * 10000) / 10000,
+          });
+        }
+      }
+
+      const newMods = { ...state.regionModifications };
+      if (existingList.length === 0) {
+        delete newMods[clipId];
+      } else {
+        newMods[clipId] = existingList;
+      }
+      return { regionModifications: newMods };
+    });
+  },
+
+  removeRegionModifications: (clipId, modIds) => {
+    if (!modIds || modIds.length === 0) return;
+    set((state) => {
+      const existingList = state.regionModifications[clipId];
+      if (!existingList || existingList.length === 0) return state;
+      const idSet = new Set(modIds);
+      const filtered = existingList.filter((m) => !idSet.has(m.id));
+      const newMods = { ...state.regionModifications };
+      if (filtered.length === 0) {
+        delete newMods[clipId];
+      } else {
+        newMods[clipId] = filtered;
+      }
+      return { regionModifications: newMods };
+    });
+  },
+
+  clearRegionModifications: (clipId) => {
+    set((state) => {
+      if (!state.regionModifications[clipId]) return state;
+      const newMods = { ...state.regionModifications };
+      delete newMods[clipId];
+      return { regionModifications: newMods };
+    });
+  },
+  getParameter: (clipId, key) => {
+    const state = get();
+    const constituents = state.groupToClips?.[clipId];
+    if (constituents && constituents.length > 0) {
+      if (key === 'bypassed' || key === 'paddingLocked') {
+        return getClipParams(state, clipId)[key];
+      }
+      const activeConstituents = constituents.filter((cid) => !getClipParams(state, cid).bypassed);
+      const targetConstituents = activeConstituents.length > 0 ? activeConstituents : constituents;
+
+      let sum = 0;
+      for (const cid of targetConstituents) {
+        const cVal = getClipParams(state, cid)[key];
+        sum += (cVal as number);
+      }
+      const avg = sum / targetConstituents.length;
+      return (Math.round(avg * 1000) / 1000) as any;
+    }
+    return getClipParams(state, clipId)[key];
+  },
 
   setParameter: (clipId, key, value) => {
-    const currentValue = getClipParams(get(), clipId)[key];
-    if (currentValue === value) {
-      return;
-    }
-
     set((state) => {
+      const constituents = state.groupToClips?.[clipId];
+      if (constituents && constituents.length > 0) {
+        if (key === 'bypassed' || key === 'paddingLocked') {
+          const newParams = { ...state.parameters };
+          const groupParams = {
+            ...getClipParams(state, clipId),
+            [key]: value,
+          };
+          newParams[clipId] = groupParams;
+          return {
+            parameters: newParams,
+            liveDefaultParameters:
+              state.syncDefaultsToLastEdit && key !== 'bypassed'
+                ? { ...groupParams, bypassed: state.liveDefaultParameters.bypassed }
+                : state.liveDefaultParameters,
+          };
+        }
+
+        const activeConstituents = constituents.filter((cid) => !getClipParams(state, cid).bypassed);
+        const targetConstituents = activeConstituents.length > 0 ? activeConstituents : constituents;
+
+        // Numeric parameter offset adjustment across active group constituents:
+        let sum = 0;
+        for (const cid of targetConstituents) {
+          const cVal = getClipParams(state, cid)[key];
+          sum += (cVal as number);
+        }
+        const currentAvg = sum / targetConstituents.length;
+        const delta = (value as number) - currentAvg;
+        if (Math.abs(delta) < 1e-6) {
+          return state;
+        }
+
+        const newParams = { ...state.parameters };
+        const currentGroupVal = (getClipParams(state, clipId)[key] as number);
+        const groupParams = {
+          ...getClipParams(state, clipId),
+          [key]: clampParameter(key, currentGroupVal + delta),
+        };
+        if (groupParams.paddingLocked && (key === 'paddingLeft' || key === 'paddingRight')) {
+          const otherSide = key === 'paddingLeft' ? 'paddingRight' : 'paddingLeft';
+          const otherVal = (getClipParams(state, clipId)[otherSide] as number);
+          groupParams[otherSide] = clampParameter(otherSide, otherVal + delta);
+        }
+        newParams[clipId] = groupParams;
+
+        // Shift active constituents that have explicit overrides in state.parameters
+        for (const cid of targetConstituents) {
+          if (newParams[cid]) {
+            const cur = { ...newParams[cid] };
+            const oldVal = cur[key] as number;
+            cur[key] = clampParameter(key, oldVal + delta) as any;
+            if (cur.paddingLocked && (key === 'paddingLeft' || key === 'paddingRight')) {
+              const otherSide = key === 'paddingLeft' ? 'paddingRight' : 'paddingLeft';
+              const oldOther = cur[otherSide] as number;
+              cur[otherSide] = clampParameter(otherSide, oldOther + delta) as any;
+            }
+            newParams[cid] = cur;
+          }
+        }
+
+        return {
+          parameters: newParams,
+          liveDefaultParameters: state.syncDefaultsToLastEdit
+            ? { ...state.liveDefaultParameters, [key]: clampParameter(key, value as number) }
+            : state.liveDefaultParameters,
+        };
+      }
+
+      const currentValue = getClipParams(state, clipId)[key];
+      if (currentValue === value) {
+        return state;
+      }
+
       const newClipParams = {
         ...getClipParams(state, clipId),
         [key]: value,
       };
-      
-      const shouldUpdateLiveDefaults = state.syncDefaultsToLastEdit && key !== 'bypassed';
+
+      const shouldUpdateLiveDefaults =
+        state.syncDefaultsToLastEdit && key !== 'bypassed' && !state.clipToGroup?.[clipId];
 
       return {
         parameters: {
@@ -203,26 +656,86 @@ export function useIsClipModified(clipIdToCheck?: string): boolean {
       const clipId = clipIdToCheck ?? state.currentClipId;
       if (!clipId) return false;
 
-      // A clip can't be "modified" if it doesn't have its own specific parameters.
-      // This is the crucial first check.
+      if ((state.regionModifications[clipId]?.length ?? 0) > 0) {
+        return true;
+      }
+
+      const constituents = state.groupToClips?.[clipId];
+      if (constituents && constituents.length > 0) {
+        for (const cid of constituents) {
+          if ((state.regionModifications[cid]?.length ?? 0) > 0) {
+            return true;
+          }
+        }
+      }
+
+      // Check if the clip has its own specific parameters.
       if (!Object.prototype.hasOwnProperty.call(state.parameters, clipId)) {
         return false;
       }
 
-      // The clip has its own parameters, so let's get them.
       const clipParams = state.parameters[clipId];
       const staticDefaults = defaultParameters;
 
-      // Now, we check if any of the clip's OWN parameters (excluding 'bypassed')
+      // Check if any of the clip's OWN parameters (excluding 'bypassed')
       // have a value that is different from the static, hardcoded default.
       return (Object.keys(clipParams) as (keyof ClipParameters)[]).some(key => {
         if (key === 'bypassed') {
           return false; // Always ignore the 'bypassed' key in the comparison.
         }
-        // If the clip's value for this key is different from the default,
-        // then the clip is considered modified.
         return clipParams[key] !== staticDefaults[key];
       });
     }
   );
 }
+
+export function useHasRegionModifications(
+  clipId?: string | null,
+  constituentIds?: string[]
+): boolean {
+  return useStoreWithEqualityFn(
+    useClipStore,
+    (state) => {
+      if (clipId && (state.regionModifications[clipId]?.length ?? 0) > 0) {
+        return true;
+      }
+      if (constituentIds && constituentIds.length > 0) {
+        return constituentIds.some(
+          (id) => (state.regionModifications[id]?.length ?? 0) > 0
+        );
+      }
+      return false;
+    }
+  );
+}
+
+export function useHasGroupOverrides(constituentIds?: string[]): boolean {
+  return useStoreWithEqualityFn(
+    useClipStore,
+    (state) => {
+      if (!constituentIds || constituentIds.length === 0) return false;
+      return constituentIds.some((id) =>
+        isConstituentClipOverridden(id, state.parameters, state.clipToGroup, state.regionModifications)
+      );
+    }
+  );
+}
+
+export function isConstituentClipOverridden(
+  clipId: string,
+  parameters: Record<string, ClipParameters>,
+  clipToGroup?: Record<string, string>,
+  regionModifications?: Record<string, RegionModification[]>
+): boolean {
+  const regMods = regionModifications ?? useClipStore.getState().regionModifications;
+  if ((regMods?.[clipId]?.length ?? 0) > 0) {
+    return true;
+  }
+  const clipParams = parameters[clipId];
+  if (!clipParams) return false;
+  const groupMap = clipToGroup ?? useClipStore.getState().clipToGroup;
+  const groupId = groupMap?.[clipId];
+  const baseParams = groupId && parameters[groupId] ? parameters[groupId] : defaultParameters;
+  return NUMERIC_PARAM_KEYS.some((k) => clipParams[k] !== baseParams[k]);
+}
+

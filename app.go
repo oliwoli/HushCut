@@ -15,13 +15,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type FfmpegStatus int
@@ -38,6 +40,8 @@ type ackWaiter struct {
 }
 
 type App struct {
+	app     *application.App
+	window  *application.WebviewWindow
 	ctx     context.Context
 	isDev   bool
 	testApi bool
@@ -73,10 +77,19 @@ type App struct {
 	authToken  string
 
 	// - Python/Lua tasks - //
-	pendingMu    sync.Mutex
-	pendingTasks map[string]chan PythonCommandResponse
-	ackMutex     sync.Mutex
-	ackTasks     map[string]ackWaiter
+	pendingMu        sync.Mutex
+	pendingTasks     map[string]chan PythonCommandResponse
+	ackMutex         sync.Mutex
+	ackTasks         map[string]ackWaiter
+	currentProjectMu sync.RWMutex
+	currentProject   *ProjectDataPayload
+	otioReadyChan    chan struct{}
+
+	// --- Timeline Sessions / Multi-Timeline Workspace ---
+	sessionMu        sync.RWMutex
+	activeTimelineID string
+	timelineSessions map[string]*TimelineSession
+	timelineOrder    []string
 
 	// --- FFmpeg STATE ---
 	ffmpegMutex      sync.RWMutex
@@ -112,15 +125,63 @@ func NewApp() *App {
 		appVersion:    AppVersion,
 		ffmpegVersion: FfmpegVersion,
 		fileUsage:     make(map[string]time.Time),
+
+		timelineSessions: make(map[string]*TimelineSession),
+		timelineOrder:    make([]string, 0),
 	}
 }
 
+func (a *App) SetApplication(app *application.App, window *application.WebviewWindow) {
+	a.app = app
+	a.window = window
+}
+
+func (a *App) emitEvent(name string, data ...any) {
+	if a.app != nil && a.app.Event != nil {
+		a.app.Event.Emit(name, data...)
+	} else if app := application.Get(); app != nil && app.Event != nil {
+		app.Event.Emit(name, data...)
+	}
+}
+
+func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+	a.startup(ctx)
+	return nil
+}
+
+func (a *App) ServiceShutdown() error {
+	a.shutdown(a.ctx)
+	return nil
+}
+
 func (a *App) SetWindowAlwaysOnTop(alwaysOnTop bool) {
-	runtime.WindowSetAlwaysOnTop(a.ctx, alwaysOnTop)
+	if a.window != nil {
+		a.window.SetAlwaysOnTop(alwaysOnTop)
+	}
+}
+
+func (a *App) OpenDevTools() {
+	if !a.isDev {
+		return
+	}
+	var nsWindow unsafe.Pointer
+	if a.window != nil {
+		nsWindow = a.window.NativeWindow()
+		a.window.OpenDevTools()
+	}
+	openNativeDevTools(nsWindow)
+}
+
+func (a *App) IsDev() bool {
+	return a.isDev
 }
 
 func (a *App) OpenURL(url string) {
-	runtime.BrowserOpenURL(a.ctx, url)
+	if a.app != nil && a.app.Browser != nil {
+		a.app.Browser.OpenURL(url)
+	} else if app := application.Get(); app != nil && app.Browser != nil {
+		app.Browser.OpenURL(url)
+	}
 }
 
 type ProgressTracker struct {
@@ -131,7 +192,7 @@ type ProgressTracker struct {
 }
 
 func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
-	platform := runtime.Environment(a.ctx).Platform
+	platform := runtime.GOOS
 
 	goExecutablePath, err := os.Executable()
 	if err != nil {
@@ -190,11 +251,35 @@ func (a *App) ResolveBinaryPath(binaryName string) (string, error) {
 // launch python backend and wait for POST /ready on http server endpoint
 func (a *App) LaunchPythonBackend(port int, pythonCommandPort int) error {
 
-	pythonBinaryPath := filepath.Join(a.resourcesPath, "python_backend")
+	binName := "python_backend"
+	if runtime.GOOS == "windows" {
+		binName = "python_backend.exe"
+	}
 
-	platform := runtime.Environment(a.ctx).Platform
-	if platform == "windows" {
-		pythonBinaryPath = filepath.Join(a.resourcesPath, "python_backend.exe")
+	pythonBinaryPath := filepath.Join(a.resourcesPath, binName)
+
+	if fi, err := os.Stat(pythonBinaryPath); err != nil || fi.IsDir() {
+		// Fallbacks when running outside a packaged bundle (e.g. go run -tags server .)
+		candidates := []string{
+			filepath.Join("bin", "HushCut.dev.app", "Contents", "Resources", binName),
+			filepath.Join("bin", "HushCut.app", "Contents", "Resources", binName),
+			filepath.Join("bin", binName),
+			filepath.Join("build", "bin", binName),
+			filepath.Join(".", binName),
+		}
+		for _, cand := range candidates {
+			if absCand, err := filepath.Abs(cand); err == nil {
+				if fi, err := os.Stat(absCand); err == nil && !fi.IsDir() {
+					pythonBinaryPath = absCand
+					log.Printf("Go app: Located Python backend fallback at '%s'", pythonBinaryPath)
+					break
+				}
+			}
+		}
+	}
+
+	if fi, err := os.Stat(pythonBinaryPath); err != nil || fi.IsDir() {
+		return fmt.Errorf("python backend binary not found at '%s' or fallback paths (run 'wails3 task darwin:build DEV=true' or build python_backend first)", pythonBinaryPath)
 	}
 
 	cmdArgs := []string{
@@ -273,8 +358,13 @@ func parseWhereOutput(output string) (string, error) {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	envInfo := runtime.Environment(ctx)
-	if envInfo.BuildType == "production" {
+	isDev := true
+	if a.app != nil {
+		isDev = a.app.Env.Info().Debug
+	} else if app := application.Get(); app != nil {
+		isDev = app.Env.Info().Debug
+	}
+	if !isDev {
 		log.Println("|> HushCut v" + a.GetAppVersion() + " - Production Build")
 		a.isDev = false
 	} else {
@@ -288,7 +378,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	goExecutableDir := filepath.Dir(goExecutablePath)
 
-	platform := runtime.Environment(a.ctx).Platform
+	platform := runtime.GOOS
 	switch platform {
 	case "darwin":
 		configDir, err := os.UserConfigDir()
@@ -397,7 +487,7 @@ func (a *App) startup(ctx context.Context) {
 	// Launch the main initialization logic in a separate goroutine
 	go a.initializeBackendsAndPython()
 	ffmpegBinName := "ffmpeg"
-	if runtime.Environment(a.ctx).Platform == "windows" {
+	if runtime.GOOS == "windows" {
 		ffmpegBinName = "ffmpeg.exe"
 	}
 	a.ffmpegBinaryPath = filepath.Join(a.userResourcesPath, ffmpegBinName)
@@ -416,7 +506,7 @@ func (a *App) startup(ctx context.Context) {
 			log.Print("no ffmpeg installation in system PATH")
 		}
 
-		platform := runtime.Environment(a.ctx).Platform
+		platform := runtime.GOOS
 		if platform == "windows" {
 			cmd := exec.Command("cmd", "/c", "where", "ffmpeg")
 			out, err := cmd.Output()
@@ -436,9 +526,9 @@ func (a *App) startup(ctx context.Context) {
 		a.ffmpegStatus = StatusReady
 	}
 
-	runtime.EventsEmit(a.ctx, "ffmpeg:status", a.ffmpegStatus)
+	a.emitEvent("ffmpeg:status", a.ffmpegStatus)
 
-	runtime.WindowSetAlwaysOnTop(a.ctx, true)
+	a.SetWindowAlwaysOnTop(true)
 
 	log.Println("Wails App: OnStartup method finished. UI should proceed to load.")
 
@@ -484,7 +574,7 @@ func (a *App) shutdown(ctx context.Context) {
 		log.Printf("Shutting down Python process with PID %d...", a.pythonCmd.Process.Pid)
 
 		var terminateErr error
-		if runtime.Environment(a.ctx).Platform == "windows" {
+		if runtime.GOOS == "windows" {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			a.sendRequestToPython(ctx, "POST", "/shutdown", map[string]interface{}{})
@@ -550,17 +640,17 @@ func (a *App) initializeBackendsAndPython() {
 	if err := a.LaunchHttpServer(); err != nil {
 		errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Go HTTP server: %v", err)
 		log.Println("Go Routine: " + errMsg)
-		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+		a.emitEvent("app:criticalError", errMsg)
 		return
 	}
 	log.Println("Go Routine: Go HTTP server launch sequence initiated.")
-	runtime.EventsEmit(a.ctx, "go:ready", nil)
+	a.emitEvent("go:ready", nil)
 
 	goHTTPServerPort := a.GetGoServerPort()
 	if goHTTPServerPort == 0 {
 		errMsg := "CRITICAL ERROR: Failed to get Go HTTP server port."
 		log.Println("Go Routine: " + errMsg)
-		runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+		a.emitEvent("app:criticalError", errMsg)
 		return
 	}
 
@@ -570,18 +660,18 @@ func (a *App) initializeBackendsAndPython() {
 		if err := a.registerWithPython(goHTTPServerPort); err != nil {
 			errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to register with Python: %v", err)
 			log.Println("Go Routine: " + errMsg)
-			runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+			a.emitEvent("app:criticalError", errMsg)
 			return
 		}
 		a.pythonReady = true
-		runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": true})
+		a.emitEvent("pythonStatusUpdate", map[string]interface{}{"isReady": true})
 	} else {
 		// Python is not running, launch it for production
 		pythonCmdPort, err := findFreePort()
 		if err != nil {
 			errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to find free port for Python: %v", err)
 			log.Println("Go Routine: " + errMsg)
-			runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+			a.emitEvent("app:criticalError", errMsg)
 			return
 		}
 		a.pythonCommandPort = pythonCmdPort
@@ -589,7 +679,7 @@ func (a *App) initializeBackendsAndPython() {
 		if err := a.LaunchPythonBackend(goHTTPServerPort, a.pythonCommandPort); err != nil {
 			errMsg := fmt.Sprintf("CRITICAL ERROR: Failed to launch Python backend: %v", err)
 			log.Println("Go Routine: " + errMsg)
-			runtime.EventsEmit(a.ctx, "app:criticalError", errMsg)
+			a.emitEvent("app:criticalError", errMsg)
 			return
 		}
 
@@ -598,10 +688,11 @@ func (a *App) initializeBackendsAndPython() {
 		case <-a.pythonReadyChan:
 			log.Println("Go Routine: Python backend has registered successfully.")
 			a.pythonReady = true
-			runtime.EventsEmit(a.ctx, "pythonStatusUpdate", map[string]interface{}{"isReady": true})
+			a.emitEvent("pythonStatusUpdate", map[string]interface{}{"isReady": true})
 		case <-time.After(30 * time.Second):
 			log.Printf("Go Routine Warning: Timed out waiting for Python registration.")
 			a.pythonReady = false
+			a.emitEvent("pythonStatusUpdate", map[string]interface{}{"isReady": false, "error": "Timed out waiting for Python registration."})
 		case <-a.ctx.Done():
 			log.Println("Go Routine: Application shutdown requested during Python wait.")
 			return
@@ -651,6 +742,7 @@ func (a *App) GetSettings() (map[string]any, error) {
 			defaultSettings["cleanupThresholdDays"] = 30
 			defaultSettings["enableCleanup"] = true
 			defaultSettings["UiScale"] = 1.0
+			defaultSettings["autoAdvanceClip"] = false
 
 			jsonData, marshalErr := json.MarshalIndent(defaultSettings, "", "  ")
 			if marshalErr != nil {
@@ -715,13 +807,20 @@ func (a *App) SelectDirectory() (string, error) {
 		}
 	}
 
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		DefaultDirectory: defaultDir,
+	dialog := application.Get().Dialog.OpenFileWithOptions(&application.OpenFileDialogOptions{
+		CanChooseDirectories: true,
+		CanChooseFiles:       false,
+		Directory:            defaultDir,
 	})
+	return dialog.PromptForSingleSelection()
 }
 
 func (a *App) CloseApp() {
-	runtime.Quit(a.ctx)
+	if a.app != nil {
+		a.app.Quit()
+	} else if app := application.Get(); app != nil {
+		app.Quit()
+	}
 }
 
 func (a *App) GetPythonReadyStatus() bool {
@@ -857,13 +956,24 @@ func parseFFmpegStreams(ffmpegOutput string) ([]VideoStream, []AudioStream) {
 	return videoStreams, audioStreams
 }
 
+func resolveAudioStreamAndChannel(channelIndex int, audioStreams []AudioStream) (int, int, error) {
+	remaining := channelIndex
+	for i, aStream := range audioStreams {
+		if remaining < aStream.Channels {
+			return i, remaining, nil
+		}
+		remaining -= aStream.Channels
+	}
+	return 0, 0, fmt.Errorf("audio channel index %d is out of bounds for the available streams", channelIndex)
+}
+
 func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceChannel *SourceChannel) error {
 	tracker := &ProgressTracker{Done: make(chan error, 1)}
 	actualTracker, loaded := a.progressTracker.LoadOrStore(outputPath, tracker)
 
 	if loaded {
 		// If another goroutine is already working on this, just wait for its result.
-		runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
+		// runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Another task is already handling %s. Waiting.", filepath.Base(outputPath))
 		err := <-actualTracker.(*ProgressTracker).Done
 		return err
 	}
@@ -871,7 +981,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	defer func() {
 		close(tracker.Done)
 		a.progressTracker.Delete(outputPath)
-		runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
+		// runtime.LogDebugf(a.ctx, "StandardizeAudioToWav: Cleaned up tracker for %s.", filepath.Base(outputPath))
 	}()
 
 	if err := a.waitForFfmpeg(); err != nil {
@@ -921,33 +1031,18 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 		log.Printf("  - Stream %d: %d channels", i, as.Channels)
 	}
 
-	streamFound := false
-	audioStreamIndex := 0
-	remaining := sourceChannel.ChannelIndex // 0-based index from Python
-	//streamIndexInAudioStreams := 0
-
-	for i, aStream := range audioStreams {
-		if remaining < aStream.Channels {
-			audioStreamIndex = i // absolute stream index in ffmpeg
-			streamFound = true
-			//streamIndexInAudioStreams = i // save the index for later
-			break
-		}
-		remaining -= aStream.Channels
-	}
-
-	if !streamFound {
-		return fmt.Errorf("audio channel index %d is out of bounds for the available streams", sourceChannel.ChannelIndex)
-	}
-
 	args := []string{"-y", "-i", inputPath}
 
 	if sourceChannel != nil {
-		//aStream := audioStreams[streamIndexInAudioStreams]
-		log.Printf("Extracting channel %d from stream %d of '%s'",
-			sourceChannel.ChannelIndex, audioStreamIndex, filepath.Base(inputPath))
+		audioStreamIndex, channelInStream, err := resolveAudioStreamAndChannel(sourceChannel.ChannelIndex, audioStreams)
+		if err != nil {
+			return err
+		}
 
-		panExpr := fmt.Sprintf("c0=c%d", sourceChannel.ChannelIndex)
+		log.Printf("Extracting channel %d (stream %d, channel %d) from '%s'",
+			sourceChannel.ChannelIndex, audioStreamIndex, channelInStream, filepath.Base(inputPath))
+
+		panExpr := fmt.Sprintf("c0=c%d", channelInStream)
 
 		afArg := fmt.Sprintf("pan=mono|%s", panExpr)
 		args = append(args,
@@ -991,7 +1086,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	// Emit a 0% event immediately so the UI feels responsive
 	if totalDurationUs > 0 {
-		runtime.EventsEmit(a.ctx, "conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: 0})
+		a.emitEvent("conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: 0})
 	}
 
 	// Goroutine to read and parse progress from stdout
@@ -1029,7 +1124,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 			tracker.mu.Lock()
 			tracker.Percentage = percentage
 			tracker.mu.Unlock()
-			runtime.EventsEmit(a.ctx, "conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: percentage, TaskType: "conversion"})
+			a.emitEvent("conversion:progress", ProgressStatus{FilePath: outputPath, Percentage: percentage, TaskType: "conversion"})
 			lastReportedPct = percentage
 		}
 	}()
@@ -1043,7 +1138,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 
 	if err != nil {
 		finalErr := fmt.Errorf("ffmpeg standardization failed for %s: %w. Stderr: %s", inputPath, err, stderrBuf.String())
-		runtime.EventsEmit(a.ctx, "conversion:error", ProgressStatus{FilePath: outputPath, Error: finalErr.Error()})
+		a.emitEvent("conversion:error", ProgressStatus{FilePath: outputPath, Error: finalErr.Error()})
 		tracker.Done <- finalErr
 		return finalErr
 	}
@@ -1052,7 +1147,7 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 	tracker.mu.Lock()
 	tracker.Percentage = 100.0
 	tracker.mu.Unlock()
-	runtime.EventsEmit(a.ctx, "conversion:done", ProgressStatus{FilePath: outputPath, Percentage: 100})
+	a.emitEvent("conversion:done", ProgressStatus{FilePath: outputPath, Percentage: 100})
 	tracker.Done <- nil
 
 	// Update file usage timestamp
@@ -1063,7 +1158,13 @@ func (a *App) StandardizeAudioToWav(inputPath string, outputPath string, sourceC
 func (a *App) WaitForFile(path string) error {
 	val, ok := a.progressTracker.Load(path)
 	if !ok {
-		return nil
+		// Also check if path was passed as a relative/base filename
+		baseName := filepath.Base(path)
+		fullPath := filepath.Join(a.tmpPath, baseName)
+		val, ok = a.progressTracker.Load(fullPath)
+		if !ok {
+			return nil
+		}
 	}
 
 	log.Printf("Waiting for file to be ready: %s", path)
@@ -1165,7 +1266,7 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 		conversionErrors = append(conversionErrors, err.Error())
 	}
 	if len(conversionErrors) > 0 {
-		runtime.EventsEmit(a.ctx, "conversionError", conversionErrors)
+		a.emitEvent("conversionError", conversionErrors)
 		return fmt.Errorf("encountered %d error(s) during audio standardization:\n%s",
 			len(conversionErrors), strings.Join(conversionErrors, "\n"))
 	}
@@ -1175,6 +1276,22 @@ func (a *App) ProcessProjectAudio(projectData ProjectDataPayload) error {
 }
 
 func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips []*NestedAudioTimelineItem) error {
+	inputs := make([]AudioMixInput, 0, len(nestedClips))
+	for _, nc := range nestedClips {
+		if nc.ProcessedFileName == "" {
+			continue
+		}
+		inputs = append(inputs, AudioMixInput{
+			ProcessedFileName: nc.ProcessedFileName,
+			SourceStartFrame:  nc.SourceStartFrame,
+			Duration:          nc.Duration,
+			StartFrame:        nc.StartFrame,
+		})
+	}
+	return a.executeAudioMix(fps, outputPath, inputs)
+}
+
+func (a *App) executeAudioMix(fps float64, outputPath string, inputs []AudioMixInput) error {
 	if err := a.waitForFfmpeg(); err != nil {
 		return err
 	}
@@ -1185,19 +1302,19 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 	uniqueSourceFiles := []string{}
 	sourceMap := make(map[string]int)
 
-	for _, nc := range nestedClips {
-		if nc.ProcessedFileName == "" {
+	for _, in := range inputs {
+		if in.ProcessedFileName == "" {
 			continue
 		}
-		if _, found := sourceMap[nc.ProcessedFileName]; !found {
-			fullPath := filepath.Join(a.tmpPath, nc.ProcessedFileName)
-			sourceMap[nc.ProcessedFileName] = len(uniqueSourceFiles)
+		if _, found := sourceMap[in.ProcessedFileName]; !found {
+			fullPath := filepath.Join(a.tmpPath, in.ProcessedFileName)
+			sourceMap[in.ProcessedFileName] = len(uniqueSourceFiles)
 			uniqueSourceFiles = append(uniqueSourceFiles, fullPath)
 		}
 	}
 
 	if len(uniqueSourceFiles) == 0 {
-		return fmt.Errorf("no valid processed nested clips found for mixdown into %s", filepath.Base(outputPath))
+		return fmt.Errorf("no valid processed audio files found for mixdown into %s", filepath.Base(outputPath))
 	}
 
 	log.Printf("Mixdown for '%s' is waiting for %d input file(s) to be ready...", filepath.Base(outputPath), len(uniqueSourceFiles))
@@ -1206,17 +1323,22 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 			// If an input file failed to convert, this mixdown cannot proceed.
 			return fmt.Errorf("mixdown dependency '%s' failed: %w", filepath.Base(inputFile), err)
 		}
+		if !isValidWavFile(inputFile) {
+			if err := a.ensureStandardizedAudio(inputFile); err != nil {
+				return fmt.Errorf("failed to ensure mixdown dependency '%s': %w", filepath.Base(inputFile), err)
+			}
+		}
 	}
 	log.Printf("All inputs for mixdown '%s' are ready. Proceeding.", filepath.Base(outputPath))
 
-	for i, nc := range nestedClips {
-		if nc.ProcessedFileName == "" {
+	for i, in := range inputs {
+		if in.ProcessedFileName == "" {
 			continue
 		}
-		sourceIndex := sourceMap[nc.ProcessedFileName]
-		startSec := nc.SourceStartFrame / fps
-		durationSec := nc.Duration / fps
-		delayMs := (nc.StartFrame / fps) * 1000
+		sourceIndex := sourceMap[in.ProcessedFileName]
+		startSec := in.SourceStartFrame / fps
+		durationSec := in.Duration / fps
+		delayMs := (in.StartFrame / fps) * 1000
 		trimStream := fmt.Sprintf("[t%d]", i)
 		delayStream := fmt.Sprintf("[d%d]", i)
 		trimFilter := fmt.Sprintf("[%d:a]atrim=start=%f:duration=%f,asetpts=PTS-STARTPTS%s;", sourceIndex, startSec, durationSec, trimStream)
@@ -1230,7 +1352,7 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 		return fmt.Errorf("no streams could be prepared for mixdown into %s", filepath.Base(outputPath))
 	}
 
-	mixFilter := fmt.Sprintf("%samix=inputs=%d:dropout_transition=0:normalize=false[out]", strings.Join(delayedStreams, ""), len(delayedStreams))
+	mixFilter := fmt.Sprintf("%samix=inputs=%d:dropout_transition=0:normalize=false,alimiter=limit=0.98:level=false:attack=5:release=50[out]", strings.Join(delayedStreams, ""), len(delayedStreams))
 	filterComplex.WriteString(mixFilter)
 
 	args := []string{"-y"}
@@ -1253,6 +1375,30 @@ func (a *App) executeMixdownCommand(fps float64, outputPath string, nestedClips 
 	}
 
 	return nil
+}
+
+// ensureStandardizedAudio standardizes a single audio file dependency on-demand if missing.
+func (a *App) ensureStandardizedAudio(targetPath string) error {
+	base := filepath.Base(targetPath)
+	var pd *ProjectDataPayload
+	session := a.GetActiveTimelineSession()
+	if session != nil && session.Data != nil {
+		pd = session.Data
+	} else {
+		a.currentProjectMu.RLock()
+		pd = a.currentProject
+		a.currentProjectMu.RUnlock()
+	}
+	if pd == nil {
+		return fmt.Errorf("no project data to standardize dependency %s", base)
+	}
+
+	for _, it := range pd.Timeline.AudioTrackItems {
+		if it.ProcessedFileName != nil && *it.ProcessedFileName == base {
+			return a.StandardizeAudioToWav(it.SourceFilePath, targetPath, it.SourceChannel)
+		}
+	}
+	return fmt.Errorf("item for audio dependency %s not found in timeline items", base)
 }
 
 func (a *App) MixdownCompoundClips(projectData ProjectDataPayload) error {

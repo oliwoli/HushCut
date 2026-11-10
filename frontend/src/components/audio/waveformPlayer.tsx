@@ -1,13 +1,15 @@
-import { AudioWaveformIcon, ChevronLeftIcon, ChevronRightIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, SkipForwardIcon } from "lucide-react";
+import { AudioWaveformIcon, ChevronLeftIcon, ChevronRightIcon, FastForwardIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RedoDotIcon, RotateCcwIcon, SkipForwardIcon } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback, useMemo, memo } from "react";
+import { createPortal } from "react-dom";
 import { useDebounce } from "use-debounce";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.js";
-import Minimap from "wavesurfer.js/dist/plugins/minimap.esm.js";
+import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 
-import { useClipParameter, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
+import { useClipParameter, useClipStore, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
 
-import { ActiveClip } from "@/types";
+import { ActiveClip, SilencePeriod } from "@/types";
+import { DisplayClip } from "@/lib/clipUtils";
 import { useSilenceData } from "@/hooks/useSilenceData";
 //import { frameToTimecode, secToFrames } from "@/lib/utils";
 
@@ -120,11 +122,6 @@ const getFrameFromTime = (time: number, frameRate: number): number => {
   return Math.floor((time % 1) * frameRate);
 };
 
-interface SilencePeriod {
-  start: number;
-  end: number;
-}
-
 interface TimecodeDisplayProps {
   time: number;
   duration: number;
@@ -144,7 +141,7 @@ export const TimecodeDisplay: React.FC<TimecodeDisplayProps> = React.memo(({
   const formattedDuration = formatAudioTime(duration, frameRate, showHours);
 
   return (
-    <span className="ml-2 flex gap-1.5 pt-1 text-xs font-mono tracking-tighter text-gray-400/80 mb-[3px]">
+    <span className="ml-2 flex gap-1.5 pt-1 text-xs font-mono tracking-tighter text-gray-400/80 mb-0.75">
       <span>{formattedTime}</span>
       <span>/</span>
       <span>{formattedDuration}</span>
@@ -157,12 +154,14 @@ TimecodeDisplay.displayName = "TimecodeDisplay";
 
 interface WaveformPlayerProps {
   activeClip: ActiveClip | null;
+  displayClips?: DisplayClip[];
   projectFrameRate?: number | 30.0;
-  httpPort: number
+  httpPort: number;
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   activeClip,
+  displayClips,
   projectFrameRate,
   httpPort,
 }) => {
@@ -205,12 +204,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const waveformContainerRef = useRef<HTMLDivElement>(null);
   const minimapContainerRef = useRef<HTMLDivElement>(null); // 2. Add a Ref for Minimap container
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-  const regionsPluginRef = useRef<RegionsPlugin | null>(null);
+  const regionsPluginRef = useRef<InstanceType<typeof RegionsPlugin> | null>(null);
   const addRegionsTimeoutRef = useRef<any | null>(null); // Ref to manage the timeout for adding regions
 
   const setPlaybackState = usePlaybackStore.setState;
 
   const [isPlaying, setIsPlaying] = useState(false);
+  const isPlayingRef = useRef(false);
   const [isLoading, setIsLoading] = useState(true);
 
   const clipFrameDuration = activeClip.sourceEndFrame - activeClip.sourceStartFrame
@@ -227,12 +227,18 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   //update the player time if timecode fits
   useEffect(() => {
     if (!wavesurferRef.current || !currTimecode) return;
-    if (currTimecode.frameCount < maxTimecode.frameCount) {
+    if (isPlayingRef.current) return;
+    if (
+      currTimecode.frameCount >= activeClip.startFrame &&
+      currTimecode.frameCount < maxTimecode.frameCount
+    ) {
       console.log("curr timecode: ", currTimecode);
       //const currTime = (currTimelineFrameRefTC.frameCount - activeClip.startFrame) / projectFrameRate;
       const clipTime =
         (currTimecode.frameCount - activeClip.startFrame) / projectFrameRate;
       console.log("we can use the timecode! ", clipTime);
+      isUserSeekingRef.current = false;
+      lastTimecodeRef.current = currTimecode.toString();
       currentTimeRef.current = clipTime;
       setDisplayedTime(clipTime);
       wavesurferRef.current?.setTime(clipTime);
@@ -241,11 +247,13 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
   const currentTimeRef = useRef(0);
   const [displayedTime, setDisplayedTime] = useState(0);
+  const isUserSeekingRef = useRef(false);
 
   // Reset current time when activeClip changes
   useEffect(() => {
     currentTimeRef.current = 0;
     setDisplayedTime(0);
+    isUserSeekingRef.current = false;
   }, [activeClip]);
 
   const currTimelineFrameRef = useRef<number | null>(null);
@@ -265,10 +273,31 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     currTimelineFrameRef.current = frame;
   }, [displayedTime, isLoading, projectFrameRate, activeClip.startFrame]);
 
-  // 2) Cooldown-style throttle, but only when paused
+  // Sync DaVinci playhead when leaving focus during playback
   useEffect(() => {
-    if (isPlaying || isLoading || displayedTime == null) {
-      // If we're playing, loading, or don't have a time, clear any pending timer and exit.
+    const handleWindowBlur = () => {
+      if (isPlayingRef.current && activeClip && projectFrameRate) {
+        const currentTime = wavesurferRef.current
+          ? wavesurferRef.current.getCurrentTime()
+          : currentTimeRef.current;
+        const frame =
+          secToFrames(currentTime, projectFrameRate) + activeClip.startFrame;
+        const tc = Timecode(frame, projectFrameRate as FRAMERATE, false);
+        const tcStr = tc.toString();
+        lastTimecodeRef.current = tcStr;
+        SetDavinciPlayhead(tcStr).catch((err) => {
+          console.error("Error setting DaVinci playhead on blur:", err);
+        });
+      }
+    };
+    window.addEventListener("blur", handleWindowBlur);
+    return () => window.removeEventListener("blur", handleWindowBlur);
+  }, [activeClip, projectFrameRate]);
+
+  // 2) Cooldown-style throttle, but only when paused and user-initiated
+  useEffect(() => {
+    if (isPlaying || isLoading || displayedTime == null || !isUserSeekingRef.current) {
+      // If we're playing, loading, don't have a time, or this is NOT user-initiated seeking, clear any pending timer and exit.
       if (timerRef.current != null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -279,18 +308,23 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const makeUpdate = async () => {
       // *** FIX 1: Check the lock. If an update is already running, do nothing. ***
       if (isUpdatingRef.current) return;
+      if (!isUserSeekingRef.current) return;
 
       const f = Math.round(currTimelineFrameRef.current!);
       const tcStr = Timecode(f, projectFrameRate as FRAMERATE, false).toString();
 
       // No-op if timecode hasn't actually changed
-      if (tcStr === lastTimecodeRef.current) return;
+      if (tcStr === lastTimecodeRef.current) {
+        isUserSeekingRef.current = false;
+        return;
+      }
 
       try {
         // *** FIX 2: Set the lock and update the call time BEFORE the async call. ***
         isUpdatingRef.current = true;
         lastCallTimeRef.current = Date.now();
         lastTimecodeRef.current = tcStr;
+        isUserSeekingRef.current = false;
 
         await SetDavinciPlayhead(tcStr);
 
@@ -344,7 +378,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const [zoomTrigger, setZoomTrigger] = useState(0);
   const [debouncedZoomTrigger] = useDebounce(zoomTrigger, 150); // adjust delay as needed
 
-  const [skipRegionsEnabled, setSkipRegionsEnabled] = useState(true);
+  const skipRegionsEnabled = useGlobalStore((s) => s.skipSilences);
+  const setSkipSilences = useGlobalStore((s) => s.setSkipSilences);
   const skipRegionsEnabledRef = useRef(skipRegionsEnabled);
   useEffect(() => {
     skipRegionsEnabledRef.current = skipRegionsEnabled;
@@ -367,6 +402,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   const panInitialScrollLeftRef = useRef(0); // To store initial scrollLeft of the waveform
   const originalCursorRef = useRef(""); // To store the original cursor style
   const scrollPositionRef = useRef(0);
+  const userScrolledAwayRef = useRef(false);
+  const lastUserScrollTimeRef = useRef(0);
+  const isProgrammaticScrollRef = useRef(false);
   const prevAudioUrlRef = useRef<string | undefined>(undefined);
   const isNewClipRef = useRef(false);
 
@@ -389,6 +427,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       }
       wavesurferRef.current.destroy();
       wavesurferRef.current = null;
+      regionsPluginRef.current = null;
     }
     // Update prevAudioUrlRef for the next render
     prevAudioUrlRef.current = audioUrl;
@@ -438,6 +477,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       barAlign: "bottom",
     });
 
+    const containerHeight = waveformContainerRef.current?.clientHeight || 128;
+
     const wsOptions: WaveSurferOptions = {
       container: waveformContainerRef.current,
       dragToSeek: true,
@@ -445,7 +486,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       progressColor: peakData.duration < 1 ? "#9d9c9e" : "#6f7175",
       cursorColor: "#e64b3d",
       cursorWidth: 2,
-      height: "auto",
+      height: containerHeight,
       width: "auto",
       fillParent: true,
       barAlign: "bottom",
@@ -458,7 +499,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       backend: "MediaElement",
       mediaControls: false,
       autoCenter: false,
-      autoScroll: true,
+      autoScroll: false,
       hideScrollbar: true,
       minPxPerSec: 15,
     };
@@ -466,6 +507,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       if (!isPanningRef.current || !wavesurferRef.current) return;
 
       event.preventDefault();
+      lastUserScrollTimeRef.current = Date.now();
+      userScrolledAwayRef.current = true;
       const wsInstance = wavesurferRef.current;
       const deltaX = event.clientX - panStartXRef.current;
       const newScrollLeft = panInitialScrollLeftRef.current - deltaX;
@@ -499,6 +542,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if (!scrollWrapper) return;
 
         isPanningRef.current = true;
+        lastUserScrollTimeRef.current = Date.now();
+        userScrolledAwayRef.current = true;
         panStartXRef.current = event.clientX;
         panInitialScrollLeftRef.current = wsInstance.getScroll();
 
@@ -513,6 +558,64 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const ws = WaveSurfer.create(wsOptions);
       wavesurferRef.current = ws;
 
+      // Protect against WaveSurfer v8 resetting scrollLeft to 0 on canvas innerHTML clear
+      const renderer = (ws as any).renderer;
+      if (renderer && typeof renderer.reRender === "function") {
+        const origReRender = renderer.reRender.bind(renderer);
+        renderer.reRender = () => {
+          const prevScroll = ws.getScroll();
+          origReRender();
+          if (prevScroll > 0 && ws.getScroll() === 0) {
+            ws.setScroll(prevScroll);
+          }
+        };
+      }
+
+      // Override scrollIntoView so that user horizontal scrolling during playback is uninterrupted
+      if (renderer && typeof renderer.scrollIntoView === "function") {
+        renderer.scrollIntoView = (
+          progress: number,
+          duration: number,
+          isPlaying: boolean,
+          _previousProgress?: number
+        ) => {
+          if (!renderer.scrollContainer || duration <= 0 || !isPlaying) return;
+
+          const { scrollLeft, scrollWidth, clientWidth } = renderer.scrollContainer;
+          const progressWidth = progress * scrollWidth;
+          const startEdge = scrollLeft;
+          const endEdge = scrollLeft + clientWidth;
+
+          // 1. If user is actively scrolling / panning, or scrolled recently (within 1.5s), never snap back
+          const isRecentlyScrolled = Date.now() - lastUserScrollTimeRef.current < 1500;
+          if (isRecentlyScrolled || isPanningRef.current) {
+            userScrolledAwayRef.current = true;
+            return;
+          }
+
+          // 2. Check if playhead is currently inside the visible viewport
+          const isInView = progressWidth >= startEdge && progressWidth <= endEdge;
+          if (isInView) {
+            userScrolledAwayRef.current = false;
+            return;
+          }
+
+          // 3. If user intentionally scrolled away from playhead, do not snap back
+          if (userScrolledAwayRef.current) {
+            return;
+          }
+
+          // 4. Playhead naturally advanced past the right edge while following playback
+          if (progressWidth > endEdge) {
+            isProgrammaticScrollRef.current = true;
+            renderer.scrollContainer.scrollLeft = Math.max(0, progressWidth - 50);
+            requestAnimationFrame(() => {
+              isProgrammaticScrollRef.current = false;
+            });
+          }
+        };
+      }
+
       // Restore time and scroll if it's a resize of the same clip
       if (!audioUrlChanged) {
         if (currentTimeRef.current > 0) {
@@ -525,10 +628,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         lastRenderedFrameRef.current = getFrameFromTime(currentTimeRef.current, projectFrameRate);
       }
 
+      ws.on("scroll", () => {
+        scrollPositionRef.current = ws.getScroll();
+        if (!isProgrammaticScrollRef.current) {
+          lastUserScrollTimeRef.current = Date.now();
+        }
+      });
+
       ws.on("ready", () => {
         setPlaybackRate(1.0);
         setIsLoading(false);
-        if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount > activeClip.startFrame) {
+        if (currTimecode && currTimecode.frameCount < maxTimecode.frameCount && currTimecode.frameCount >= activeClip.startFrame) {
           const clipTime =
             (currTimecode.frameCount - activeClip.startFrame) /
             projectFrameRate;
@@ -580,41 +690,117 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             ]
           });
         }
+
+        const pendingAutoPlay = useClipStore.getState().pendingAutoPlay;
+        if (pendingAutoPlay) {
+          useClipStore.getState().setPendingAutoPlay(false);
+          ws.play().catch((err: any) => console.error("Auto-play error:", err));
+        }
       });
       ws.on("play", () => {
+        ws.options.autoScroll = true;
+        isPlayingRef.current = true;
         setPlaybackState({ isPlaying: true });
         setIsPlaying(true);
         // cursed webkit fix
         ws.setVolume(1);
-        if (ws.isPlaying()) return;
+
+        const r = (ws as any).renderer;
+        if (r?.scrollContainer) {
+          const { scrollLeft, scrollWidth, clientWidth } = r.scrollContainer;
+          const playheadPx = (ws.getCurrentTime() / (ws.getDuration() || 1)) * scrollWidth;
+          userScrolledAwayRef.current = playheadPx < scrollLeft || playheadPx > scrollLeft + clientWidth;
+        } else {
+          userScrolledAwayRef.current = false;
+        }
       });
       ws.on("pause", () => {
+        ws.options.autoScroll = false;
         if (wavesurferRef.current) {
           wavesurferRef.current.setPlaybackRate(1.0, true);
         }
         // Then, update the React state so the UI display is correct
         setPlaybackRate(1.0);
-        if (isPlaying) {
-          const timecode = currTimelineFrameRef.current || 0;
-          console.log("timecode", timecode);
-          setTimecode(Timecode(timecode, projectFrameRate as FRAMERATE, false))
+        if (isPlayingRef.current) {
+          const pauseTime = wavesurferRef.current
+            ? wavesurferRef.current.getCurrentTime()
+            : currentTimeRef.current;
+          const autoAdvance = useGlobalStore.getState().autoAdvanceClip;
+          const wsDuration = wavesurferRef.current?.getDuration() || duration || 0;
+          const isAtEnd = wsDuration > 0 && pauseTime >= wsDuration - 0.05;
+
+          if (isAtEnd && !autoAdvance) {
+            // End reached with auto-advance disabled: reset to start of current clip, do not advance
+            currentTimeRef.current = 0;
+            setDisplayedTime(0);
+            currTimelineFrameRef.current = activeClip.startFrame;
+            const tc = Timecode(activeClip.startFrame, projectFrameRate as FRAMERATE, false);
+            setTimecode(tc);
+            lastTimecodeRef.current = tc.toString();
+            SetDavinciPlayhead(tc.toString()).catch((err) => {
+              console.error("Error setting DaVinci playhead on clip end:", err);
+            });
+            isPlayingRef.current = false;
+            setPlaybackState({ isPlaying: false, currentTime: 0 });
+            setIsPlaying(false);
+            return;
+          }
+
+          currentTimeRef.current = pauseTime;
+          setDisplayedTime(pauseTime);
+
+          const frame =
+            secToFrames(pauseTime, projectFrameRate) + activeClip.startFrame;
+          currTimelineFrameRef.current = frame;
+
+          const tc = Timecode(frame, projectFrameRate as FRAMERATE, false);
+          setTimecode(tc);
+
+          const tcStr = tc.toString();
+          lastTimecodeRef.current = tcStr;
+          isUserSeekingRef.current = false;
+          SetDavinciPlayhead(tcStr).catch((err) => {
+            console.error("Error setting DaVinci playhead on pause:", err);
+          });
         }
+        isPlayingRef.current = false;
         setPlaybackState({ isPlaying: false });
         setIsPlaying(false);
       });
       ws.on("finish", () => {
+        ws.options.autoScroll = false;
+        isPlayingRef.current = false;
+        setPlaybackState({ isPlaying: false, currentTime: 0 });
         setIsPlaying(false);
         ws.setTime(0);
         currentTimeRef.current = 0;
         setDisplayedTime(0);
-        lastRenderedFrameRef.current = -1
+        lastRenderedFrameRef.current = -1;
+
+        const autoAdvance = useGlobalStore.getState().autoAdvanceClip;
+        if (autoAdvance && displayClips && displayClips.length > 0) {
+          const currentIdx = displayClips.findIndex(
+            (c) => c.id === activeClip.id || c.constituent_item_ids?.includes(activeClip.id)
+          );
+          if (currentIdx !== -1 && currentIdx < displayClips.length - 1) {
+            const nextClip = displayClips[currentIdx + 1];
+            useClipStore.getState().setCurrentClipId(nextClip.id);
+            useClipStore.getState().setPendingAutoPlay(true);
+          }
+        }
       }); // Reset to start on finish
 
       ws.on("interaction", (newTime: number) => {
+        isUserSeekingRef.current = true;
+        userScrolledAwayRef.current = false;
         ws.setTime(newTime); // Ensure wavesurfer time is set
         currentTimeRef.current = newTime;
         setDisplayedTime(newTime);
         lastRenderedFrameRef.current = getFrameFromTime(newTime, projectFrameRate);
+      });
+
+      ws.on("drag", () => {
+        isUserSeekingRef.current = true;
       });
 
       ws.on("timeupdate", (time: number) => {
@@ -662,7 +848,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         }
       });
 
-      ws.on("error", (err: Error | string) => {
+      ws.on("error", (err: Error) => {
         console.error("WaveSurfer error:", err);
         setIsLoading(false);
         setIsPlaying(false);
@@ -676,35 +862,71 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         scrollWrapper.addEventListener("mousedown", handleWaveformMouseDown);
 
         scrollWrapper.addEventListener("wheel", (e) => {
-          // Only prevent default and zoom if it's a vertical scroll gesture
-          if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
-
-          e.preventDefault();
-
           const ws = wavesurferRef.current;
           if (!ws) return;
 
-          // The exponential zoom factor. Adjust for sensitivity.
-          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
+          // 1. Shift + Wheel is standard horizontal scrolling
+          if (e.shiftKey) {
+            e.preventDefault();
+            const delta = e.deltaY || e.deltaX;
+            ws.setScroll(ws.getScroll() + delta);
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
+            return;
+          }
 
+          // 2. Trackpad / horizontal mouse swipe
+          const absX = Math.abs(e.deltaX);
+          const absY = Math.abs(e.deltaY);
+
+          const isHorizontalGesture = absX > 0 && !e.ctrlKey;
+          const recentlyScrolledHorizontally = Date.now() - lastUserScrollTimeRef.current < 200;
+
+          if (isHorizontalGesture) {
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
+            // Allow native horizontal trackpad scroll to operate without interference
+            return;
+          }
+
+          if (recentlyScrolledHorizontally && !e.ctrlKey) {
+            // Guard against trailing vertical jitter when lifting fingers from trackpad swipe
+            return;
+          }
+
+          // 3. Zoom gestures:
+          // Either pinch-to-zoom (e.ctrlKey on trackpad) or pure vertical mouse wheel
+          const isPinchToZoom = e.ctrlKey;
+          const isVerticalWheelZoom = absY > 0 && absX === 0;
+
+          if (!isPinchToZoom && !isVerticalWheelZoom) {
+            return;
+          }
+
+          e.preventDefault();
+
+          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
           const currentZoom = ws.options.minPxPerSec || 15;
           const newZoom = currentZoom * zoomFactor;
 
-          // Set min and max zoom levels
-          const maxZoom = 150; // or whatever max you prefer
+          const maxZoom = 150;
           const minZoom = 1;
           const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
-          if (finalZoom == currentZoom) return;
+          if (Math.abs(finalZoom - currentZoom) < 0.001) return;
+
+          const currentScroll = ws.getScroll();
+          const containerWidth = ws.getWidth();
+          const centerX = containerWidth / 2;
+          const scale = finalZoom / currentZoom;
+          const targetScroll = (currentScroll + centerX) * scale - centerX;
 
           ws.zoom(finalZoom);
+          ws.setScroll(Math.max(0, targetScroll));
+          scrollPositionRef.current = Math.max(0, targetScroll);
 
-          // We still trigger this to update the silence regions, which is debounced.
           setZoomTrigger((p) => p + 1);
-
-          // If it's primarily a horizontal scroll, we don't call preventDefault(),
-          // allowing the browser's native horizontal scroll to work.
-        });
+        }, { passive: false });
       }
     } catch (error: any) {
       console.error(
@@ -720,32 +942,42 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       const minimapWrapper = minimapContainerRef.current;
       if (minimapWrapper) {
         minimapWrapper.addEventListener("wheel", (e) => {
-          // Only prevent default and zoom if it's a vertical scroll gesture
-          if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
-
-          e.preventDefault();
-
           const ws = wavesurferRef.current;
           if (!ws) return;
 
-          // The exponential zoom factor. Adjust for sensitivity.
-          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
+          if (e.shiftKey || Math.abs(e.deltaX) > 0) {
+            e.preventDefault();
+            const delta = e.deltaX || e.deltaY;
+            ws.setScroll(ws.getScroll() + delta);
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
+            return;
+          }
 
+          e.preventDefault();
+
+          const zoomFactor = Math.exp(-e.deltaY * 0.0025);
           const currentZoom = ws.options.minPxPerSec || 15;
           const newZoom = currentZoom * zoomFactor;
 
-          // Set min and max zoom levels
-          const maxZoom = 150; // or whatever max you prefer
+          const maxZoom = 150;
           const minZoom = 1;
           const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
-          if (finalZoom == currentZoom) return;
+          if (Math.abs(finalZoom - currentZoom) < 0.001) return;
+
+          const currentScroll = ws.getScroll();
+          const containerWidth = ws.getWidth();
+          const centerX = containerWidth / 2;
+          const scale = finalZoom / currentZoom;
+          const targetScroll = (currentScroll + centerX) * scale - centerX;
 
           ws.zoom(finalZoom);
+          ws.setScroll(Math.max(0, targetScroll));
+          scrollPositionRef.current = Math.max(0, targetScroll);
 
-          // We still trigger this to update the silence regions, which is debounced.
           setZoomTrigger((p) => p + 1);
-        });
+        }, { passive: false });
       }
 
       const onMinimapDrag = (relativeX: number) => {
@@ -753,6 +985,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if (!mainWs) return;
         const mainDuration = mainWs.getDuration();
         if (mainDuration > 0) {
+          isUserSeekingRef.current = true;
+          lastUserScrollTimeRef.current = Date.now();
+          userScrolledAwayRef.current = true;
           const newTime = relativeX * mainDuration;
           currentTimeRef.current = newTime;
           setDisplayedTime(newTime);
@@ -773,6 +1008,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         if (mainWs) {
           const mainDuration = mainWs.getDuration();
           if (mainDuration > 0) {
+            isUserSeekingRef.current = true;
+            lastUserScrollTimeRef.current = Date.now();
+            userScrolledAwayRef.current = true;
             const newTime = relativeX * mainDuration;
             // console.log(`Minimap Click event: newTime ${newTime.toFixed(3)}`);
             currentTimeRef.current = newTime;
@@ -803,16 +1041,65 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       if (wavesurferRef.current) {
         wavesurferRef.current.destroy();
         wavesurferRef.current = null;
+        regionsPluginRef.current = null;
       }
     };
   }, [audioUrl, cutAudioSegmentUrl, peakData]);
 
+  const prevDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+
   useEffect(() => {
     const ws = wavesurferRef.current;
-    if (!ws) return;
-    const currentZoom = ws.options.minPxPerSec;
+    if (!ws || !dimensions) return;
+    const prev = prevDimensionsRef.current;
+    if (prev && prev.width === dimensions.width && prev.height === dimensions.height) {
+      return;
+    }
+    prevDimensionsRef.current = { width: dimensions.width, height: dimensions.height };
+    if (!prev) return;
+
+    const prevScroll = ws.getScroll();
+    if (dimensions.height) {
+      ws.options.height = dimensions.height;
+    }
+    const currentZoom = ws.options.minPxPerSec || 15;
     ws.zoom(currentZoom);
+    if (prevScroll > 0) {
+      requestAnimationFrame(() => {
+        ws.setScroll(prevScroll);
+      });
+    }
   }, [dimensions]);
+
+  const [regionContextMenu, setRegionContextMenu] = useState<{
+    x: number;
+    y: number;
+    modificationIds: string[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!regionContextMenu) return;
+    const handleClose = () => setRegionContextMenu(null);
+    const handleKeyDownClose = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRegionContextMenu(null);
+    };
+    window.addEventListener("mousedown", handleClose);
+    window.addEventListener("wheel", handleClose, { passive: true });
+    window.addEventListener("keydown", handleKeyDownClose);
+    return () => {
+      window.removeEventListener("mousedown", handleClose);
+      window.removeEventListener("wheel", handleClose);
+      window.removeEventListener("keydown", handleKeyDownClose);
+    };
+  }, [regionContextMenu]);
+
+  const handleResetModifiedRegion = useCallback(() => {
+    if (!regionContextMenu || !activeClip?.id) return;
+    useClipStore
+      .getState()
+      .removeRegionModifications(activeClip.id, regionContextMenu.modificationIds);
+    setRegionContextMenu(null);
+  }, [regionContextMenu, activeClip?.id]);
 
   const updateSilenceRegions = useCallback(
     (sDataToProcess: SilencePeriod[] | null | undefined) => {
@@ -860,13 +1147,143 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
             if (finalStart < finalEnd) {
               try {
-                regionsPluginRef.current!.addRegion({
-                  id: `silence-marker_${index}_${period.start}-${period.end}`,
+                const isModified = Boolean(period.isModified);
+                const baseRegionId = `silence-marker_${index}_${period.start}-${period.end}`;
+                const regionId = isModified
+                  ? `${baseRegionId} region-modified`
+                  : baseRegionId;
+
+                const region = regionsPluginRef.current!.addRegion({
+                  id: regionId,
                   start: finalStart,
                   end: finalEnd,
-                  color: "rgba(250, 7, 2, 0.15)",
+                  color: isModified
+                    ? "rgba(139, 92, 246, 0.25)"
+                    : "rgba(250, 7, 2, 0.15)",
                   drag: false,
-                  resize: false,
+                  resize: true,
+                  minLength: 0.01,
+                });
+
+                const el = region.element;
+                if (el) {
+                  // Allow left-clicks and drag-to-seek on the region body (not on handles) to pass through to WaveSurfer
+                  el.addEventListener(
+                    "pointerdown",
+                    (ev: PointerEvent) => {
+                      if (ev.target === el && ev.button === 0) {
+                        Object.defineProperty(ev, "button", {
+                          value: -1,
+                          configurable: true,
+                        });
+                      }
+                    },
+                    { capture: true }
+                  );
+                  el.addEventListener(
+                    "pointerdown",
+                    (ev: PointerEvent) => {
+                      if (ev.target === el && ev.button === -1) {
+                        Object.defineProperty(ev, "button", {
+                          value: 0,
+                          configurable: true,
+                        });
+                      }
+                    },
+                    { capture: false }
+                  );
+
+                  if (
+                    isModified &&
+                    period.modificationIds &&
+                    period.modificationIds.length > 0
+                  ) {
+                    el.addEventListener("contextmenu", (e: MouseEvent) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setRegionContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        modificationIds: period.modificationIds || [],
+                      });
+                    });
+                  }
+                }
+
+                const setHandlesVisible = (visible: boolean) => {
+                  if (!region.element) return;
+                  const handles = region.element.querySelectorAll(
+                    '[part*="region-handle"]'
+                  );
+                  handles.forEach((h) => {
+                    const currentPart = h.getAttribute("part") || "";
+                    const tokens = currentPart.split(/\s+/).filter(Boolean);
+                    const hasToken = tokens.includes("region-handle-visible");
+                    if (visible && !hasToken) {
+                      h.setAttribute(
+                        "part",
+                        [...tokens, "region-handle-visible"].join(" ")
+                      );
+                    } else if (!visible && hasToken) {
+                      h.setAttribute(
+                        "part",
+                        tokens
+                          .filter((t) => t !== "region-handle-visible")
+                          .join(" ")
+                      );
+                    }
+                  });
+                };
+
+                region.on("over", () => setHandlesVisible(true));
+                region.on("leave", () => setHandlesVisible(false));
+
+                region.on("update-end", (side?: "start" | "end") => {
+                  if (!activeClip?.id) return;
+
+                  region.setOptions({
+                    color: "rgba(139, 92, 246, 0.25)",
+                    id: `${baseRegionId} region-modified`,
+                  });
+
+                  const fallbackCenter =
+                    ((period.rawStart ?? period.start) +
+                      (period.rawEnd ?? period.end)) /
+                    2;
+
+                  const newSourceStart =
+                    region.start + clipOriginalStartSecondsRef.current;
+                  const baseStart = period.baseStart ?? period.start;
+                  const deltaStart = newSourceStart - baseStart;
+
+                  const newSourceEnd =
+                    region.end + clipOriginalStartSecondsRef.current;
+                  const baseEnd = period.baseEnd ?? period.end;
+                  const deltaEnd = newSourceEnd - baseEnd;
+
+                  const startChanged = Math.abs(deltaStart) > 0.005;
+                  const endChanged = Math.abs(deltaEnd) > 0.005;
+
+                  if (side === "start" || (!side && startChanged)) {
+                    const centerTime = period.startCenterTime ?? fallbackCenter;
+                    useClipStore
+                      .getState()
+                      .upsertRegionModification(activeClip.id, {
+                        id: period.startModId,
+                        centerTime,
+                        deltaStart,
+                      });
+                  }
+                  if (side === "end" || (!side && endChanged)) {
+                    const centerTime = period.endCenterTime ?? fallbackCenter;
+                    useClipStore
+                      .getState()
+                      .upsertRegionModification(activeClip.id, {
+                        id: period.endModId,
+                        centerTime,
+                        deltaEnd,
+                      });
+                  }
                 });
               } catch (e) {
                 console.warn(`Failed to add region: ${(e as Error).message}`);
@@ -877,7 +1294,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         addRegionsTimeoutRef.current = null;
       }, 0);
     },
-    [clipOriginalStartSeconds, duration]
+    [clipOriginalStartSeconds, duration, activeClip?.id]
   );
 
   useEffect(() => {
@@ -911,7 +1328,17 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
     const finalZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
     if (finalZoom !== ws.options.minPxPerSec) {
+      const currentZoom = ws.options.minPxPerSec || 15;
+      const currentScroll = ws.getScroll();
+      const containerWidth = ws.getWidth();
+      const centerX = containerWidth / 2;
+      const scale = finalZoom / currentZoom;
+      const targetScroll = (currentScroll + centerX) * scale - centerX;
+
       ws.zoom(finalZoom);
+      ws.setScroll(Math.max(0, targetScroll));
+      scrollPositionRef.current = Math.max(0, targetScroll);
+
       setZoomTrigger((p) => p + 1);
     }
   };
@@ -954,6 +1381,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         break;
       }
     }
+    isUserSeekingRef.current = true;
+    currentTimeRef.current = targetTime;
+    setDisplayedTime(targetTime);
     wavesurferRef.current.setTime(targetTime);
   }, [silenceData, getSilencePoints]);
 
@@ -972,6 +1402,9 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         break;
       }
     }
+    isUserSeekingRef.current = true;
+    currentTimeRef.current = targetTime;
+    setDisplayedTime(targetTime);
     wavesurferRef.current.setTime(targetTime);
   }, [silenceData, getSilencePoints]);
 
@@ -984,8 +1417,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   });
 
   const toggleSkipRegions = useCallback(
-    () => setSkipRegionsEnabled((prev) => !prev),
-    []
+    () => setSkipSilences(!useGlobalStore.getState().skipSilences),
+    [setSkipSilences]
   );
 
   const handleKeyDown = useCallback(
@@ -1042,7 +1475,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
         </button>
       );
     });
-  }, [toggleSkipRegions, skipClass, skipTitle]);
+  }, [toggleSkipRegions, skipClass, skipTitle, skipRegionsEnabled]);
 
   const sliderClassName =
     "absolute top-2 right-2 z-10 transition-opacity duration-300 ease-in-out";
@@ -1183,6 +1616,28 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           </div>
         </div>
       </div>
+      {regionContextMenu &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: Math.min(regionContextMenu.y, window.innerHeight - 52),
+              left: Math.min(regionContextMenu.x, window.innerWidth - 190),
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="bg-popover text-popover-foreground z-50 min-w-[10rem] overflow-hidden rounded-md border p-1 shadow-md animate-in fade-in-0 zoom-in-95"
+          >
+            <button
+              type="button"
+              onClick={handleResetModifiedRegion}
+              className="hover:bg-accent hover:text-accent-foreground relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none"
+            >
+              <RotateCcwIcon className="h-4 w-4 text-violet-400" />
+              <span>Reset Region</span>
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

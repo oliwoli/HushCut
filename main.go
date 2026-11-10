@@ -15,13 +15,7 @@ import (
 	"time"
 
 	"github.com/oliwoli/hushcut/internal/luahelperlogic"
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/logger"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/linux"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
+    "github.com/wailsapp/wails/v3/pkg/application"
 )
 
 //go:embed all:frontend/dist
@@ -130,16 +124,16 @@ func main() {
 	}
 
 	// Create an instance of the app structure
-	app := NewApp()
-	app.licenseVerifyKey = PublicKeyPEM
+	appInstance := NewApp()
+	appInstance.licenseVerifyKey = PublicKeyPEM
 	if *pythonPort != 0 {
-		app.pythonCommandPort = *pythonPort
+		appInstance.pythonCommandPort = *pythonPort
 	}
-	app.testApi = testApi
+	appInstance.testApi = testApi
 
 	if token := os.Getenv("HUSHCUT_AUTH_TOKEN"); token != "" {
 		log.Printf("Received HushCut Token from environment variable.")
-		app.authToken = strings.TrimSpace(token)
+		appInstance.authToken = strings.TrimSpace(token)
 	} else {
 		log.Printf("No HUSHCUT_AUTH_TOKEN provided in environment.")
 	}
@@ -147,47 +141,95 @@ func main() {
 	// Check for WAILS_PYTHON_PORT environment variable (used when launched by Python in dev mode)
 	if pythonPortStr := os.Getenv("WAILS_PYTHON_PORT"); pythonPortStr != "" {
 		if p, err := strconv.Atoi(pythonPortStr); err == nil {
-			app.pythonCommandPort = p
-			log.Printf("Go App: Received Python port from environment variable: %d", app.pythonCommandPort)
+			appInstance.pythonCommandPort = p
+			log.Printf("Go App: Received Python port from environment variable: %d", appInstance.pythonCommandPort)
 		} else {
 			log.Printf("Go App: Could not parse WAILS_PYTHON_PORT environment variable: %v", err)
 		}
 	}
 
+	var appIcon []byte
+	if runtime.GOOS != "darwin" {
+		appIcon = icon
+	}
+
 	// Create application with options
-	err := wails.Run(&options.App{
-		Title:     "HushCut",
-		Width:     1024,
-		Height:    801,
-		MinWidth:  500,
-		MinHeight: 550,
-		AssetServer: &assetserver.Options{
-			Assets:  assets,
-			Handler: NewFileLoader(),
+	app := application.New(application.Options{
+		Name:        "HushCut",
+		Description: "HushCut",
+		Icon:        appIcon,
+		Services: []application.Service{
+			application.NewService(appInstance),
 		},
-		BackgroundColour: &options.RGBA{R: 40, G: 40, B: 46, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Bind: []interface{}{
-			app,
+		Server: application.ServerOptions{
+			Host: "127.0.0.1",
+			Port: 8080,
 		},
-		LogLevel:    logger.INFO,
-		AlwaysOnTop: true,
-		Frameless:   true,
-		Mac: &mac.Options{
-			WebviewIsTransparent: false,
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
+			Middleware: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+					if req.URL.Path == "/wails/custom.js" || strings.HasSuffix(req.URL.Path, "custom.js") {
+						rw.Header().Set("Content-Type", "application/javascript")
+						rw.WriteHeader(http.StatusOK)
+						return
+					}
+					next.ServeHTTP(rw, req)
+				})
+			},
 		},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
-		Linux: &linux.Options{
-			Icon:                icon,
-			WindowIsTranslucent: false,
-			WebviewGpuPolicy:    linux.WebviewGpuPolicyNever,
-			ProgramName:         "HushCut",
+		Linux: application.LinuxOptions{
+			ProgramName: "HushCut",
 		},
 	})
 
+	isDev := app.Env.Info().Debug
+
+	windowOptions := application.WebviewWindowOptions{
+		Title:            "HushCut",
+		Width:            1024,
+		Height:           801,
+		MinWidth:         500,
+		MinHeight:        550,
+		AlwaysOnTop:      true,
+		Frameless:        true,
+		BackgroundColour: application.NewRGBA(40, 40, 46, 255),
+		URL:              "/",
+		DevToolsEnabled:  isDev,
+		Mac: application.MacWindow{
+			TitleBar:   application.MacTitleBarHidden,
+			Appearance: application.NSAppearanceNameDarkAqua,
+		},
+		Linux: application.LinuxWindow{
+			Icon:             icon,
+			WebviewGpuPolicy: application.WebviewGpuPolicyNever,
+		},
+	}
+
+	if isDev {
+		windowOptions.KeyBindings = map[string]func(window application.Window){
+			"CmdOrCtrl+Alt+I": func(window application.Window) {
+				window.OpenDevTools()
+				openNativeDevTools(window.NativeWindow())
+			},
+			"F12": func(window application.Window) {
+				window.OpenDevTools()
+				openNativeDevTools(window.NativeWindow())
+			},
+		}
+	}
+
+	win := app.Window.NewWithOptions(windowOptions)
+
+	appInstance.SetApplication(app, win)
+	if isDev {
+		enableNativeDevTools(win.NativeWindow())
+	}
+
+	err := app.Run()
 	if err != nil {
 		log.Println("Error:", err.Error())
 	}

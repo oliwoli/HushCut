@@ -47,27 +47,62 @@ Of course, it won't replace the art of a final, polished edit. As an editor myse
 
 ## Local development
 
-Prerequisites:
-* wails -> [install guide](https://wails.io/docs/gettingstarted/installation)
-* python 3
+### Prerequisites:
+* Wails v3 CLI -> [install guide](https://v3.wails.io/quick-start/installation/)
+* Go 1.23+
+* Node.js & pnpm
+* Python 3
+* (Recommended) uv package manager -> [install guide](https://docs.astral.sh/uv/getting-started/installation/)
 
-Recommended:
-* uv (python package manager) -> [install guide](https://docs.astral.sh/uv/getting-started/installation/)
+### Setup:
+1. Build the Python backend:
+   * **Linux & macOS:** `./build/scripts/buildPythonBackend.sh`
+   * **Windows:** `.\build\scripts\win_buildPythonBackend.ps1`
 
+2. Install frontend dependencies:
+   ```bash
+   cd frontend && pnpm install && cd ..
+   ```
 
-**For Linux & macOS:** Run the buildPythonBackend.sh script
-\
-**Windows:** Run win_buildPythonBackend.ps1
+### Running Development Mode (Desktop)
 
-Run `wails dev` in the project directory. This will run a Vite development server that will provide hot reloads of your frontend changes. If you want to develop in a (different) browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
+Run in the project directory:
+```bash
+wails3 dev
+```
+This starts the Vite dev server with hot-reloading for the frontend, compiles the native desktop application, and launches the desktop window.
 
-### Building
+> **Developer Tools:** Open with <kbd>Cmd</kbd>+<kbd>Option</kbd>+<kbd>I</kbd> / <kbd>F12</kbd>, or right-click anywhere in the app and select **Open Developer Tools**.
 
-To build a redistributable, production mode package, use `wails build`.
-\
-python backend: `./build/scripts/buildPythonBackend.sh`
-\
-python backend (windows):  `.\build\scripts\win_buildPythonBackend.ps1`
+### Running in Browser Mode
+
+Wails v3 provides two ways to run in an external browser:
+
+#### 1. Fast UI Preview (Vite)
+While `wails3 dev` is running, open `http://localhost:9245` in any web browser.
+* Fast hot-reloading for UI and layout adjustments.
+* Runs in Preview Mode with mocked backend responses so no console 404s appear.
+
+#### 2. Full Browser Server Mode (Live Go Backend)
+To run HushCut as a web server with full access to the live Go backend, service bindings, and WebSocket events in your browser (without opening a native desktop GUI window), run with the `server` build tag:
+
+```bash
+go run -tags server .
+```
+Then navigate to **`http://localhost:8080`** in Chrome, Safari, or Firefox.
+
+You can customize the host and port via environment variables:
+```bash
+WAILS_SERVER_PORT=8080 WAILS_SERVER_HOST=127.0.0.1 go run -tags server .
+```
+
+### Building for Production
+
+To build a redistributable package for your current OS:
+```bash
+wails3 task package
+```
+* **macOS:** Creates signed `.app` in `bin/`
+* **Windows:** Creates executable in `bin/`
+* **Linux:** Creates binary in `bin/`
 

@@ -14,13 +14,18 @@ import {
   GetFFmpegStatus,
   GetGoServerPort,
   MixdownCompoundClips,
+  MixdownLinkedAudio,
   ProcessProjectAudio,
   SyncWithDavinci,
   MakeFinalTimeline,
+  OpenDevTools,
+  IsDev,
+  GetSettings,
+  SetDavinciPlayhead,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
-import { EventsEmit, EventsOn } from "@wails/runtime";
+import { EventsEmit, EventsOn, isBrowserEnvironment } from "@wails/runtime";
 import { main } from "@wails/go/models";
 
 import WaveformPlayer from "./components/audio/waveformPlayer";
@@ -29,6 +34,11 @@ import RemoveSilencesButton, {
   prepareProjectDataWithEdits,
 } from "./lib/PythonRunner";
 import { ActiveClip, DetectionParams } from "./types";
+import {
+  buildDisplayClips,
+  createActiveFileFromDisplayClip,
+  DisplayClip,
+} from "./lib/clipUtils";
 import { usePrevious, useWindowFocus } from "./hooks/hooks";
 import ClipSelector from "./components/ui-custom/clipSelector";
 import GlobalAlertDialog from "./components/ui-custom/GlobalAlertDialog";
@@ -42,6 +52,7 @@ import {
   defaultParameters,
   useClipStore,
   useGlobalStore,
+  usePlaybackStore,
   useTimecodeStore,
 } from "@/stores/clipStore";
 import { SilenceControls } from "./components/controls/SilenceControls";
@@ -73,7 +84,7 @@ import { Toaster } from "./components/ui/sonner";
 import { PeakMeter } from "./components/audio/peakMeter";
 import { initializeProgressListeners } from "./stores/progressStore";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { ChevronRightIcon, LoaderCircleIcon, RefreshCwIcon } from "lucide-react";
+import { ChevronRightIcon, LoaderCircleIcon, RefreshCwIcon, CodeIcon } from "lucide-react";
 import DownloadPrompt from "./components/ui-custom/DownloadPrompt";
 import { sanitizeProjectDataForComparison } from "./lib/utils";
 
@@ -139,16 +150,26 @@ const Status = {
 };
 
 function AppContent() {
+  const [isDev, setIsDev] = useState(false);
   const [ffmpegStatus, setFFmpegReady] = useState(Status.Unknown);
   const prevFfmpegStatus = usePrevious(ffmpegStatus);
+  const ffmpegStatusRef = useRef(ffmpegStatus);
+  ffmpegStatusRef.current = ffmpegStatus;
+
   // const [hasValidLicense, setHasValidLicense] = useState<boolean | null>(null);
   const [pythonReady, setPythonReady] = useState<boolean | null>(null);
-  const prevPythonReady = usePrevious(pythonReady);
+  const pythonReadyRef = useRef<boolean | null>(null);
+  pythonReadyRef.current = pythonReady;
+
+  useEffect(() => {
+    IsDev().then(setIsDev).catch(() => {});
+  }, []);
 
   useEffect(() => {
     EventsOn("ffmpeg:status", (status) => {
       console.log("Received ffmpeg status from backend:", status);
       setFFmpegReady(status);
+      ffmpegStatusRef.current = status;
     });
 
     // fallback, probably not needed
@@ -157,6 +178,7 @@ function AppContent() {
       // Only set if status is still unknown
       if (ffmpegStatus === Status.Unknown) {
         setFFmpegReady(isFfmpegReady);
+        ffmpegStatusRef.current = isFfmpegReady;
       }
     };
     checkInitialStatus();
@@ -165,7 +187,9 @@ function AppContent() {
 
   useEffect(() => {
     const checkInitialStatus = async () => {
-      setPythonReady(await GetPythonReadyStatus());
+      const pyReady = await GetPythonReadyStatus();
+      setPythonReady(pyReady);
+      pythonReadyRef.current = pyReady;
     };
     checkInitialStatus(); // Check status on component mount
 
@@ -173,15 +197,28 @@ function AppContent() {
       if (data && typeof data.isReady === "boolean") {
         console.log(`Event: Python status changed to ${data.isReady}`);
         setPythonReady(data.isReady);
-        if (pythonReady && !prevPythonReady) {
-          console.log("Python backend is now ready, triggering a re-sync.");
+        pythonReadyRef.current = data.isReady;
+        if (data.isReady) {
+          console.log("Python backend is now ready, triggering automatic initial sync.");
           handleSyncRef.current();
         }
       }
     });
 
+    const unsubscribeCriticalError = EventsOn("app:criticalError", (msg) => {
+      console.error("Critical error from backend:", msg);
+      toast.error(String(msg));
+    });
+
+    const unsubscribeSyncRequest = EventsOn("requestSync", () => {
+      console.log("Received requestSync event, initiating sync...");
+      handleSyncRef.current();
+    });
+
     return () => {
       if (typeof unsubscribe === "function") unsubscribe(); // Cleanup listener
+      if (typeof unsubscribeCriticalError === "function") unsubscribeCriticalError();
+      if (typeof unsubscribeSyncRequest === "function") unsubscribeSyncRequest();
     };
   }, []); // runs once on mount
 
@@ -206,75 +243,116 @@ function AppContent() {
   const pendingSelectionRef = useRef<string | null>(null);
   const [pendingRemoveSilences, setPendingRemoveSilences] = useState(false);
 
+  const [projectDataVersion, setProjectDataVersion] = useState(0);
+
   const projectDataRef =
     useRef<main.ProjectDataPayload | null>(null);
 
   const setTimecode = useTimecodeStore((s) => s.setTimecode);
   const currTimecode = useTimecodeStore((s) => s.timecode);
   const audioItems = projectDataRef.current?.timeline?.audio_track_items || [];
+  const linkedAudioGroups = projectDataRef.current?.timeline?.linked_audio_groups;
   const timelineFps = projectDataRef.current?.timeline?.fps || 30;
 
+  const displayClips = useMemo(() => {
+    return buildDisplayClips(audioItems, linkedAudioGroups);
+  }, [audioItems, linkedAudioGroups, projectDataVersion]);
+
   useEffect(() => {
-    if (audioItems.length === 0) {
+    const mapping: Record<string, string> = {};
+    const reverseMapping: Record<string, string[]> = {};
+    const itemsMap: Record<string, main.TimelineItem> = {};
+    for (const item of audioItems) {
+      if (item.id) {
+        itemsMap[item.id] = item;
+      }
+    }
+    for (const clip of displayClips) {
+      if (clip.is_linked_group && clip.constituent_item_ids) {
+        reverseMapping[clip.id] = clip.constituent_item_ids;
+        for (const cid of clip.constituent_item_ids) {
+          mapping[cid] = clip.id;
+        }
+      }
+    }
+    useClipStore.getState().setClipToGroupMapping(mapping, reverseMapping, itemsMap);
+  }, [displayClips, audioItems]);
+
+  useEffect(() => {
+    if (displayClips.length === 0) {
       setCurrentClipId(null);
       return;
     }
     if (currTimecode && !pendingSelectionRef.current) {
       const currentFrame = currTimecode.frameCount;
 
-      const clipAtTimecode = audioItems.find(
-        (item) =>
-          currentFrame >= item.start_frame && currentFrame < item.end_frame
+      const clipAtTimecode = displayClips.find(
+        (clip) =>
+          currentFrame >= clip.start_frame && currentFrame < clip.end_frame
       );
       if (clipAtTimecode) {
-        // 3. Update the current clip ID
-        const newClipId =
-          clipAtTimecode.id || clipAtTimecode.processed_file_name;
-        // Only update state if the ID has actually changed to prevent re-renders
-        if (newClipId && newClipId !== currentClipId) {
-          setCurrentClipId(newClipId);
+        // Update current clip ID if changed, preserving local view within the active group
+        const isCurrentInThisClip =
+          clipAtTimecode.id === currentClipId ||
+          Boolean(clipAtTimecode.constituent_item_ids?.includes(currentClipId || ""));
+        if (!isCurrentInThisClip) {
+          setCurrentClipId(clipAtTimecode.id);
         }
       } else if (!currentClipId) {
-        setCurrentClipId(
-          audioItems[0]?.id || audioItems[0]?.processed_file_name || null
-        );
+        setCurrentClipId(displayClips[0]?.id || null);
       }
-    } else {
-      setCurrentClipId(
-        audioItems[0]?.id || audioItems[0]?.processed_file_name || null
-      );
+    } else if (!currentClipId) {
+      setCurrentClipId(displayClips[0]?.id || null);
     }
-  }, [currTimecode, audioItems, timelineFps]);
+  }, [currTimecode, displayClips, timelineFps]);
 
   const currentActiveClip = useMemo(() => {
-    if (!projectDataRef.current) {
+    if (!projectDataRef.current || !httpPort || displayClips.length === 0) {
       return null;
     }
-    if (!httpPort || !projectDataRef.current.timeline?.audio_track_items) {
-      return null;
-    }
-    if (audioItems.length === 0) return null;
 
-    let itemToDisplay = currentClipId
-      ? audioItems.find(
-        (item) => (item.id || item.processed_file_name) === currentClipId
-      )
-      : audioItems[0];
+    const fps = projectDataRef.current.timeline.fps;
+
+    if (currentClipId) {
+      // 1. Direct match on a display clip (combined group or standalone clip)
+      const exactDisplayClip = displayClips.find((clip) => clip.id === currentClipId);
+      if (exactDisplayClip) {
+        return createActiveFileFromDisplayClip(exactDisplayClip, httpPort, fps);
+      }
+
+      // 2. Local view constituent item match (render individual track item audio/waveform)
+      const constituentItem = audioItems.find((it) => it.id === currentClipId);
+      if (constituentItem) {
+        return createActiveFileFromTimelineItem(constituentItem, httpPort, fps);
+      }
+    }
+
+    let clipToDisplay = currentClipId
+      ? displayClips.find(
+          (clip) =>
+            clip.id === currentClipId ||
+            Boolean(clip.constituent_item_ids?.includes(currentClipId))
+        )
+      : displayClips[0];
 
     // Fallback if the ID wasn't found (e.g., during a state transition)
-    if (!itemToDisplay) {
-      itemToDisplay = audioItems[0];
+    if (!clipToDisplay) {
+      clipToDisplay = displayClips[0];
     }
 
-    return createActiveFileFromTimelineItem(
-      itemToDisplay,
+    return createActiveFileFromDisplayClip(
+      clipToDisplay,
       httpPort,
-      projectDataRef.current.timeline.fps
+      fps
     );
-  }, [projectDataRef.current, httpPort, currentClipId]);
+  }, [projectDataRef.current, httpPort, currentClipId, displayClips, audioItems]);
 
-  const handleSync = async () => {
-    if (isBusy) {
+  const handleSync = async (isManual = false) => {
+    if (isManual) {
+      EventsEmit("clearAlertSuppression");
+      setBusy(false);
+    }
+    if (isBusy && !isManual) {
       console.log("Sync skipped: App is busy.");
       return;
     }
@@ -282,12 +360,12 @@ function AppContent() {
       console.log("Sync paused. Skipping sync.");
       return;
     }
-    if (!pythonReady) {
+    if (!pythonReadyRef.current) {
       console.log("python backend not yet ready. Skipping sync.");
       return;
     }
     console.log("syncing...");
-    if (ffmpegStatus == Status.Unknown) {
+    if (ffmpegStatusRef.current == Status.Unknown) {
       return;
     }
 
@@ -319,24 +397,36 @@ function AppContent() {
       newData: main.ProjectDataPayload | null
     ) => {
       if (newData) {
-        const timecode = Timecode(
-          newData.timeline.curr_timecode,
-          newData.timeline.fps as FRAMERATE
-        );
-        setTimecode(timecode);
+        const isPlaying = usePlaybackStore.getState().isPlaying;
+        if (!isPlaying) {
+          const timecode = Timecode(
+            newData.timeline.curr_timecode,
+            newData.timeline.fps as FRAMERATE
+          );
+          setTimecode(timecode);
+        }
+        setHasProjectData(true);
+        if (newData.timeline?.name) {
+          setTimelineName(newData.timeline.name);
+        }
+      } else {
+        setHasProjectData(false);
+        setTimelineName(null);
       }
+
       const newProjectDataSanitized = sanitizeProjectDataForComparison(newData);
       const currentProjectDataSanitized = sanitizeProjectDataForComparison(projectDataRef?.current)
 
       if (!deepEqual(currentProjectDataSanitized, newProjectDataSanitized)) {
-        projectDataRef.current = newData;;
-        setHasProjectData(!!newData);
+        projectDataRef.current = newData;
+        setProjectDataVersion((v) => v + 1);
         console.log("task result: Project data updated.");
 
         if (!newData) return;
         await Promise.all([
           ProcessProjectAudio(newData),
           MixdownCompoundClips(newData),
+          MixdownLinkedAudio(newData),
         ]);
       } else {
         console.log(
@@ -356,6 +446,8 @@ function AppContent() {
           response.message
         );
         conditionalSetProjectData(response.data || null);
+        setBusy(false);
+        setSyncing(false);
       } else if (response && response.status !== "success") {
         console.error(
           "Sync failed (Python reported error, no global alert by Go):",
@@ -404,9 +496,9 @@ function AppContent() {
   };
 
   const handleSyncRef = useRef(handleSync);
+  handleSyncRef.current = handleSync;
 
   useEffect(() => {
-    handleSyncRef.current = handleSync;
     if (projectDataRef.current?.timeline?.name)
       setTimelineName(projectDataRef.current?.timeline?.name);
   }, [handleSync]);
@@ -476,13 +568,6 @@ function AppContent() {
         "App.tsx: Backend is ready, proceeding with initialization..."
       );
 
-      EventsOn("pythonStatusUpdate", (data) => {
-        if (data && typeof data.isReady === "boolean") {
-          console.log(`Event: Python status changed to ${data.isReady}`);
-          setPythonReady(data.isReady);
-        }
-      });
-
       try {
         const port = await GetGoServerPort();
         if (!port || port <= 0) {
@@ -500,12 +585,20 @@ function AppContent() {
 
         setToken(goToken);
         setFFmpegReady(isFfmpegReady);
+        ffmpegStatusRef.current = isFfmpegReady;
         setPythonReady(pyReady);
+        pythonReadyRef.current = pyReady;
 
         console.log("App.tsx: Initial FFmpeg status:", isFfmpegReady);
         console.log("App.tsx: Initial Python status:", pyReady);
 
-        if (isFfmpegReady) {
+        GetSettings().then((settings: any) => {
+          if (settings && typeof settings.autoAdvanceClip === "boolean") {
+            useGlobalStore.getState().setAutoAdvanceClip(settings.autoAdvanceClip);
+          }
+        }).catch(() => {});
+
+        if (isFfmpegReady && pyReady) {
           handleSyncRef.current();
         }
       } catch (err) {
@@ -540,11 +633,56 @@ function AppContent() {
         data
       );
       projectDataRef.current = data;
+      setHasProjectData(!!data);
+      if (data?.timeline?.name) {
+        setTimelineName(data.timeline.name);
+      }
+      if (data?.timeline?.curr_timecode) {
+        const isPlaying = usePlaybackStore.getState().isPlaying;
+        if (!isPlaying) {
+          const timecode = Timecode(
+            data.timeline.curr_timecode,
+            data.timeline.fps as FRAMERATE
+          );
+          setTimecode(timecode);
+        }
+      }
+      setProjectDataVersion((v) => v + 1);
     };
     const unsubscribe = EventsOn("projectDataReceived", handleProjectData);
 
+    const handleProjectDataUpdated = (data: main.ProjectDataPayload) => {
+      console.log(
+        "Event: projectDataUpdated in App.tsx, hydrating link groups.",
+        data
+      );
+      projectDataRef.current = data;
+      setHasProjectData(!!data);
+      if (data?.timeline?.name) {
+        setTimelineName(data.timeline.name);
+      }
+      if (data?.timeline?.curr_timecode) {
+        const isPlaying = usePlaybackStore.getState().isPlaying;
+        if (!isPlaying) {
+          const timecode = Timecode(
+            data.timeline.curr_timecode,
+            data.timeline.fps as FRAMERATE
+          );
+          setTimecode(timecode);
+        }
+      }
+      setProjectDataVersion((v) => v + 1);
+      if (data) {
+        MixdownLinkedAudio(data).catch((err) =>
+          console.error("Error pre-mixing linked audio on projectDataUpdated:", err)
+        );
+      }
+    };
+    const unsubscribeUpdated = EventsOn("projectDataUpdated", handleProjectDataUpdated);
+
     return () => {
       if (typeof unsubscribe === "function") unsubscribe();
+      if (typeof unsubscribeUpdated === "function") unsubscribeUpdated();
     };
   }, []);
 
@@ -644,7 +782,7 @@ function AppContent() {
       cancelPendingSync();
 
       console.log("Drag-friendly delay is over. Executing sync.");
-      handleSync();
+      handleSync(true);
     };
 
     syncMouseUpListenerRef.current = executeSyncAndCleanup;
@@ -662,6 +800,14 @@ function AppContent() {
   const handleBlur = () => {
     console.log("Tab is blurred, cancelling any pending sync operation.");
     cancelPendingSync();
+    if (usePlaybackStore.getState().isPlaying) {
+      const tc = useTimecodeStore.getState().timecode;
+      if (tc) {
+        SetDavinciPlayhead(tc.toString()).catch((err) => {
+          console.error("Error setting DaVinci playhead on blur:", err);
+        });
+      }
+    }
   };
 
   useWindowFocus(handleFocusWithDragDelay, handleBlur, {
@@ -713,9 +859,35 @@ function AppContent() {
           </div>
         </div>
       );
-    } else if (projectDataRef && currentClipId && httpPort) {
+    } else if (!pythonReady) {
+      return (
+        <div className="my-auto space-y-4 text-center">
+          <LoaderCircleIcon
+            size={32}
+            className="text-teal-500/60 animate-spin mx-auto mb-2"
+          />
+          <p className="text-gray-400 font-medium">Connecting to Python backend...</p>
+          <p className="text-gray-500 text-xs">Waiting for DaVinci Resolve bridge to initialize.</p>
+        </div>
+      );
+    } else if (!httpPort) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center rounded-sm text-center px-4">
+          <p className="text-gray-400 font-medium">
+            {isBrowserEnvironment()
+              ? "Browser Preview Mode"
+              : "There was a problem setting up the local http server."}
+          </p>
+          {isBrowserEnvironment() && (
+            <p className="text-gray-500 text-xs mt-1 max-w-sm">
+              Only UI previews are available in the browser. For full DaVinci Resolve integration and Go backend functionality, run the application in desktop mode.
+            </p>
+          )}
+        </div>
+      );
+    } else if (projectDataRef.current && currentClipId && httpPort) {
       return;
-    } else if (!projectDataRef) {
+    } else if (!projectDataRef.current) {
       return (
         <div className="my-auto space-y-8 text-gray-500">
           <div className="w-full gap-2 flex items-center justify-center rounded-sm">
@@ -731,20 +903,32 @@ function AppContent() {
               HushCut
             </div>
           </div>
-        </div>
-      );
-    } else if (!httpPort) {
-      return (
-        <div className="w-full h-full flex items-center justify-center rounded-sm">
-          <p className="text-gray-500">
-            There was a problem setting up the local http server.
-          </p>
+          <div className="flex justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleSync(true)}
+              className="text-xs text-zinc-300 hover:text-white border-zinc-700 bg-zinc-800/60 hover:bg-zinc-800"
+            >
+              <RefreshCwIcon className="w-3.5 h-3.5 mr-1.5" />
+              Sync with DaVinci
+            </Button>
+          </div>
         </div>
       );
     }
     return (
-      <div className="w-full h-full flex items-center justify-center bg-[#212126] rounded-sm">
-        <p className="text-gray-500">No audio clips in timeline.</p>
+      <div className="w-full h-full flex flex-col items-center justify-center bg-[#212126] rounded-sm text-center px-4">
+        {isBrowserEnvironment() ? (
+          <>
+            <p className="text-gray-400 text-sm font-medium">Browser Preview Mode</p>
+            <p className="text-gray-500 text-xs mt-1 max-w-md">
+              Only UI previews are available in the browser. For full DaVinci Resolve integration, run the application in desktop mode.
+            </p>
+          </>
+        ) : (
+          <p className="text-gray-500">No audio clips in timeline.</p>
+        )}
       </div>
     );
   };
@@ -765,14 +949,16 @@ function AppContent() {
               {currentActiveClip?.id && httpPort && (
                 <div className="shrink-0 px-3">
                   <ClipSelector
+                    key={`clip-selector-${projectDataVersion}`}
+                    displayClips={displayClips}
                     audioItems={projectDataRef.current?.timeline.audio_track_items}
+                    linkedAudioGroups={projectDataRef.current?.timeline.linked_audio_groups}
                     currentFileId={currentClipId}
                     onFileChange={handleAudioClipSelection}
                     fps={projectDataRef.current?.timeline.fps}
                     disabled={
                       !httpPort ||
-                      !projectDataRef.current?.timeline?.audio_track_items ||
-                      projectDataRef.current.timeline.audio_track_items.length === 0
+                      displayClips.length === 0
                     }
                     className="w-full mt-1 overflow-visible"
                   />
@@ -804,6 +990,7 @@ function AppContent() {
                           <WaveformPlayer
                             key={`${currentActiveClip.id}-${currentActiveClip.startFrame}-${currentActiveClip.sourceStartFrame}-${currentActiveClip.duration}`}
                             activeClip={currentActiveClip}
+                            displayClips={displayClips}
                             projectFrameRate={projectDataRef.current.timeline.fps}
                             httpPort={httpPort}
                           />
@@ -815,7 +1002,11 @@ function AppContent() {
                 <div className="w-full px-1 pb-5 bg-[#212126] rounded-2xl rounded-tr-[3px] border shadow-xl h-min flex flex-col mx-auto">
                   <div className="p-2 md:p-5 flex flex-wrap items-start gap-x-10 gap-y-2 justify-between grow">
                     <div className="flex flex-wrap gap-x-4 gap-y-2 flex-1 max-w-2xl">
-                      <SilenceControls key={currentClipId} />
+                      <SilenceControls
+                        key={currentClipId}
+                        displayClips={displayClips}
+                        audioItems={audioItems}
+                      />
                     </div>
                     {projectDataRef.current &&
                       projectDataRef.current.timeline?.audio_track_items?.length > 0 && (
@@ -835,7 +1026,14 @@ function AppContent() {
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onClick={handleSync} className="text-xs"><RefreshCwIcon className="w-[1.25em]" /> Sync with DaVinci</ContextMenuItem>
+          <ContextMenuItem onClick={() => handleSync(true)} className="text-xs">
+            <RefreshCwIcon className="w-[1.25em]" /> Sync with DaVinci
+          </ContextMenuItem>
+          {isDev && (
+            <ContextMenuItem onClick={() => OpenDevTools()} className="text-xs">
+              <CodeIcon className="w-[1.25em]" /> Open Developer Tools
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     </>
@@ -977,6 +1175,10 @@ export default function App() {
       (data: { message: string; progress: number }) => {
         console.log("taskProgressUpdate", data);
 
+        if (timeStartedRef.current === null) {
+          timeStartedRef.current = Date.now();
+        }
+
         if (data.progress != null) {
           setProgress((prev) => {
             if (prev === null) return data.progress;
@@ -989,20 +1191,22 @@ export default function App() {
     );
 
     const off2 = EventsOn("showFinalTimelineProgress", () => {
-      if (showFinalProgress) return;
       console.log("showFinalTimelineProgress");
       timeStartedRef.current = Date.now();
+      timeFinishedRef.current = null;
       setProgress(0);
       setMessage("Preparing");
       setShowFinalProgress(true);
     });
 
-    const off3 = EventsOn("finished", () => {
-      console.log("App.tsx: received finish event!")
+    const off3 = EventsOn("finished", (data?: { elapsed?: number }) => {
+      console.log("App.tsx: received finish event!", data);
       timeFinishedRef.current = Date.now();
-      if (timeStartedRef.current) {
+      if (data && typeof data.elapsed === "number" && data.elapsed > 0) {
+        setTotalTime(data.elapsed);
+      } else if (timeStartedRef.current) {
         const elapsed =
-          (timeFinishedRef.current! - timeStartedRef.current!) / 1000;
+          (timeFinishedRef.current - timeStartedRef.current) / 1000;
         setTotalTime(elapsed);
       }
       setProgress(100);

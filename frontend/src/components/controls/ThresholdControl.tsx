@@ -22,8 +22,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                 defaultDb={threshold}
                 onGainChange={setThreshold}
                 onDoubleClick={() => {
-                    console.log("default threshold:", defaultParameters.threshold)
-                    setThreshold(defaultParameters.threshold);
+                    useClipStore.getState().resetParameterToDefault(clipId, 'threshold');
                 }}
 
             />
@@ -38,7 +37,7 @@ const _ThresholdControl: React.FC<ThresholdControlProps> = () => {
                         <h1 className='font-semibold tracking-tight'>Silence Threshold</h1>
                         <p>Audio louder than this threshold is considered <b>content</b>.</p>
                         <p>Anything below is considered <b>silence</b>.</p>
-                        <Separator className='text-gray-800 h-px w-full bg-zinc-300 mb-1 mt-2 rounded-full' />
+                        <Separator className='h-px w-full bg-zinc-700/80 mb-1 mt-2 rounded-full' />
                         <p>Use the Silence Detection sliders below to fine tune.</p>
 
                     </TooltipContent>

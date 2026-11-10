@@ -2,10 +2,8 @@ name: Build and optionally make Release
 
 on:
   push:
-    # branches:
-    #   - '**'
     tags:
-      - 'v*.*.*'
+      - 'v*'
 
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
@@ -39,28 +37,46 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.25.0'
+          go-version: '1.26.x'
+          cache: true
 
-      - name: Authenticate Private Go Modules
-        run: git config --global url."https://user:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Select Xcode for macOS
+        if: matrix.label == 'macos'
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install Linux dependencies
+        if: matrix.label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - name: Install Wails v3 CLI
+        run: CGO_ENABLED=0 go install -v github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      - name: Install NSIS on Windows
+        if: matrix.label == 'windows'
+        shell: powershell
+        run: |
+          choco install nsis -y
+          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install ./python-backend
-      
+
       - name: Import Code-Signing Certificates for macOS
         if: matrix.label == 'macos'
         uses: Apple-Actions/import-codesign-certs@v3
@@ -68,216 +84,242 @@ jobs:
           p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
-      - name: Build Python backend
+      - name: Set public key for license
         run: |
-          BACKEND_BINARY="dist/python_backend"
-
-          if [[ "${{ matrix.label }}" == "macos" ]]; then
-            echo "Building Python backend with code signing for macOS..."
-            pyinstaller python-backend/src/HushCut.py \
-              --name python_backend \
-              --onefile \
-              --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" \
-              -y
-          else
-            echo "Building Python backend without code signing..."
-            pyinstaller python-backend/src/HushCut.py \
-              --name python_backend \
-              --onefile \
-              --noconsole \
-              -y
+          if [ -n "${{ secrets.LICENSE_PUBLIC_KEY }}" ]; then
+            mkdir -p secrets
+            echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
           fi
 
-          # Copy the built binary to where Wails expects it
-          mkdir -p build/bin
-          cp "$BACKEND_BINARY${{ matrix.ext }}" build/bin/python_backend${{ matrix.ext }}
-          chmod +x build/bin/python_backend${{ matrix.ext }}
-
-
-      - name: Copy Lua script
-        run: cp python-backend/src/HushCut.lua build/bin/
-
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      - name: Make public_key files
+      - name: Build Python backend
         run: |
-          mkdir -p secrets
-          echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
+          pyinstaller python-backend/src/HushCut.py \
+            --name python_backend \
+            --onefile \
+            -y
+
+          mkdir -p bin build/bin
+          if [[ "${{ matrix.label }}" == "windows" ]]; then
+            cp dist/python_backend.exe bin/python_backend.exe
+            cp dist/python_backend.exe build/bin/python_backend.exe
+          else
+            cp dist/python_backend bin/python_backend
+            cp dist/python_backend build/bin/python_backend
+            chmod +x bin/python_backend build/bin/python_backend
+          fi
 
       - name: Build lua helper for windows
         if: matrix.label == 'windows'
-        shell: bash
         run: |
           cd lua-helper
           go build .
-          mv lua-helper.exe ../build/bin/davinci_lua_helper.exe
+          mkdir -p ../bin ../build/bin
+          cp lua-helper.exe ../bin/davinci_lua_helper.exe
+          cp lua-helper.exe ../build/bin/davinci_lua_helper.exe
+          rm -f lua-helper.exe
+          cd ..
 
-      - name: Install NSIS
-        if: matrix.label == 'windows'
-        shell: powershell
+      - name: Build Frontend and Generate Bindings
         run: |
-          choco install nsis -y
-          $env:PATH += ";C:\Program Files (x86)\NSIS"
-          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      
-      - name: Build Wails App (Windows)
-        if: matrix.label == 'windows'
-        uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
-        with:
-          build-name: HushCut${{ matrix.ext }}
-          build-platform: ${{ matrix.platform }}
-          package: false
-          nsis: true
-        
-      - name: Clean Windows bin directory
-        if: matrix.label == 'windows'
-        shell: bash
-        run: |
-          rm -f build/bin/python_backend.exe
-          rm -f build/bin/HushCut.exe
-          rm -f build/bin/davinci_lua_helper.exe
-          rm -f build/bin/HushCut.lua
-
-      - name: Build Wails App (Unix)
-        if: matrix.label != 'windows'
-        uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
-        with:
-          build-name: HushCut${{ matrix.ext }}
-          build-platform: ${{ matrix.platform }}
-          package: false
+          npm install -g pnpm
+          cd frontend
+          pnpm install
+          cd ..
+          wails3 generate bindings -clean=true -time-type=Date -ts
+          cd frontend
+          pnpm run build
+          cd ..
 
       - name: Run Go tests
         run: go test ./... -v
-      
-      - name: Add macOS Resources folder and cleanup
+
+      - name: Build application (macOS)
         if: matrix.label == 'macos'
         run: |
-          RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
-          mkdir -p "$RESOURCE_DIR"
+          wails3 task darwin:package:universal
 
-          # Copy python backend into Resources
-          cp build/bin/python_backend "$RESOURCE_DIR/"
-          # if [ -d build/bin/python_backend/_internal ]; then
-          #   cp -R build/bin/python_backend/_internal "$RESOURCE_DIR/"
-          # fi
-
-          cp build/bin/HushCut.lua "$RESOURCE_DIR/"
-          
-          # Remove unnecessary package/zip from wails
-          rm -f build/bin/HushCut.app.zip
-          rm -f build/bin/HushCut.pkg
-
-      - name: Install latest gon for notarization
-        if: matrix.label == 'macos'
+      - name: Build application (Windows)
+        if: matrix.label == 'windows'
+        shell: powershell
         run: |
-          brew uninstall gon || true
-          brew install Bearer/tap/gon
+          wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_amd64.syso
+          go build -tags production -trimpath -ldflags="-w -s -H windowsgui" -o bin/HushCut.exe .
+          Remove-Item -Force *.syso
+          New-Item -ItemType Directory -Force -Path build/bin | Out-Null
+          Copy-Item bin/HushCut.exe build/bin/HushCut.exe
+          Copy-Item bin/python_backend.exe build/bin/python_backend.exe
+          Copy-Item bin/davinci_lua_helper.exe build/bin/davinci_lua_helper.exe
+          wails3 generate webview2bootstrapper -dir build/windows/installer
+          New-Item -ItemType Directory -Force -Path build/windows/installer/tmp | Out-Null
+          Copy-Item build/windows/installer/MicrosoftEdgeWebview2Setup.exe build/windows/installer/tmp/MicrosoftEdgeWebview2Setup.exe -ErrorAction SilentlyContinue
+          $tag = "${{ github.ref_name }}"
+          $numericVersion = ($tag -replace '^v', '') -replace '-.*', ''
+          Push-Location build/windows/installer
+          makensis -DINFO_PRODUCTVERSION="$numericVersion" -DARG_WAILS_AMD64_BINARY="..\..\bin\HushCut.exe" project.nsi
+          Pop-Location
+          Copy-Item build/bin/HushCut-amd64-installer.exe bin/HushCut-amd64-installer.exe
 
-      - name: install create-dmg for macOS
-        if: matrix.label == 'macos'
+      - name: Build application (Linux)
+        if: matrix.label == 'linux'
         run: |
-          npm install --global create-dmg
+          go build -tags production -trimpath -ldflags="-w -s" -o bin/HushCut .
 
-      - name: Sign macOS binary and create dmg
+      - name: Install create-dmg for macOS
+        if: matrix.label == 'macos'
+        run: npm install --global --allow-scripts=fs-xattr,macos-alias create-dmg || npm install --global create-dmg
+
+      - name: Sign macOS binary, create DMG and notarize
         if: matrix.label == 'macos'
         env:
-          AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
-          AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
-          AC_PROVIDER: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID_USERNAME }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
         run: |
-          echo "Signing Package"
-          gon -log-level=info ./code-signing/gon-sign.json
-          cd build/bin
-          # should code sign the dmg again automatically
-          create-dmg HushCut.app 
+          echo "Signing macOS bundle with Hardened Runtime..."
+          ENTITLEMENTS="./code-signing/entitlements.plist"
+
+          # 1. Sign nested helper binary (python_backend) inside Resources
+          echo "Signing python_backend..."
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut.app/Contents/Resources/python_backend"
+
+          # 2. Sign main binary
+          echo "Signing HushCut main executable..."
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut.app/Contents/MacOS/HushCut"
+
+          # 3. Sign app bundle
+          echo "Signing HushCut.app bundle..."
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut.app"
+
+          # 4. Verify app signature
+          echo "Verifying HushCut.app signature..."
+          codesign --verify --deep --strict --verbose=2 "bin/HushCut.app"
+
+          # 5. Create Styled DMG
+          echo "Creating styled DMG..."
+          cd bin
+          rm -f HushCut*.dmg
+          create-dmg HushCut.app --overwrite --no-code-sign
           mv HushCut*.dmg HushCut-macOS.dmg
+          cd ..
+
+          # 6. Sign DMG
+          echo "Signing DMG..."
+          codesign --force --timestamp --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut-macOS.dmg"
+
+          # 7. Notarize with Apple notarytool
+          echo "Submitting DMG for notarization..."
+          xcrun notarytool submit "bin/HushCut-macOS.dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # 8. Staple notarization ticket
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "bin/HushCut-macOS.dmg"
+
+          # 9. Verify stapled DMG
+          spctl --assess --type open --context context:primary-signature --verbose "bin/HushCut-macOS.dmg"
 
       - name: Package Release Asset
-        # This step will only run when you push a tag
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         run: |
-          # For macOS, the DMG is already created. We just need to define its path for the upload.
           if [[ "${{ matrix.label }}" == "macos" ]]; then
-            ARTIFACT_PATH="build/bin/HushCut-macOS.dmg"
-          
+            ARTIFACT_PATH="bin/HushCut-macOS.dmg"
           elif [[ "${{ matrix.label }}" == "windows" ]]; then
-            # Windows: use installer directly
-            ARTIFACT_PATH="build/bin/HushCut-amd64-installer.exe"
-
+            ARTIFACT_PATH="bin/HushCut-amd64-installer.exe"
           else
-            # Linux: make a zip
-            cd build/bin
-            ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
-            zip -r "../../${ARTIFACT_FILENAME}" .
-            ARTIFACT_PATH="${ARTIFACT_FILENAME}"
+            cp python-backend/src/HushCut.lua bin/
+            cd bin
+            zip -r "../HushCut-linux.zip" HushCut python_backend HushCut.lua
+            cd ..
+            ARTIFACT_PATH="HushCut-linux.zip"
           fi
           echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
 
       - name: Upload Release Artifact
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HushCut-${{ matrix.label }}
           path: ${{ env.ARTIFACT_PATH }}
 
   #===================================================================
-  # JOB 2: Publish all binaries to the public repository
-  # This job runs only on tag pushes and after all builds succeed.
+  # JOB 2: Publish releases
+  # - Always publishes to this repo (oliwoli/HushCut)
+  # - Publishes to oliwoli/hushcut-releases ONLY if not a pre-release
   #===================================================================
   publish:
-    name: Publish to Public Repo
-    needs: build # Ensures this job runs only after the 'build' job completes
-    if: startsWith(github.ref, 'refs/tags/') # Condition to run only for tags
+    name: Publish Releases
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Permission to push to the repository
+      contents: write
 
     steps:
-      - name: Checkout current repo (for package.json)
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
-          path: artifacts # Download all artifacts into an 'artifacts' directory
+          path: artifacts
 
       - name: Display downloaded file structure
         run: ls -R artifacts
 
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp artifacts/HushCut-linux/HushCut-linux.zip release-assets/HushCut-${{ github.ref_name }}-linux.zip
+          cp artifacts/HushCut-windows/HushCut-amd64-installer.exe release-assets/HushCut-${{ github.ref_name }}-windows.exe
+          cp artifacts/HushCut-macos/HushCut-macOS.dmg release-assets/HushCut-${{ github.ref_name }}-macos.dmg
+
+      # Publish to THIS repo (oliwoli/HushCut)
+      - name: Publish Release to HushCut
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            release-assets/HushCut-${{ github.ref_name }}-linux.zip
+            release-assets/HushCut-${{ github.ref_name }}-windows.exe
+            release-assets/HushCut-${{ github.ref_name }}-macos.dmg
+
+      # Publish to hushcut-releases ONLY if NOT a pre-release
       - name: Checkout public releases repo
-        uses: actions/checkout@v4
+        if: "!contains(github.ref_name, '-')"
+        uses: actions/checkout@v7
         with:
           repository: oliwoli/hushcut-releases
           token: ${{ secrets.GH_PUBLISH_TOKEN }}
           path: public-repo
 
       - name: Organize artifacts and push to public repo
+        if: "!contains(github.ref_name, '-')"
         run: |
-          # Create destination directories
           mkdir -p public-repo/build/macos
           mkdir -p public-repo/build/windows
           mkdir -p public-repo/build/linux
 
-          # Copy package.json from the main repo
           echo "Copying package.json"
           cp package.json public-repo/package.json
 
-          # Copy artifacts into the public repo checkout
-          # Note: download-artifact creates subdirectories named after the artifact
           echo "Copying artifacts"
           cp artifacts/HushCut-linux/HushCut-linux.zip public-repo/build/linux/
           cp artifacts/HushCut-windows/HushCut-amd64-installer.exe public-repo/build/windows/
           cp artifacts/HushCut-macos/HushCut-macOS.dmg public-repo/build/macos/
 
-          # Commit and push changes to the public repo
           cd public-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add build/ package.json
           
-          # Commit only if there are changes
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else

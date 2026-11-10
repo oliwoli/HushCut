@@ -4,6 +4,21 @@
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>HushCut</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico"/>
+    <script>
+        // Suppress 404 from Wails v3 optional runtime script probe (/wails/custom.js)
+        (function() {
+            var origFetch = window.fetch;
+            if (origFetch) {
+                window.fetch = function(url, options) {
+                    if (typeof url === 'string' && (url === '/wails/custom.js' || url.indexOf('custom.js') !== -1)) {
+                        return Promise.resolve(new Response('', { status: 200, headers: { 'Content-Type': 'application/javascript' } }));
+                    }
+                    return origFetch.apply(this, arguments);
+                };
+            }
+        })();
+    </script>
 </head>
 <body style="background-color: #1b1b1f; pointer-events: all !important;" class="overflow-hidden">
     <!-- Main React application -->

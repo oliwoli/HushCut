@@ -18,13 +18,18 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
       "@/*": [
         "./src/*"
       ],
-      "@wails/*": ["wailsjs/*"]
+      "@wails/go/main/App": ["./bindings/github.com/oliwoli/hushcut/app.ts"],
+      "@wails/go/models": ["./src/lib/models-adapter.ts"],
+      "@wails/runtime": ["./src/lib/runtime-adapter.ts"],
+      "@wails/runtime/runtime": ["./src/lib/runtime-adapter.ts"],
+      "@wails/*": ["./bindings/*"]
     },
   },
   "include": [

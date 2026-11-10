@@ -105,9 +105,10 @@ func CreateEditsWithOptionalSilence(
 			return
 		}
 
+		minSourceDuration := math.Ceil(float64(timelineDurationFrames) / frameRateRatio)
 		sourceDuration := srcEnd - srcStart
-		if round(sourceDuration) < timelineDurationFrames {
-			srcEnd = srcStart + float64(timelineDurationFrames)
+		if sourceDuration < minSourceDuration {
+			srcEnd = srcStart + minSourceDuration
 		}
 		if srcEnd > clipData.SourceEndFrame {
 			srcEnd = clipData.SourceEndFrame
@@ -137,18 +138,11 @@ func CreateEditsWithOptionalSilence(
 				timelineRoundingOffset := float64(startFrame) - timelineCursorF
 				sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
 
-				//maybeOffset := (soundTimelineDuration - float64(durationInFrames)) / frameRateRatio
-
 				sourceStart := sourceCursorF + sourceRoundingOffset
-				sourceEnd := sil.Start - eps
+				sourceEnd := sil.Start
 				if sourceEnd > clipData.SourceEndFrame {
 					sourceEnd = clipData.SourceEndFrame
 				}
-				// if !keepSilenceSegments && len(edits) > 0 {
-				// 	sourceStart += math.Abs(maybeOffset)
-				// 	secondOffset := float64(round(sourceEnd-sourceStart)) - (sourceEnd - sourceStart)
-				// 	sourceStart += math.Abs(secondOffset / 2)
-				// }
 
 				emitEdit(sourceStart, sourceEnd, startFrame, endFrame, true)
 			}
@@ -171,7 +165,7 @@ func CreateEditsWithOptionalSilence(
 				timelineRoundingOffset := float64(startFrame) - timelineCursorF
 				sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
 				sourceStart := sil.Start + sourceRoundingOffset
-				sourceEnd := sil.End - eps
+				sourceEnd := sil.End
 				emitEdit(sourceStart, sourceEnd, startFrame, endFrame, false)
 			}
 			timelineCursorF += silenceTimelineDuration
@@ -183,15 +177,19 @@ func CreateEditsWithOptionalSilence(
 	finalSoundSourceDuration := clipData.SourceEndFrame - sourceCursorF
 	if finalSoundSourceDuration > eps {
 		startFrame := round(timelineCursorF)
-		endFrame := round(clipData.EndFrame)
+		var endFrame int64
+		if keepSilenceSegments {
+			endFrame = round(clipData.EndFrame)
+		} else {
+			finalTimelineDuration := finalSoundSourceDuration * frameRateRatio
+			endFrame = round(timelineCursorF + finalTimelineDuration)
+		}
 
-		if endFrame >= startFrame && keepSilenceSegments {
+		if endFrame > startFrame {
 			timelineRoundingOffset := float64(startFrame) - timelineCursorF
 			sourceRoundingOffset := timelineRoundingOffset / frameRateRatio
 			sourceStart := sourceCursorF + sourceRoundingOffset
 			sourceEnd := clipData.SourceEndFrame
-			// Use emitEdit for the final segment as well to ensure it gets padded if necessary
-			// when keeping silences.
 			emitEdit(sourceStart, sourceEnd, startFrame, endFrame, true)
 		}
 	}
@@ -199,12 +197,16 @@ func CreateEditsWithOptionalSilence(
 	// The Final Continuity Pass is also correctly conditional.
 	if keepSilenceSegments {
 		for i := 0; i < len(edits)-1; i++ {
-			edits[i].SourceEndFrame = edits[i+1].SourceStartFrame - eps
+			edits[i].SourceEndFrame = edits[i+1].SourceStartFrame
+			edits[i].EndFrame = edits[i+1].StartFrame
 		}
 	} else {
 		for i := 0; i < len(edits)-1; i++ {
-			//edits[i].EndFrame = edits[i+1].StartFrame
-			edits[i].SourceEndFrame = edits[i].SourceStartFrame + (edits[i].EndFrame-edits[i].StartFrame)/frameRateRatio
+			edits[i+1].StartFrame = edits[i].EndFrame
+			minSrc := math.Ceil((edits[i].EndFrame - edits[i].StartFrame) / frameRateRatio)
+			if (edits[i].SourceEndFrame - edits[i].SourceStartFrame) < minSrc {
+				edits[i].SourceEndFrame = edits[i].SourceStartFrame + minSrc
+			}
 		}
 	}
 
@@ -230,9 +232,12 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 
 	for i := range projectData.Timeline.AudioTrackItems {
 		item := &projectData.Timeline.AudioTrackItems[i]
-		//log.Printf("sourceFPS is %f", item.SourceFPS)
+		itemFPS := item.SourceFPS
+		if itemFPS <= floatEpsilon {
+			itemFPS = timelineFPS
+		}
 		// Ratio to convert source frames FROM timeline domain TO project domain for processing.
-		sourceToTimelineFpsRatio := item.SourceFPS / timelineFPS
+		sourceToTimelineFpsRatio := itemFPS / timelineFPS
 		itemSpecificSilencesInSeconds, silencesFound := allClipSilencesMap[item.ID]
 		if !silencesFound {
 			if len(item.EditInstructions) == 0 {
@@ -244,8 +249,8 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 		var frameBasedSilences []SilenceInterval
 		if len(itemSpecificSilencesInSeconds) > 0 {
 			for _, silenceInSec := range itemSpecificSilencesInSeconds {
-				startFrame := silenceInSec.Start * item.SourceFPS
-				endFrame := silenceInSec.End * item.SourceFPS
+				startFrame := silenceInSec.Start * itemFPS
+				endFrame := silenceInSec.End * itemFPS
 				if endFrame > startFrame+floatEpsilon {
 					frameBasedSilences = append(frameBasedSilences, SilenceInterval{Start: startFrame, End: endFrame})
 				}
@@ -260,7 +265,7 @@ func (a *App) CalculateAndStoreEditsForTimeline(
 			EndFrame:   item.EndFrame,
 		}
 
-		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, item.SourceFPS, timelineFPS, keepSilenceSegments)
+		editInstructions := CreateEditsWithOptionalSilence(clipDataItem, frameBasedSilences, itemFPS, timelineFPS, keepSilenceSegments)
 		// NO MORE CONVERSIONS. The returned source frames are already in the
 		// correct project FPS domain, which is what the Python script expects.
 		item.EditInstructions = editInstructions
