@@ -148,11 +148,16 @@ func main() {
 		}
 	}
 
+	var appIcon []byte
+	if runtime.GOOS != "darwin" {
+		appIcon = icon
+	}
+
 	// Create application with options
 	app := application.New(application.Options{
 		Name:        "HushCut",
 		Description: "HushCut",
-		Icon:        icon,
+		Icon:        appIcon,
 		Services: []application.Service{
 			application.NewService(appInstance),
 		},
