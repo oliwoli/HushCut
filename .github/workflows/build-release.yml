@@ -94,12 +94,14 @@ jobs:
             --onefile \
             -y
 
-          mkdir -p bin
+          mkdir -p bin build/bin
           if [[ "${{ matrix.label }}" == "windows" ]]; then
-            cp dist/python_backend/python_backend.exe bin/python_backend.exe
+            cp dist/python_backend.exe bin/python_backend.exe
+            cp dist/python_backend.exe build/bin/python_backend.exe
           else
-            cp dist/python_backend/python_backend bin/python_backend
-            chmod +x bin/python_backend
+            cp dist/python_backend bin/python_backend
+            cp dist/python_backend build/bin/python_backend
+            chmod +x bin/python_backend build/bin/python_backend
           fi
 
       - name: Build lua helper for windows
@@ -107,7 +109,10 @@ jobs:
         run: |
           cd lua-helper
           go build .
-          mv lua-helper.exe ../bin/davinci_lua_helper.exe
+          mkdir -p ../bin ../build/bin
+          cp lua-helper.exe ../bin/davinci_lua_helper.exe
+          cp lua-helper.exe ../build/bin/davinci_lua_helper.exe
+          rm -f lua-helper.exe
           cd ..
 
       - name: Build Frontend and Generate Bindings
