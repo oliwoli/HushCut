@@ -52,14 +52,27 @@ jobs:
           go-version: '1.26.x'
           cache: true
 
-      - name: Authenticate Private Go Modules
-        run: git config --global url."https://user:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Install Wails v3 CLI
+        run: go install -v github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      - name: Install Linux dependencies
+        if: matrix.label == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - name: Install NSIS on Windows
+        if: matrix.label == 'windows'
+        shell: powershell
+        run: |
+          choco install nsis -y
+          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install ./python-backend
-      
+
       - name: Import Code-Signing Certificates for macOS
         if: matrix.label == 'macos'
         uses: Apple-Actions/import-codesign-certs@v3
@@ -67,105 +80,73 @@ jobs:
           p12-file-base64: "${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}"
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
 
-      - name: Build Python backend
+      - name: Set public key for license
         run: |
-          BACKEND_BINARY="dist/python_backend"
-
-          if [[ "${{ matrix.label }}" == "macos" ]]; then
-            echo "Building Python backend with code signing and hardened runtime entitlements..."
-            pyinstaller python-backend/src/HushCut.py \
-              --name python_backend \
-              --onefile \
-              --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" \
-              --osx-entitlements-file "./code-signing/entitlements.plist" \
-              -y
-          else
-            echo "Building Python backend without code signing..."
-            pyinstaller python-backend/src/HushCut.py \
-              --name python_backend \
-              --onefile \
-              --noconsole \
-              -y
+          if [ -n "${{ secrets.LICENSE_PUBLIC_KEY }}" ]; then
+            mkdir -p secrets
+            echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
           fi
 
-          # Copy the built binary to where Wails expects it
-          mkdir -p build/bin
-          cp "$BACKEND_BINARY${{ matrix.ext }}" build/bin/python_backend${{ matrix.ext }}
-          chmod +x build/bin/python_backend${{ matrix.ext }}
-
-      - name: Copy Lua script
-        run: cp python-backend/src/HushCut.lua build/bin/
-
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      - name: Make public_key files
+      - name: Build Python backend
         run: |
-          mkdir -p secrets
-          echo "${{ secrets.LICENSE_PUBLIC_KEY }}" > secrets/public_key.pem
+          pyinstaller python-backend/src/HushCut.py \
+            --name python_backend \
+            --onefile \
+            -y
+
+          mkdir -p bin
+          if [[ "${{ matrix.label }}" == "windows" ]]; then
+            cp dist/python_backend/python_backend.exe bin/python_backend.exe
+          else
+            cp dist/python_backend/python_backend bin/python_backend
+            chmod +x bin/python_backend
+          fi
 
       - name: Build lua helper for windows
         if: matrix.label == 'windows'
-        shell: bash
         run: |
           cd lua-helper
           go build .
-          mv lua-helper.exe ../build/bin/davinci_lua_helper.exe
+          mv lua-helper.exe ../bin/davinci_lua_helper.exe
+          cd ..
 
-      - name: Install NSIS
-        if: matrix.label == 'windows'
-        shell: powershell
+      - name: Build Frontend and Generate Bindings
         run: |
-          choco install nsis -y
-          $env:PATH += ";C:\Program Files (x86)\NSIS"
-          echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      
-      - name: Build Wails App (Windows)
-        if: matrix.label == 'windows'
-        uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
-        with:
-          build-name: HushCut${{ matrix.ext }}
-          build-platform: ${{ matrix.platform }}
-          package: false
-          nsis: true
-        
-      - name: Clean Windows bin directory
-        if: matrix.label == 'windows'
-        shell: bash
-        run: |
-          rm -f build/bin/python_backend.exe
-          rm -f build/bin/HushCut.exe
-          rm -f build/bin/davinci_lua_helper.exe
-          rm -f build/bin/HushCut.lua
-
-      - name: Build Wails App (Unix)
-        if: matrix.label != 'windows'
-        uses: dAppServer/wails-build-action@6f01580fdf9e01042bcf2ebe288a934e0d6eb4e2
-        with:
-          build-name: HushCut${{ matrix.ext }}
-          build-platform: ${{ matrix.platform }}
-          package: false
+          npm install -g pnpm
+          cd frontend
+          pnpm install
+          cd ..
+          wails3 generate bindings -clean=true -time-type=Date -ts
+          cd frontend
+          pnpm run build
+          cd ..
 
       - name: Run Go tests
         run: go test ./... -v
-      
-      - name: Add macOS Resources folder and cleanup
+
+      - name: Build application (macOS)
         if: matrix.label == 'macos'
         run: |
-          RESOURCE_DIR="build/bin/HushCut.app/Contents/Resources"
-          mkdir -p "$RESOURCE_DIR"
+          wails3 task darwin:package:universal
 
-          # Copy python backend into Resources
-          cp build/bin/python_backend "$RESOURCE_DIR/"
-          cp build/bin/HushCut.lua "$RESOURCE_DIR/"
-          
-          # Remove unnecessary package/zip from wails
-          rm -f build/bin/HushCut.app.zip
-          rm -f build/bin/HushCut.pkg
+      - name: Build application (Windows)
+        if: matrix.label == 'windows'
+        run: |
+          wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_amd64.syso
+          go build -tags production -trimpath -ldflags="-w -s -H windowsgui" -o bin/HushCut.exe .
+          rm -f *.syso
+          wails3 generate webview2bootstrapper -dir build/windows/installer
+          mkdir -p build/windows/installer/tmp
+          cp build/windows/installer/MicrosoftEdgeWebview2Setup.exe build/windows/installer/tmp/MicrosoftEdgeWebview2Setup.exe || true
+          NUMERIC_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//' | sed 's/-.*//')
+          cd build/windows/installer
+          makensis -DINFO_PRODUCTVERSION="$NUMERIC_VERSION" -DARG_WAILS_AMD64_BINARY=../../bin/HushCut.exe project.nsi
+          cd ../../..
 
-      - name: Install create-dmg for macOS
-        if: matrix.label == 'macos'
-        run: npm install --global create-dmg
+      - name: Build application (Linux)
+        if: matrix.label == 'linux'
+        run: |
+          go build -tags production -trimpath -ldflags="-w -s" -o bin/HushCut .
 
       - name: Sign macOS binary, create DMG and notarize
         if: matrix.label == 'macos'
@@ -180,34 +161,35 @@ jobs:
 
           # 1. Sign nested helper binary (python_backend) inside Resources
           echo "Signing python_backend..."
-          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut.app/Contents/Resources/python_backend"
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut.app/Contents/Resources/python_backend"
 
           # 2. Sign main binary
           echo "Signing HushCut main executable..."
-          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut.app/Contents/MacOS/HushCut"
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut.app/Contents/MacOS/HushCut"
 
           # 3. Sign app bundle
           echo "Signing HushCut.app bundle..."
-          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut.app"
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut.app"
 
           # 4. Verify app signature
           echo "Verifying HushCut.app signature..."
-          codesign --verify --deep --strict --verbose=2 "build/bin/HushCut.app"
+          codesign --verify --deep --strict --verbose=2 "bin/HushCut.app"
 
           # 5. Create DMG
-          echo "Creating DMG..."
-          cd build/bin
-          create-dmg HushCut.app --overwrite || true
-          mv HushCut*.dmg HushCut-macOS.dmg
-          cd ../..
+          echo "Creating DMG with Applications shortcut..."
+          mkdir -p dmg_root
+          cp -R bin/HushCut.app dmg_root/
+          ln -s /Applications dmg_root/Applications
+          hdiutil create -volname "HushCut" -srcfolder dmg_root -ov -format UDZO "bin/HushCut-macOS.dmg"
+          rm -rf dmg_root
 
           # 6. Sign DMG
           echo "Signing DMG..."
-          codesign --force --timestamp --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut-macOS.dmg"
+          codesign --force --timestamp --sign "$APPLE_SIGN_IDENTITY" "bin/HushCut-macOS.dmg"
 
           # 7. Notarize with Apple notarytool
           echo "Submitting DMG for notarization..."
-          xcrun notarytool submit "build/bin/HushCut-macOS.dmg" \
+          xcrun notarytool submit "bin/HushCut-macOS.dmg" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
@@ -215,24 +197,24 @@ jobs:
 
           # 8. Staple notarization ticket
           echo "Stapling notarization ticket..."
-          xcrun stapler staple "build/bin/HushCut-macOS.dmg"
+          xcrun stapler staple "bin/HushCut-macOS.dmg"
 
           # 9. Verify stapled DMG
-          spctl --assess --type open --context context:primary-signature --verbose "build/bin/HushCut-macOS.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose "bin/HushCut-macOS.dmg"
 
       - name: Package Release Asset
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         run: |
           if [[ "${{ matrix.label }}" == "macos" ]]; then
-            ARTIFACT_PATH="build/bin/HushCut-macOS.dmg"
+            ARTIFACT_PATH="bin/HushCut-macOS.dmg"
           elif [[ "${{ matrix.label }}" == "windows" ]]; then
-            ARTIFACT_PATH="build/bin/HushCut-amd64-installer.exe"
+            ARTIFACT_PATH="bin/HushCut-amd64-installer.exe"
           else
-            cd build/bin
-            ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
-            zip -r "../../${ARTIFACT_FILENAME}" .
-            ARTIFACT_PATH="${ARTIFACT_FILENAME}"
+            cp python-backend/src/HushCut.lua bin/
+            cd bin
+            zip -r "../HushCut-linux.zip" HushCut python_backend HushCut.lua
+            cd ..
+            ARTIFACT_PATH="HushCut-linux.zip"
           fi
           echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
 

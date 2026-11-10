@@ -186,6 +186,9 @@ tasks:
           cp "build/bin/python_backend" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/python_backend"
           chmod +x "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/python_backend"
         fi
+        if [ -f "python-backend/src/HushCut.lua" ]; then
+          cp "python-backend/src/HushCut.lua" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/HushCut.lua"
+        fi
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:
@@ -224,6 +227,9 @@ tasks:
         elif [ -f "build/bin/python_backend" ]; then
           cp "build/bin/python_backend" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources/python_backend"
           chmod +x "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources/python_backend"
+        fi
+        if [ -f "python-backend/src/HushCut.lua" ]; then
+          cp "python-backend/src/HushCut.lua" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources/HushCut.lua"
         fi
       - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
       - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
