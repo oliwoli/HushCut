@@ -440,6 +440,9 @@ export function postProcessSilencesWithModifications(
     return [];
   }
 
+  // Ensure preliminary periods are sorted by start time (handles can be moved across each other)
+  preliminary.sort((a, b) => a.start - b.start);
+
   // 3. Snap first/last silence to clip boundaries if content at boundary is shorter than minContent
   const first = preliminary[0];
   if (
@@ -456,7 +459,7 @@ export function postProcessSilencesWithModifications(
     last.end = clipEndSeconds;
   }
 
-  // 4. Silence Merge (minContent) with directional modification inheritance
+  // 4. Silence Merge (minContent) with modification inheritance
   const merged: SilencePeriod[] = [];
   let current: SilencePeriod = { ...preliminary[0] };
 
@@ -464,36 +467,40 @@ export function postProcessSilencesWithModifications(
     const next = preliminary[i];
     const contentDuration = next.start - current.end;
     if (contentDuration < minContent) {
-      // Merging `current` (left) with `next` (right):
-      // - Keep `current.start` and `current.startModified` (left side modification)
-      // - Adopt `next.end` and `next.endModified` (right side modification)
-      const inheritedStartMod = Boolean(current.startModified);
-      const inheritedEndMod = Boolean(next.endModified);
-      const inheritedIsMod = inheritedStartMod || inheritedEndMod;
+      // Merging `current` with `next`:
+      // - The span expands to cover both regions: Math.min(start) to Math.max(end).
+      // - If either region was modified, the merged region inherits isModified = true and all modification IDs.
+      const inheritedStartMod = Boolean(
+        current.startModified || (next.start <= current.start && next.startModified)
+      );
+      const inheritedEndMod = Boolean(
+        next.endModified || (current.end >= next.end && current.endModified)
+      );
+      const inheritedIsMod = Boolean(current.isModified || next.isModified);
 
       const modIds: string[] = [];
-      if (inheritedStartMod && current.modificationIds) {
+      if (current.modificationIds) {
         for (const id of current.modificationIds) {
           if (!modIds.includes(id)) modIds.push(id);
         }
       }
-      if (inheritedEndMod && next.modificationIds) {
+      if (next.modificationIds) {
         for (const id of next.modificationIds) {
           if (!modIds.includes(id)) modIds.push(id);
         }
       }
 
       current = {
-        start: current.start,
-        end: next.end,
-        rawStart: current.rawStart,
-        rawEnd: next.rawEnd,
+        start: Math.min(current.start, next.start),
+        end: Math.max(current.end, next.end),
+        rawStart: Math.min(current.rawStart ?? current.start, next.rawStart ?? next.start),
+        rawEnd: Math.max(current.rawEnd ?? current.end, next.rawEnd ?? next.end),
         baseStart: current.baseStart,
-        baseEnd: next.baseEnd,
-        startCenterTime: current.startCenterTime,
-        endCenterTime: next.endCenterTime,
-        startModId: current.startModId,
-        endModId: next.endModId,
+        baseEnd: next.end >= current.end ? next.baseEnd : current.baseEnd,
+        startCenterTime: current.start <= next.start ? current.startCenterTime : next.startCenterTime,
+        endCenterTime: next.end >= current.end ? next.endCenterTime : current.endCenterTime,
+        startModId: current.start <= next.start ? current.startModId : next.startModId,
+        endModId: next.end >= current.end ? next.endModId : current.endModId,
         startModified: inheritedStartMod,
         endModified: inheritedEndMod,
         isModified: inheritedIsMod,

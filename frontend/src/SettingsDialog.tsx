@@ -16,6 +16,7 @@ import SliderZag from "./components/ui/sliderZag";
 import { clamp, cn } from "./lib/utils";
 import { toast } from "sonner";
 import { useUiStore } from "./stores/uiStore";
+import { useGlobalStore } from "./stores/clipStore";
 import { SquareMinusIcon, SquarePlusIcon } from "lucide-react";
 
 // This component is now "controlled" by its parent via these props.
@@ -30,9 +31,11 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
     const [davinciFolderPath, setDavinciFolderPath] = useState("");
     const [cleanupThreshold, setCleanupThreshold] = useState(14);
     const [enableCleanup, setEnableCleanup] = useState(true);
+    const [autoAdvanceClip, setAutoAdvanceClip] = useState(false);
 
     const currUiScale = useUiStore((s) => s.uiScale);
     const setUiScale = useUiStore((s) => s.setUiScale);
+    const setGlobalAutoAdvance = useGlobalStore((s) => s.setAutoAdvanceClip);
 
     useEffect(() => {
         if (open) {
@@ -41,6 +44,9 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                 setCleanupThreshold(settings.cleanupThresholdDays !== undefined ? settings.cleanupThresholdDays : 30);
                 setEnableCleanup(settings.enableCleanup !== undefined ? settings.enableCleanup : true);
                 setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0);
+                const advance = settings.autoAdvanceClip !== undefined ? Boolean(settings.autoAdvanceClip) : false;
+                setAutoAdvanceClip(advance);
+                setGlobalAutoAdvance(advance);
             });
             setInternalOpen(true);
             setDialogOpacity(1);
@@ -52,14 +58,17 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
 
             return () => clearTimeout(fadeOutTimer);
         }
-    }, [open]);
+    }, [open, setGlobalAutoAdvance]);
 
 
     useEffect(() => {
         GetSettings().then((settings: any) => {
             setUiScale(settings.uiScale !== undefined ? settings.uiScale : 1.0);
+            if (settings.autoAdvanceClip !== undefined) {
+                setGlobalAutoAdvance(Boolean(settings.autoAdvanceClip));
+            }
         });
-    }, []);
+    }, [setGlobalAutoAdvance]);
 
     const handleSelectFolder = async () => {
         const path = await SelectDirectory();
@@ -74,7 +83,9 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
             cleanupThresholdDays: cleanupThreshold,
             enableCleanup,
             uiScale: currUiScale,
+            autoAdvanceClip,
         }).then(() => {
+            setGlobalAutoAdvance(autoAdvanceClip);
             onOpenChange(false);
         });
         toast.success("Your settings have been saved.")
@@ -151,6 +162,19 @@ export const SettingsDialog = ({ open, onOpenChange }: SettingsDialogProps) => {
                                 {currUiScale}
                                 <SquarePlusIcon className="w-5" onClick={zoomIn} />
                             </div>
+                        </div>
+
+                        <Separator className="h-px w-full bg-gray-700 my-2" />
+
+                        {/* AUTO-ADVANCE CLIPS */}
+                        <div className="flex flex-col gap-1.5">
+                            <Label className="flex items-center gap-2 cursor-pointer font-normal text-sm text-gray-200">
+                                <Switch checked={autoAdvanceClip} onCheckedChange={setAutoAdvanceClip} />
+                                Auto-advance to next clip
+                            </Label>
+                            <p className="text-zinc-400 text-xs">
+                                When playback reaches the end of a clip, automatically advance to the next clip.
+                            </p>
                         </div>
 
                         <Separator className="h-px w-full bg-gray-700 my-2" />

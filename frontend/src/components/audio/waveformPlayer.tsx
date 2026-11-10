@@ -9,6 +9,7 @@ import Minimap from "wavesurfer.js/dist/plugins/minimap.js";
 import { useClipParameter, useClipStore, useGlobalStore, usePlaybackStore, useTimecodeStore } from "@/stores/clipStore";
 
 import { ActiveClip, SilencePeriod } from "@/types";
+import { DisplayClip } from "@/lib/clipUtils";
 import { useSilenceData } from "@/hooks/useSilenceData";
 //import { frameToTimecode, secToFrames } from "@/lib/utils";
 
@@ -153,12 +154,14 @@ TimecodeDisplay.displayName = "TimecodeDisplay";
 
 interface WaveformPlayerProps {
   activeClip: ActiveClip | null;
+  displayClips?: DisplayClip[];
   projectFrameRate?: number | 30.0;
-  httpPort: number
+  httpPort: number;
 }
 
 const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   activeClip,
+  displayClips,
   projectFrameRate,
   httpPort,
 }) => {
@@ -224,6 +227,7 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
   //update the player time if timecode fits
   useEffect(() => {
     if (!wavesurferRef.current || !currTimecode) return;
+    if (isPlayingRef.current) return;
     if (
       currTimecode.frameCount >= activeClip.startFrame &&
       currTimecode.frameCount < maxTimecode.frameCount
@@ -268,6 +272,27 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       secToFrames(displayedTime, projectFrameRate) + activeClip.startFrame;
     currTimelineFrameRef.current = frame;
   }, [displayedTime, isLoading, projectFrameRate, activeClip.startFrame]);
+
+  // Sync DaVinci playhead when leaving focus during playback
+  useEffect(() => {
+    const handleWindowBlur = () => {
+      if (isPlayingRef.current && activeClip && projectFrameRate) {
+        const currentTime = wavesurferRef.current
+          ? wavesurferRef.current.getCurrentTime()
+          : currentTimeRef.current;
+        const frame =
+          secToFrames(currentTime, projectFrameRate) + activeClip.startFrame;
+        const tc = Timecode(frame, projectFrameRate as FRAMERATE, false);
+        const tcStr = tc.toString();
+        lastTimecodeRef.current = tcStr;
+        SetDavinciPlayhead(tcStr).catch((err) => {
+          console.error("Error setting DaVinci playhead on blur:", err);
+        });
+      }
+    };
+    window.addEventListener("blur", handleWindowBlur);
+    return () => window.removeEventListener("blur", handleWindowBlur);
+  }, [activeClip, projectFrameRate]);
 
   // 2) Cooldown-style throttle, but only when paused and user-initiated
   useEffect(() => {
@@ -665,6 +690,12 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
             ]
           });
         }
+
+        const pendingAutoPlay = useClipStore.getState().pendingAutoPlay;
+        if (pendingAutoPlay) {
+          useClipStore.getState().setPendingAutoPlay(false);
+          ws.play().catch((err: any) => console.error("Auto-play error:", err));
+        }
       });
       ws.on("play", () => {
         ws.options.autoScroll = true;
@@ -694,6 +725,27 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
           const pauseTime = wavesurferRef.current
             ? wavesurferRef.current.getCurrentTime()
             : currentTimeRef.current;
+          const autoAdvance = useGlobalStore.getState().autoAdvanceClip;
+          const wsDuration = wavesurferRef.current?.getDuration() || duration || 0;
+          const isAtEnd = wsDuration > 0 && pauseTime >= wsDuration - 0.05;
+
+          if (isAtEnd && !autoAdvance) {
+            // End reached with auto-advance disabled: reset to start of current clip, do not advance
+            currentTimeRef.current = 0;
+            setDisplayedTime(0);
+            currTimelineFrameRef.current = activeClip.startFrame;
+            const tc = Timecode(activeClip.startFrame, projectFrameRate as FRAMERATE, false);
+            setTimecode(tc);
+            lastTimecodeRef.current = tc.toString();
+            SetDavinciPlayhead(tc.toString()).catch((err) => {
+              console.error("Error setting DaVinci playhead on clip end:", err);
+            });
+            isPlayingRef.current = false;
+            setPlaybackState({ isPlaying: false, currentTime: 0 });
+            setIsPlaying(false);
+            return;
+          }
+
           currentTimeRef.current = pauseTime;
           setDisplayedTime(pauseTime);
 
@@ -718,12 +770,24 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
       ws.on("finish", () => {
         ws.options.autoScroll = false;
         isPlayingRef.current = false;
-        setPlaybackState({ isPlaying: false });
+        setPlaybackState({ isPlaying: false, currentTime: 0 });
         setIsPlaying(false);
         ws.setTime(0);
         currentTimeRef.current = 0;
         setDisplayedTime(0);
         lastRenderedFrameRef.current = -1;
+
+        const autoAdvance = useGlobalStore.getState().autoAdvanceClip;
+        if (autoAdvance && displayClips && displayClips.length > 0) {
+          const currentIdx = displayClips.findIndex(
+            (c) => c.id === activeClip.id || c.constituent_item_ids?.includes(activeClip.id)
+          );
+          if (currentIdx !== -1 && currentIdx < displayClips.length - 1) {
+            const nextClip = displayClips[currentIdx + 1];
+            useClipStore.getState().setCurrentClipId(nextClip.id);
+            useClipStore.getState().setPendingAutoPlay(true);
+          }
+        }
       }); // Reset to start on finish
 
       ws.on("interaction", (newTime: number) => {
@@ -851,12 +915,11 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
 
           if (Math.abs(finalZoom - currentZoom) < 0.001) return;
 
-          // Center zoom on mouse cursor pointer
-          const rect = scrollWrapper.getBoundingClientRect();
-          const pointerX = e.clientX - rect.left;
           const currentScroll = ws.getScroll();
+          const containerWidth = ws.getWidth();
+          const centerX = containerWidth / 2;
           const scale = finalZoom / currentZoom;
-          const targetScroll = (currentScroll + pointerX) * scale - pointerX;
+          const targetScroll = (currentScroll + centerX) * scale - centerX;
 
           ws.zoom(finalZoom);
           ws.setScroll(Math.max(0, targetScroll));
@@ -1188,11 +1251,20 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                       (period.rawEnd ?? period.end)) /
                     2;
 
-                  if (side === "start") {
-                    const newSourceStart =
-                      region.start + clipOriginalStartSecondsRef.current;
-                    const baseStart = period.baseStart ?? period.start;
-                    const deltaStart = newSourceStart - baseStart;
+                  const newSourceStart =
+                    region.start + clipOriginalStartSecondsRef.current;
+                  const baseStart = period.baseStart ?? period.start;
+                  const deltaStart = newSourceStart - baseStart;
+
+                  const newSourceEnd =
+                    region.end + clipOriginalStartSecondsRef.current;
+                  const baseEnd = period.baseEnd ?? period.end;
+                  const deltaEnd = newSourceEnd - baseEnd;
+
+                  const startChanged = Math.abs(deltaStart) > 0.005;
+                  const endChanged = Math.abs(deltaEnd) > 0.005;
+
+                  if (side === "start" || (!side && startChanged)) {
                     const centerTime = period.startCenterTime ?? fallbackCenter;
                     useClipStore
                       .getState()
@@ -1201,11 +1273,8 @@ const WaveformPlayer: React.FC<WaveformPlayerProps> = ({
                         centerTime,
                         deltaStart,
                       });
-                  } else if (side === "end") {
-                    const newSourceEnd =
-                      region.end + clipOriginalStartSecondsRef.current;
-                    const baseEnd = period.baseEnd ?? period.end;
-                    const deltaEnd = newSourceEnd - baseEnd;
+                  }
+                  if (side === "end" || (!side && endChanged)) {
                     const centerTime = period.endCenterTime ?? fallbackCenter;
                     useClipStore
                       .getState()

@@ -27,10 +27,12 @@ interface GlobalStore {
   isThresholdDragging: boolean;
   keepSilence: boolean;
   skipSilences: boolean;
+  autoAdvanceClip: boolean;
   setMakeNewTimeline: (value: boolean) => void;
   setIsThresholdDragging: (value: boolean) => void;
   setKeepSilence: (value: boolean) => void;
   setSkipSilences: (value: boolean) => void;
+  setAutoAdvanceClip: (value: boolean) => void;
 }
 
 export const useGlobalStore = create<GlobalStore>((set) => ({
@@ -38,10 +40,12 @@ export const useGlobalStore = create<GlobalStore>((set) => ({
   isThresholdDragging: false,
   keepSilence: false,
   skipSilences: true,
+  autoAdvanceClip: false,
   setMakeNewTimeline: (value) => set({ makeNewTimeline: value }),
   setIsThresholdDragging: (value) => set({ isThresholdDragging: value }),
   setKeepSilence: (value) => set({ keepSilence: value}),
   setSkipSilences: (value) => set({ skipSilences: value }),
+  setAutoAdvanceClip: (value) => set({ autoAdvanceClip: value }),
 }));
 
 interface TimecodeStore {
@@ -99,6 +103,7 @@ export interface ClipStore {
   liveDefaultParameters: ClipParameters;
   // This is the setting to enable/disable the feature.
   syncDefaultsToLastEdit: boolean;
+  pendingAutoPlay: boolean;
 
   setCurrentClipId: (clipId: string | null) => void;
   setClipToGroupMapping: (
@@ -113,6 +118,7 @@ export interface ClipStore {
   setParameter: <K extends keyof ClipParameters>(clipId: string, key: K, value: ClipParameters[K]) => void;
   setAllParameters: (clipId: string, newParams: Partial<ClipParameters>) => void;
   setSyncDefaults: (enabled: boolean) => void;
+  setPendingAutoPlay: (enabled: boolean) => void;
 
   getRegionModifications: (clipId: string) => RegionModification[];
   upsertRegionModification: (
@@ -168,6 +174,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
   liveDefaultParameters: { ...defaultParameters }, // Start with the hardcoded defaults
 
   syncDefaultsToLastEdit: true, // The feature is ON by default
+  pendingAutoPlay: false,
 
   setCurrentClipId: (clipId) =>
     set((state) => {
@@ -373,6 +380,7 @@ export const useClipStore = create<ClipStore>((set, get) => ({
     });
   },
   setSyncDefaults: (enabled) => set({ syncDefaultsToLastEdit: enabled }),
+  setPendingAutoPlay: (enabled) => set({ pendingAutoPlay: enabled }),
 
   getRegionModifications: (clipId) => {
     const state = get();

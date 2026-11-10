@@ -155,8 +155,8 @@ const rawSilences = [
   assert.strictEqual(mergedLeftStartMod[0].isModified, true);
   assert.deepStrictEqual(mergedLeftStartMod[0].modificationIds, ["m_left_start"]);
 
-  // Case 4b: Left region has startModified=false, endModified=true; merges with unmodified right region
-  // -> Does NOT inherit end modification because right edge comes from right region; stays red (isModified = false)
+  // Case 4b: Left region has startModified=false, endModified=true; merges with right region
+  // -> Since it is a user modification, the whole merged silence region becomes modified (isModified = true)
   const mergedLeftEndModOnly = postProcessSilencesWithModifications(
     twoRegions,
     { minSilenceDurationSeconds: 0.1, paddingLeftSeconds: 0, paddingRightSeconds: 0, minContent: 0.5 },
@@ -167,10 +167,8 @@ const rawSilences = [
   assert.strictEqual(mergedLeftEndModOnly.length, 1);
   assert(Math.abs(mergedLeftEndModOnly[0].start - 1.0) < 1e-6);
   assert(Math.abs(mergedLeftEndModOnly[0].end - 3.2) < 1e-6);
-  assert.strictEqual(mergedLeftEndModOnly[0].startModified, false);
-  assert.strictEqual(mergedLeftEndModOnly[0].endModified, false);
-  assert.strictEqual(mergedLeftEndModOnly[0].isModified, false);
-  assert.deepStrictEqual(mergedLeftEndModOnly[0].modificationIds, []);
+  assert.strictEqual(mergedLeftEndModOnly[0].isModified, true);
+  assert.deepStrictEqual(mergedLeftEndModOnly[0].modificationIds, ["m_left_end"]);
 
   // Case 4c: Unmodified left region merges with right region that has startModified=false, endModified=true
   // -> Inherits end modification, merged region is violet (isModified = true)
@@ -184,13 +182,49 @@ const rawSilences = [
   assert.strictEqual(mergedRightEndMod.length, 1);
   assert(Math.abs(mergedRightEndMod[0].start - 1.0) < 1e-6);
   assert(Math.abs(mergedRightEndMod[0].end - 3.6) < 1e-6);
+  assert.strictEqual(mergedRightEndMod[0].endModified, true);
+  assert.strictEqual(mergedRightEndMod[0].isModified, true);
+  assert.deepStrictEqual(mergedRightEndMod[0].modificationIds, ["m_right_end"]);
+
+  // Case 4d: Multi-region merge: dragging region 1's end handle past region 2 into region 3 merges all 3 at once
+  const threeRegions: SilencePeriod[] = [
+    { start: 1.0, end: 2.0 },
+    { start: 3.0, end: 4.0 },
+    { start: 5.0, end: 6.0 },
+  ];
+  // Drag region 1 end handle from 2.0 all the way to 5.2 (past region 2 and into region 3)
+  const mergedMulti = postProcessSilencesWithModifications(
+    threeRegions,
+    { minSilenceDurationSeconds: 0.1, paddingLeftSeconds: 0, paddingRightSeconds: 0, minContent: 0.2 },
+    0,
+    10,
+    [{ id: "m_drag_past_all", centerTime: 1.5, deltaStart: 0, deltaEnd: 3.2 }] // 2.0 + 3.2 = 5.2
+  );
+  assert.strictEqual(mergedMulti.length, 1);
+  assert(Math.abs(mergedMulti[0].start - 1.0) < 1e-6);
+  assert(Math.abs(mergedMulti[0].end - 6.0) < 1e-6);
+  assert.strictEqual(mergedMulti[0].isModified, true);
+  assert.deepStrictEqual(mergedMulti[0].modificationIds, ["m_drag_past_all"]);
+
+  // Case 4e: Unmodified regions merging solely due to minContent slider stays unmodified (isModified = false)
+  const mergedUnmodified = postProcessSilencesWithModifications(
+    twoRegions,
+    { minSilenceDurationSeconds: 0.1, paddingLeftSeconds: 0, paddingRightSeconds: 0, minContent: 0.5 },
+    0,
+    10,
+    []
+  );
+  assert.strictEqual(mergedUnmodified.length, 1);
+  assert.strictEqual(mergedUnmodified[0].isModified, false);
+  assert.deepStrictEqual(mergedUnmodified[0].modificationIds, []);
+  assert(Math.abs(mergedRightEndMod[0].end - 3.6) < 1e-6);
   assert.strictEqual(mergedRightEndMod[0].startModified, false);
   assert.strictEqual(mergedRightEndMod[0].endModified, true);
   assert.strictEqual(mergedRightEndMod[0].isModified, true);
   assert.deepStrictEqual(mergedRightEndMod[0].modificationIds, ["m_right_end"]);
 
-  // Case 4d: Unmodified left region merges with right region that has startModified=true, endModified=false
-  // -> Does NOT inherit start modification because left edge comes from left region; stays red (isModified = false)
+  // Case 4d2: Unmodified left region merges with right region that has startModified=true, endModified=false
+  // -> Since right region was modified by user, merged region becomes violet (isModified = true)
   const mergedRightStartModOnly = postProcessSilencesWithModifications(
     twoRegions,
     { minSilenceDurationSeconds: 0.1, paddingLeftSeconds: 0, paddingRightSeconds: 0, minContent: 0.5 },
@@ -201,10 +235,8 @@ const rawSilences = [
   assert.strictEqual(mergedRightStartModOnly.length, 1);
   assert(Math.abs(mergedRightStartModOnly[0].start - 1.0) < 1e-6);
   assert(Math.abs(mergedRightStartModOnly[0].end - 3.2) < 1e-6);
-  assert.strictEqual(mergedRightStartModOnly[0].startModified, false);
-  assert.strictEqual(mergedRightStartModOnly[0].endModified, false);
-  assert.strictEqual(mergedRightStartModOnly[0].isModified, false);
-  assert.deepStrictEqual(mergedRightStartModOnly[0].modificationIds, []);
+  assert.strictEqual(mergedRightStartModOnly[0].isModified, true);
+  assert.deepStrictEqual(mergedRightStartModOnly[0].modificationIds, ["m_right_start"]);
 
   console.log("✓ Silence Merge (minContent) directional modification inheritance works as specified");
 }
