@@ -1,8 +1,8 @@
 bin/
 .task/
 build/bin/
-build/darwin/Assets.car
-build/darwin/*.icns
+!build/darwin/Assets.car
+!build/darwin/icons.icns
 build/darwin/*.png
 build/darwin/*.plist
 build/windows/installer/tmp
