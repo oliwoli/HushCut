@@ -2,10 +2,8 @@ name: Build and optionally make Release
 
 on:
   push:
-    # branches:
-    #   - '**'
     tags:
-      - 'v*.*.*'
+      - 'v*'
 
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
@@ -39,19 +37,20 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.0'
+          go-version: '1.26.x'
+          cache: true
 
       - name: Authenticate Private Go Modules
         run: git config --global url."https://user:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -73,11 +72,12 @@ jobs:
           BACKEND_BINARY="dist/python_backend"
 
           if [[ "${{ matrix.label }}" == "macos" ]]; then
-            echo "Building Python backend with code signing for macOS..."
+            echo "Building Python backend with code signing and hardened runtime entitlements..."
             pyinstaller python-backend/src/HushCut.py \
               --name python_backend \
               --onefile \
               --codesign-identity "${{ secrets.APPLE_SIGN_IDENTITY }}" \
+              --osx-entitlements-file "./code-signing/entitlements.plist" \
               -y
           else
             echo "Building Python backend without code signing..."
@@ -92,7 +92,6 @@ jobs:
           mkdir -p build/bin
           cp "$BACKEND_BINARY${{ matrix.ext }}" build/bin/python_backend${{ matrix.ext }}
           chmod +x build/bin/python_backend${{ matrix.ext }}
-
 
       - name: Copy Lua script
         run: cp python-backend/src/HushCut.lua build/bin/
@@ -158,56 +157,78 @@ jobs:
 
           # Copy python backend into Resources
           cp build/bin/python_backend "$RESOURCE_DIR/"
-          # if [ -d build/bin/python_backend/_internal ]; then
-          #   cp -R build/bin/python_backend/_internal "$RESOURCE_DIR/"
-          # fi
-
           cp build/bin/HushCut.lua "$RESOURCE_DIR/"
           
           # Remove unnecessary package/zip from wails
           rm -f build/bin/HushCut.app.zip
           rm -f build/bin/HushCut.pkg
 
-      - name: Install latest gon for notarization
+      - name: Install create-dmg for macOS
         if: matrix.label == 'macos'
-        run: |
-          brew uninstall gon || true
-          brew install Bearer/tap/gon
+        run: npm install --global create-dmg
 
-      - name: install create-dmg for macOS
-        if: matrix.label == 'macos'
-        run: |
-          npm install --global create-dmg
-
-      - name: Sign macOS binary and create dmg
+      - name: Sign macOS binary, create DMG and notarize
         if: matrix.label == 'macos'
         env:
-          AC_USERNAME: ${{ secrets.APPLE_ID_USERNAME }}
-          AC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
-          AC_PROVIDER: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID_USERNAME }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
         run: |
-          echo "Signing Package"
-          gon -log-level=info ./code-signing/gon-sign.json
+          echo "Signing macOS bundle with Hardened Runtime..."
+          ENTITLEMENTS="./code-signing/entitlements.plist"
+
+          # 1. Sign nested helper binary (python_backend) inside Resources
+          echo "Signing python_backend..."
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut.app/Contents/Resources/python_backend"
+
+          # 2. Sign main binary
+          echo "Signing HushCut main executable..."
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut.app/Contents/MacOS/HushCut"
+
+          # 3. Sign app bundle
+          echo "Signing HushCut.app bundle..."
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut.app"
+
+          # 4. Verify app signature
+          echo "Verifying HushCut.app signature..."
+          codesign --verify --deep --strict --verbose=2 "build/bin/HushCut.app"
+
+          # 5. Create DMG
+          echo "Creating DMG..."
           cd build/bin
-          # should code sign the dmg again automatically
-          create-dmg HushCut.app 
+          create-dmg HushCut.app --overwrite || true
           mv HushCut*.dmg HushCut-macOS.dmg
+          cd ../..
+
+          # 6. Sign DMG
+          echo "Signing DMG..."
+          codesign --force --timestamp --sign "$APPLE_SIGN_IDENTITY" "build/bin/HushCut-macOS.dmg"
+
+          # 7. Notarize with Apple notarytool
+          echo "Submitting DMG for notarization..."
+          xcrun notarytool submit "build/bin/HushCut-macOS.dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # 8. Staple notarization ticket
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "build/bin/HushCut-macOS.dmg"
+
+          # 9. Verify stapled DMG
+          spctl --assess --type open --context context:primary-signature --verbose "build/bin/HushCut-macOS.dmg"
 
       - name: Package Release Asset
-        # This step will only run when you push a tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          # For macOS, the DMG is already created. We just need to define its path for the upload.
           if [[ "${{ matrix.label }}" == "macos" ]]; then
             ARTIFACT_PATH="build/bin/HushCut-macOS.dmg"
-          
           elif [[ "${{ matrix.label }}" == "windows" ]]; then
-            # Windows: use installer directly
             ARTIFACT_PATH="build/bin/HushCut-amd64-installer.exe"
-
           else
-            # Linux: make a zip
             cd build/bin
             ARTIFACT_FILENAME="HushCut-${{ matrix.label }}.zip"
             zip -r "../../${ARTIFACT_FILENAME}" .
@@ -223,30 +244,54 @@ jobs:
           path: ${{ env.ARTIFACT_PATH }}
 
   #===================================================================
-  # JOB 2: Publish all binaries to the public repository
-  # This job runs only on tag pushes and after all builds succeed.
+  # JOB 2: Publish releases
+  # - Always publishes to this repo (oliwoli/HushCut)
+  # - Publishes to oliwoli/hushcut-releases ONLY if not a pre-release
   #===================================================================
   publish:
-    name: Publish to Public Repo
-    needs: build # Ensures this job runs only after the 'build' job completes
-    if: startsWith(github.ref, 'refs/tags/') # Condition to run only for tags
+    name: Publish Releases
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Permission to push to the repository
+      contents: write
 
     steps:
-      - name: Checkout current repo (for package.json)
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts # Download all artifacts into an 'artifacts' directory
+          path: artifacts
 
       - name: Display downloaded file structure
         run: ls -R artifacts
 
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp artifacts/HushCut-linux/HushCut-linux.zip release-assets/HushCut-${{ github.ref_name }}-linux.zip
+          cp artifacts/HushCut-windows/HushCut-amd64-installer.exe release-assets/HushCut-${{ github.ref_name }}-windows.exe
+          cp artifacts/HushCut-macos/HushCut-macOS.dmg release-assets/HushCut-${{ github.ref_name }}-macos.dmg
+
+      # Publish to THIS repo (oliwoli/HushCut)
+      - name: Publish Release to HushCut
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            release-assets/HushCut-${{ github.ref_name }}-linux.zip
+            release-assets/HushCut-${{ github.ref_name }}-windows.exe
+            release-assets/HushCut-${{ github.ref_name }}-macos.dmg
+
+      # Publish to hushcut-releases ONLY if NOT a pre-release
       - name: Checkout public releases repo
+        if: "!contains(github.ref_name, '-')"
         uses: actions/checkout@v4
         with:
           repository: oliwoli/hushcut-releases
@@ -254,30 +299,25 @@ jobs:
           path: public-repo
 
       - name: Organize artifacts and push to public repo
+        if: "!contains(github.ref_name, '-')"
         run: |
-          # Create destination directories
           mkdir -p public-repo/build/macos
           mkdir -p public-repo/build/windows
           mkdir -p public-repo/build/linux
 
-          # Copy package.json from the main repo
           echo "Copying package.json"
           cp package.json public-repo/package.json
 
-          # Copy artifacts into the public repo checkout
-          # Note: download-artifact creates subdirectories named after the artifact
           echo "Copying artifacts"
           cp artifacts/HushCut-linux/HushCut-linux.zip public-repo/build/linux/
           cp artifacts/HushCut-windows/HushCut-amd64-installer.exe public-repo/build/windows/
           cp artifacts/HushCut-macos/HushCut-macOS.dmg public-repo/build/macos/
 
-          # Commit and push changes to the public repo
           cd public-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add build/ package.json
           
-          # Commit only if there are changes
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else

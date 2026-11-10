@@ -1,0 +1,29 @@
+name: Go Unit Tests
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  test:
+    name: Run Go Unit Tests
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+
+      - name: Ensure frontend dist directory exists for embed
+        run: mkdir -p frontend/dist && touch frontend/dist/placeholder
+
+      - name: Run Go Unit Tests
+        run: go test ./... -v
