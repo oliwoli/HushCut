@@ -1,6 +1,6 @@
 // components/SilenceControls.tsx
 
-import { defaultParameters, isConstituentClipOverridden, useClipParameter, useClipStore, useHasGroupOverrides } from '@/stores/clipStore';
+import { defaultParameters, isConstituentClipOverridden, useClipParameter, useClipStore, useHasGroupOverrides, useHasRegionModifications } from '@/stores/clipStore';
 import { Info, InfoIcon, Link, PowerIcon, PowerOffIcon, Unlink } from 'lucide-react';
 import React, { useCallback, useMemo, useState } from 'react';
 
@@ -258,6 +258,10 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
 
     const isLocalView = isGroup && activeDisplayClip != null && currentClipId !== activeDisplayClip.id;
     const hasGroupOverrides = useHasGroupOverrides(activeDisplayClip?.constituent_item_ids);
+    const hasRegionMods = useHasRegionModifications(
+        currentClipId,
+        isGroup && !isLocalView ? activeDisplayClip?.constituent_item_ids : undefined
+    );
     const [resetDialogOpen, setResetDialogOpen] = useState(false);
 
     // Per-clip bypass in Local View
@@ -265,12 +269,12 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
 
     const handleGlobalReset = useCallback(() => {
         if (!currentClipId) return;
-        if (isGroup && !isLocalView && hasGroupOverrides) {
+        if ((isGroup && !isLocalView && hasGroupOverrides) || hasRegionMods) {
             setResetDialogOpen(true);
             return;
         }
         useClipStore.getState().resetAllParametersToDefault(currentClipId);
-    }, [currentClipId, isGroup, isLocalView, hasGroupOverrides]);
+    }, [currentClipId, isGroup, isLocalView, hasGroupOverrides, hasRegionMods]);
 
     const handleConfirmGlobalReset = useCallback(() => {
         if (!currentClipId) return;
@@ -434,7 +438,11 @@ export const SilenceControls: React.FC<SilenceControlsProps> = ({ displayClips, 
                             Reset All Parameters?
                         </AlertDialogTitle>
                         <AlertDialogDescription className="mt-0">
-                            Individual clips in this group have custom settings applied. Resetting in Combined Overview will reset all parameters to their default values and overwrite per-clip adjustments.
+                            {isGroup && !isLocalView && hasGroupOverrides && hasRegionMods
+                                ? "Individual clips in this group have custom settings and manual silence region adjustments. Resetting in Combined Overview will reset all parameters to their default values and clear all per-clip and manual region adjustments."
+                                : isGroup && !isLocalView && hasGroupOverrides
+                                ? "Individual clips in this group have custom settings applied. Resetting in Combined Overview will reset all parameters to their default values and overwrite per-clip adjustments."
+                                : "This clip has manual silence region adjustments. Resetting will restore all parameters to their default values and clear all manual region adjustments."}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter className="mt-1">

@@ -9,14 +9,18 @@ import {
   GetOrDetectSilencesWithCache,
 } from "@wails/go/main/App";
 import { main } from "@wails/go/models";
-import type { DetectionParams, SilencePeriod } from "../types";
+import type { DetectionParams, RegionModification, SilencePeriod } from "../types";
 
 import { ClipStore, useClipStore, useGlobalStore } from '@/stores/clipStore';
 import { useAppState } from "@/stores/appSync";
 import { cn } from "./utils";
 
 
-import { deriveAllClipDetectionParams } from "./clipUtils";
+import {
+  deriveAllClipDetectionParams,
+  intersectMultipleSilenceLists,
+  postProcessSilencesWithModifications,
+} from "./clipUtils";
 export { deriveAllClipDetectionParams };
 
 // Helper function
@@ -24,7 +28,8 @@ export async function prepareProjectDataWithEdits(
   projectDataInput: main.ProjectDataPayload,
   allClipParams: Record<string, DetectionParams>,
   keepSilenceSegments: boolean,
-  defaultParams: DetectionParams
+  defaultParams: DetectionParams,
+  regionModificationsInput?: Record<string, RegionModification[]>
 ): Promise<main.ProjectDataPayload> {
   let workingProjectData: main.ProjectDataPayload = JSON.parse(
     JSON.stringify(projectDataInput)
@@ -41,12 +46,16 @@ export async function prepareProjectDataWithEdits(
     return workingProjectData;
   }
   const timelineFps = workingProjectData.timeline.fps;
+  const clipStoreState = useClipStore.getState();
+  const regionModifications =
+    regionModificationsInput ?? clipStoreState.regionModifications ?? {};
 
   console.log(
     "prepareProjectDataWithEdits: Starting fetching of silence detections per clip segment..."
   );
 
   const allClipSilencesMapForGo: Record<string, SilencePeriod[]> = {};
+  const rawSilencesByClipId: Record<string, Array<{ start: number; end: number }>> = {};
 
   const itemProcessingPromises =
     workingProjectData.timeline.audio_track_items.map(async (item) => {
@@ -92,18 +101,25 @@ export async function prepareProjectDataWithEdits(
       }
 
       try {
-        // GetOrDetectSilencesWithCache returns SilencePeriod[] matching Go's struct (for JSON marshalling)
+        const rawSilences = await GetOrDetectSilencesWithCache(
+          filePathForGo,
+          itemSpecificParams.loudnessThreshold,
+          0.009,
+          0,
+          0,
+          0,
+          clipStartSeconds,
+          clipEndSeconds,
+          timelineFps
+        );
+        rawSilencesByClipId[clipId] = rawSilences;
         const silencePeriodsForGo: SilencePeriod[] =
-          await GetOrDetectSilencesWithCache(
-            filePathForGo,
-            itemSpecificParams.loudnessThreshold,
-            itemSpecificParams.minSilenceDurationSeconds,
-            itemSpecificParams.paddingLeftSeconds,
-            itemSpecificParams.paddingRightSeconds,
-            itemSpecificParams.minContent,
+          postProcessSilencesWithModifications(
+            rawSilences,
+            itemSpecificParams,
             clipStartSeconds,
             clipEndSeconds,
-            timelineFps
+            regionModifications[clipId]
           );
         allClipSilencesMapForGo[clipId] = silencePeriodsForGo;
       } catch (err) {
@@ -116,6 +132,114 @@ export async function prepareProjectDataWithEdits(
     });
 
   await Promise.all(itemProcessingPromises);
+
+  // Apply group-level regionModifications (from Combined Overview) for linked groups if present
+  const groupItemsMap = new Map<number, main.TimelineItem[]>();
+  for (const item of workingProjectData.timeline.audio_track_items) {
+    if (item.link_group_id != null) {
+      const list = groupItemsMap.get(item.link_group_id) ?? [];
+      list.push(item);
+      groupItemsMap.set(item.link_group_id, list);
+    }
+  }
+
+  for (const [gid, groupItems] of groupItemsMap.entries()) {
+    if (groupItems.length < 2) continue;
+    const groupId = `linkgroup_${gid}`;
+    const groupMods = regionModifications[groupId];
+    if (!groupMods || groupMods.length === 0) continue;
+
+    const activeGroupItems = groupItems.filter(
+      (it) => it.id && allClipParams.hasOwnProperty(it.id)
+    );
+    if (activeGroupItems.length === 0) continue;
+
+    let minStartFrame = groupItems[0].start_frame;
+    let maxEndFrame = groupItems[0].end_frame;
+    for (const it of groupItems) {
+      if (it.start_frame < minStartFrame) minStartFrame = it.start_frame;
+      if (it.end_frame > maxEndFrame) maxEndFrame = it.end_frame;
+    }
+    const groupDurationSeconds = (maxEndFrame - minStartFrame) / timelineFps;
+    if (groupDurationSeconds <= 0) continue;
+
+    const gp: DetectionParams = {
+      loudnessThreshold: clipStoreState.getParameter(groupId, "threshold"),
+      minSilenceDurationSeconds: clipStoreState.getParameter(groupId, "minDuration"),
+      paddingLeftSeconds: clipStoreState.getParameter(groupId, "paddingLeft"),
+      paddingRightSeconds: clipStoreState.getParameter(groupId, "paddingRight"),
+      minContent: clipStoreState.getParameter(groupId, "minContent"),
+    };
+
+    const constituentLists: SilencePeriod[][] = [];
+    for (const it of activeGroupItems) {
+      const raw = rawSilencesByClipId[it.id] ?? [];
+      const cp = allClipParams[it.id] || defaultParams;
+      const clipStartSeconds = it.source_start_frame / timelineFps;
+      const clipEndSeconds = it.source_end_frame / timelineFps;
+      const offsetSeconds = (it.start_frame - minStartFrame) / timelineFps;
+      const shift = -clipStartSeconds + offsetSeconds;
+
+      const effectiveParams = {
+        minSilenceDurationSeconds: Math.max(
+          0.009,
+          cp.minSilenceDurationSeconds - gp.minSilenceDurationSeconds
+        ),
+        paddingLeftSeconds: Math.max(
+          0,
+          cp.paddingLeftSeconds - gp.paddingLeftSeconds
+        ),
+        paddingRightSeconds: Math.max(
+          0,
+          cp.paddingRightSeconds - gp.paddingRightSeconds
+        ),
+        minContent: Math.max(0, cp.minContent - gp.minContent),
+      };
+
+      const processed = postProcessSilencesWithModifications(
+        raw,
+        effectiveParams,
+        clipStartSeconds,
+        clipEndSeconds,
+        regionModifications[it.id]
+      );
+
+      const mapped: SilencePeriod[] = [];
+      for (const s of processed) {
+        const clampedStart = Math.max(0, s.start + shift);
+        const clampedEnd = Math.min(groupDurationSeconds, s.end + shift);
+        if (clampedEnd > clampedStart + 1e-4) {
+          mapped.push({ start: clampedStart, end: clampedEnd });
+        }
+      }
+      constituentLists.push(mapped);
+    }
+
+    const intersectedRaw = intersectMultipleSilenceLists(constituentLists);
+    const groupSilences = postProcessSilencesWithModifications(
+      intersectedRaw,
+      gp,
+      0,
+      groupDurationSeconds,
+      groupMods
+    );
+
+    // Map group silences back into each active constituent item's source time domain
+    for (const it of activeGroupItems) {
+      const clipStartSeconds = it.source_start_frame / timelineFps;
+      const clipEndSeconds = it.source_end_frame / timelineFps;
+      const offsetSeconds = (it.start_frame - minStartFrame) / timelineFps;
+      const itemSilences: SilencePeriod[] = [];
+      for (const gs of groupSilences) {
+        const srcStart = Math.max(clipStartSeconds, gs.start - offsetSeconds + clipStartSeconds);
+        const srcEnd = Math.min(clipEndSeconds, gs.end - offsetSeconds + clipStartSeconds);
+        if (srcEnd > srcStart + 1e-4) {
+          itemSilences.push({ start: srcStart, end: srcEnd });
+        }
+      }
+      allClipSilencesMapForGo[it.id] = itemSilences;
+    }
+  }
 
   console.log(
     "prepareProjectDataWithEdits: All per-clip segment silence detections processed."
@@ -139,6 +263,7 @@ type ProcessedDataCache = {
   key: {
     projectData: main.ProjectDataPayload;
     clipParams: Record<string, DetectionParams>;
+    regionModifications: Record<string, RegionModification[]>;
     keepSilence: boolean;
   };
 };
@@ -190,6 +315,7 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
     const currentKey = {
       projectData: initialProjectData,
       clipParams: currentClipParams,
+      regionModifications: clipStoreState.regionModifications,
       keepSilence: keepSilence,
     };
 
@@ -213,7 +339,8 @@ const RemoveSilencesButton: React.FC<PythonRunnerProps> = (props) => {
         initialProjectData,
         currentClipParams,
         keepSilence,
-        defaultDetectionParams
+        defaultDetectionParams,
+        clipStoreState.regionModifications
       );
 
       // 5. Update the cache with the new data and the key that produced it

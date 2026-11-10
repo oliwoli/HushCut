@@ -21,6 +21,55 @@ func (a *App) DetectSilences(
 	clipEndSeconds float64,
 	framerate float64,
 ) ([]SilencePeriod, error) {
+	if minSilenceDurationSeconds < 0.009 {
+		minSilenceDurationSeconds = 0.009
+	}
+
+	rawSilences, err := a.getOrDetectRawSilences(
+		filePath,
+		loudnessThreshold,
+		minSilenceDurationSeconds,
+		clipStartSeconds,
+		clipEndSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return PostProcessRawSilences(
+		rawSilences,
+		minSilenceDurationSeconds,
+		paddingLeftSeconds,
+		paddingRightSeconds,
+		minContentDuration,
+		clipStartSeconds,
+		clipEndSeconds,
+	), nil
+}
+
+func (a *App) getOrDetectRawSilences(
+	filePath string,
+	loudnessThreshold float64,
+	minSilenceDurationSeconds float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
+) ([]SilencePeriod, error) {
+	rawKey := CacheKey{
+		FilePath:                  filePath,
+		LoudnessThreshold:         loudnessThreshold,
+		MinSilenceDurationSeconds: minSilenceDurationSeconds,
+		ClipStartSeconds:          clipStartSeconds,
+		ClipEndSeconds:            clipEndSeconds,
+	}
+
+	a.cacheMutex.RLock()
+	cachedRaw, found := a.silenceCache[rawKey]
+	a.cacheMutex.RUnlock()
+
+	if found {
+		return cachedRaw, nil
+	}
+
 	if err := a.waitForFfmpeg(); err != nil {
 		return nil, err
 	}
@@ -43,10 +92,6 @@ func (a *App) DetectSilences(
 	// Mark the input file as used after its absolute path is determined
 	a.updateFileUsage(absPath)
 	loudnessThresholdStr := fmt.Sprintf("%fdB", loudnessThreshold)
-	if minSilenceDurationSeconds < 0.009 {
-		minSilenceDurationSeconds = 0.009
-	}
-
 	minSilenceDurationForFFmpeg := fmt.Sprintf("%f", minSilenceDurationSeconds)
 
 	filterGraph := fmt.Sprintf("atrim=start=%.6f:end=%.6f,silencedetect=n=%s:d=%s",
@@ -65,13 +110,36 @@ func (a *App) DetectSilences(
 		return nil, fmt.Errorf("ffmpeg failed: %w. Output: %s", err, outputBuffer.String())
 	}
 
-	var preliminarySilences []SilencePeriod
+	rawSilences, err := ParseRawSilencesFromFFmpegOutput(
+		outputBuffer.String(),
+		minSilenceDurationSeconds,
+		clipStartSeconds,
+		clipEndSeconds,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	a.cacheMutex.Lock()
+	a.silenceCache[rawKey] = rawSilences
+	a.cacheMutex.Unlock()
+
+	return rawSilences, nil
+}
+
+// ParseRawSilencesFromFFmpegOutput extracts raw (unpadded) silence periods from ffmpeg silencedetect stderr output.
+func ParseRawSilencesFromFFmpegOutput(
+	output string,
+	minSilenceDurationSeconds float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
+) ([]SilencePeriod, error) {
+	var rawSilences []SilencePeriod
 	silenceStartRegex := regexp.MustCompile(`silence_start:\s*([0-9]+\.?[0-9]*)`)
 	silenceEndRegex := regexp.MustCompile(`silence_end:\s*([0-9]+\.?[0-9]*)`)
-	scanner := bufio.NewScanner(&outputBuffer)
+	scanner := bufio.NewScanner(bytes.NewBufferString(output))
 
 	var currentStartTime float64 = -1
-	const epsilon = 0.001
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -83,25 +151,10 @@ func (a *App) DetectSilences(
 		if match := silenceEndRegex.FindStringSubmatch(line); len(match) > 1 && currentStartTime != -1 {
 			endTime, _ := strconv.ParseFloat(match[1], 64)
 
-			adjustedStart := currentStartTime
-			adjustedEnd := endTime
-
-			if adjustedStart > clipStartSeconds+epsilon {
-				adjustedStart += paddingLeftSeconds
-			}
-			if adjustedEnd < clipEndSeconds-epsilon {
-				adjustedEnd -= paddingRightSeconds
-			}
-
-			adjustedStart = math.Max(adjustedStart, clipStartSeconds)
-			adjustedEnd = math.Min(adjustedEnd, clipEndSeconds)
-
-			if adjustedEnd-adjustedStart >= minSilenceDurationSeconds {
-				preliminarySilences = append(preliminarySilences, SilencePeriod{
-					Start: adjustedStart,
-					End:   adjustedEnd,
-				})
-			}
+			rawSilences = append(rawSilences, SilencePeriod{
+				Start: currentStartTime,
+				End:   endTime,
+			})
 			currentStartTime = -1
 		}
 	}
@@ -110,8 +163,50 @@ func (a *App) DetectSilences(
 		return nil, fmt.Errorf("error reading ffmpeg output: %w", err)
 	}
 
-	if len(preliminarySilences) == 0 {
+	if len(rawSilences) == 0 {
 		return []SilencePeriod{}, nil
+	}
+
+	return rawSilences, nil
+}
+
+// PostProcessRawSilences applies padding, minimum silence duration filtering, and minimum content merging to raw silence periods.
+func PostProcessRawSilences(
+	rawSilences []SilencePeriod,
+	minSilenceDurationSeconds float64,
+	paddingLeftSeconds float64,
+	paddingRightSeconds float64,
+	minContentDuration float64,
+	clipStartSeconds float64,
+	clipEndSeconds float64,
+) []SilencePeriod {
+	const epsilon = 0.001
+	var preliminarySilences []SilencePeriod
+
+	for _, raw := range rawSilences {
+		adjustedStart := raw.Start
+		adjustedEnd := raw.End
+
+		if adjustedStart > clipStartSeconds+epsilon {
+			adjustedStart += paddingLeftSeconds
+		}
+		if adjustedEnd < clipEndSeconds-epsilon {
+			adjustedEnd -= paddingRightSeconds
+		}
+
+		adjustedStart = math.Max(adjustedStart, clipStartSeconds)
+		adjustedEnd = math.Min(adjustedEnd, clipEndSeconds)
+
+		if adjustedEnd-adjustedStart >= minSilenceDurationSeconds {
+			preliminarySilences = append(preliminarySilences, SilencePeriod{
+				Start: adjustedStart,
+				End:   adjustedEnd,
+			})
+		}
+	}
+
+	if len(preliminarySilences) == 0 {
+		return []SilencePeriod{}
 	}
 
 	if first := preliminarySilences[0]; first.Start-clipStartSeconds > epsilon && first.Start-clipStartSeconds < minContentDuration {
@@ -136,7 +231,7 @@ func (a *App) DetectSilences(
 		mergedSilences = append(mergedSilences, current)
 	}
 
-	return mergedSilences, nil
+	return mergedSilences
 }
 
 func (a *App) GetOrDetectSilencesWithCache(

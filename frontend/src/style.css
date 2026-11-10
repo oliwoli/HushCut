@@ -174,7 +174,7 @@ body {
 
 /* silence region */
 ::part(region) {
-  pointer-events: unset !important;
+  pointer-events: all !important;
   box-sizing: border-box;
   box-shadow: inset 0px 6px 15px 5px rgba(0, 0, 0, 0.15);
   border: 1px solid rgb(155, 0, 0);
@@ -183,12 +183,47 @@ body {
   z-index: 20;
 }
 
+/* modified silence region (violet) */
+::part(region-modified) {
+  border-color: rgb(139, 92, 246) !important;
+}
+
+/* region resize handles (visible only on hover) */
+::part(region-handle) {
+  opacity: 0;
+  width: 7px !important;
+  transition: opacity 0.12s ease, background-color 0.12s ease;
+  z-index: 30 !important;
+}
+
+::part(region-handle-left) {
+  border-left: 2px solid rgba(255, 255, 255, 0.85) !important;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0.2), transparent);
+}
+
+::part(region-handle-right) {
+  border-right: 2px solid rgba(255, 255, 255, 0.85) !important;
+  background: linear-gradient(to left, rgba(255, 255, 255, 0.2), transparent);
+}
+
+::part(region-handle-visible),
+::part(region-handle):hover {
+  opacity: 1 !important;
+}
+
+::part(region-handle):hover {
+  background-color: rgba(255, 255, 255, 0.28) !important;
+}
+
 /* stripped-down style for performance mode */
 .performance-mode ::part(region) {
   box-shadow: none !important;
-  border: none;
   border: none !important;
   background-color: rgba(171, 0, 0, 0.258) !important;
+}
+
+.performance-mode ::part(region-modified) {
+  background-color: rgba(139, 92, 246, 0.3) !important;
 }
 
 * {

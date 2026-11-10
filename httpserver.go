@@ -874,6 +874,7 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 		a.isApplyingEdits = false
 	}()
 
+	startTime := time.Now()
 	a.emitEvent("showFinalTimelineProgress")
 
 	// Adopt the async task pattern
@@ -941,8 +942,11 @@ func (a *App) MakeFinalTimeline(projectData *ProjectDataPayload, makeNewTimeline
 		log.Printf("Final response status is not success. TaskID: %s", taskID)
 		return &finalResponse, nil
 	}
-	a.emitEvent("finished")
-	log.Print("finished making final timeline.")
+	elapsed := time.Since(startTime).Seconds()
+	a.emitEvent("finished", map[string]interface{}{
+		"elapsed": elapsed,
+	})
+	log.Printf("finished making final timeline in %.2f seconds.", elapsed)
 	return &finalResponse, nil
 }
 

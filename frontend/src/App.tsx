@@ -20,6 +20,8 @@ import {
   MakeFinalTimeline,
   OpenDevTools,
   IsDev,
+  GetSettings,
+  SetDavinciPlayhead,
 } from "@wails/go/main/App";
 
 import { GetPythonReadyStatus, GetToken } from "@wails/go/main/App";
@@ -50,6 +52,7 @@ import {
   defaultParameters,
   useClipStore,
   useGlobalStore,
+  usePlaybackStore,
   useTimecodeStore,
 } from "@/stores/clipStore";
 import { SilenceControls } from "./components/controls/SilenceControls";
@@ -394,11 +397,14 @@ function AppContent() {
       newData: main.ProjectDataPayload | null
     ) => {
       if (newData) {
-        const timecode = Timecode(
-          newData.timeline.curr_timecode,
-          newData.timeline.fps as FRAMERATE
-        );
-        setTimecode(timecode);
+        const isPlaying = usePlaybackStore.getState().isPlaying;
+        if (!isPlaying) {
+          const timecode = Timecode(
+            newData.timeline.curr_timecode,
+            newData.timeline.fps as FRAMERATE
+          );
+          setTimecode(timecode);
+        }
         setHasProjectData(true);
         if (newData.timeline?.name) {
           setTimelineName(newData.timeline.name);
@@ -586,6 +592,12 @@ function AppContent() {
         console.log("App.tsx: Initial FFmpeg status:", isFfmpegReady);
         console.log("App.tsx: Initial Python status:", pyReady);
 
+        GetSettings().then((settings: any) => {
+          if (settings && typeof settings.autoAdvanceClip === "boolean") {
+            useGlobalStore.getState().setAutoAdvanceClip(settings.autoAdvanceClip);
+          }
+        }).catch(() => {});
+
         if (isFfmpegReady && pyReady) {
           handleSyncRef.current();
         }
@@ -626,11 +638,14 @@ function AppContent() {
         setTimelineName(data.timeline.name);
       }
       if (data?.timeline?.curr_timecode) {
-        const timecode = Timecode(
-          data.timeline.curr_timecode,
-          data.timeline.fps as FRAMERATE
-        );
-        setTimecode(timecode);
+        const isPlaying = usePlaybackStore.getState().isPlaying;
+        if (!isPlaying) {
+          const timecode = Timecode(
+            data.timeline.curr_timecode,
+            data.timeline.fps as FRAMERATE
+          );
+          setTimecode(timecode);
+        }
       }
       setProjectDataVersion((v) => v + 1);
     };
@@ -647,11 +662,14 @@ function AppContent() {
         setTimelineName(data.timeline.name);
       }
       if (data?.timeline?.curr_timecode) {
-        const timecode = Timecode(
-          data.timeline.curr_timecode,
-          data.timeline.fps as FRAMERATE
-        );
-        setTimecode(timecode);
+        const isPlaying = usePlaybackStore.getState().isPlaying;
+        if (!isPlaying) {
+          const timecode = Timecode(
+            data.timeline.curr_timecode,
+            data.timeline.fps as FRAMERATE
+          );
+          setTimecode(timecode);
+        }
       }
       setProjectDataVersion((v) => v + 1);
       if (data) {
@@ -782,6 +800,14 @@ function AppContent() {
   const handleBlur = () => {
     console.log("Tab is blurred, cancelling any pending sync operation.");
     cancelPendingSync();
+    if (usePlaybackStore.getState().isPlaying) {
+      const tc = useTimecodeStore.getState().timecode;
+      if (tc) {
+        SetDavinciPlayhead(tc.toString()).catch((err) => {
+          console.error("Error setting DaVinci playhead on blur:", err);
+        });
+      }
+    }
   };
 
   useWindowFocus(handleFocusWithDragDelay, handleBlur, {
@@ -964,6 +990,7 @@ function AppContent() {
                           <WaveformPlayer
                             key={`${currentActiveClip.id}-${currentActiveClip.startFrame}-${currentActiveClip.sourceStartFrame}-${currentActiveClip.duration}`}
                             activeClip={currentActiveClip}
+                            displayClips={displayClips}
                             projectFrameRate={projectDataRef.current.timeline.fps}
                             httpPort={httpPort}
                           />
@@ -1148,6 +1175,10 @@ export default function App() {
       (data: { message: string; progress: number }) => {
         console.log("taskProgressUpdate", data);
 
+        if (timeStartedRef.current === null) {
+          timeStartedRef.current = Date.now();
+        }
+
         if (data.progress != null) {
           setProgress((prev) => {
             if (prev === null) return data.progress;
@@ -1160,20 +1191,22 @@ export default function App() {
     );
 
     const off2 = EventsOn("showFinalTimelineProgress", () => {
-      if (showFinalProgress) return;
       console.log("showFinalTimelineProgress");
       timeStartedRef.current = Date.now();
+      timeFinishedRef.current = null;
       setProgress(0);
       setMessage("Preparing");
       setShowFinalProgress(true);
     });
 
-    const off3 = EventsOn("finished", () => {
-      console.log("App.tsx: received finish event!")
+    const off3 = EventsOn("finished", (data?: { elapsed?: number }) => {
+      console.log("App.tsx: received finish event!", data);
       timeFinishedRef.current = Date.now();
-      if (timeStartedRef.current) {
+      if (data && typeof data.elapsed === "number" && data.elapsed > 0) {
+        setTotalTime(data.elapsed);
+      } else if (timeStartedRef.current) {
         const elapsed =
-          (timeFinishedRef.current! - timeStartedRef.current!) / 1000;
+          (timeFinishedRef.current - timeStartedRef.current) / 1000;
         setTotalTime(elapsed);
       }
       setProgress(100);

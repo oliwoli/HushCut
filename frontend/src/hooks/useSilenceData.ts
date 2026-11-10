@@ -5,21 +5,25 @@ import { GetOrDetectSilencesWithCache } from '@wails/go/main/App';
 import { useClipStore, getClipParams } from '@/stores/clipStore';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import deepEqual from 'fast-deep-equal';
-import { intersectMultipleSilenceLists } from '@/lib/clipUtils';
-import type { ActiveClip, DetectionParams, SilencePeriod, SilenceDataHookResult } from '../types';
+import { intersectMultipleSilenceLists, postProcessSilencesWithModifications } from '@/lib/clipUtils';
+import type { ActiveClip, DetectionParams, RegionModification, SilencePeriod, SilenceDataHookResult } from '../types';
 
 interface ConstituentTarget {
   id: string;
   bypassed: boolean;
   params: DetectionParams;
+  modifications: RegionModification[];
 }
 
 interface SilenceDetectionTarget {
   clipId: string;
   isGroup: boolean;
   groupBypassed: boolean;
+  groupParams?: DetectionParams;
+  groupModifications?: RegionModification[];
   singleBypassed?: boolean;
   singleParams?: DetectionParams;
+  singleModifications?: RegionModification[];
   constituents?: ConstituentTarget[];
 }
 
@@ -47,6 +51,14 @@ export function useSilenceData(
           clipId,
           isGroup: true,
           groupBypassed: Boolean(groupParams.bypassed),
+          groupParams: {
+            loudnessThreshold: s.getParameter(clipId, 'threshold'),
+            minSilenceDurationSeconds: s.getParameter(clipId, 'minDuration'),
+            paddingLeftSeconds: s.getParameter(clipId, 'paddingLeft'),
+            paddingRightSeconds: s.getParameter(clipId, 'paddingRight'),
+            minContent: s.getParameter(clipId, 'minContent'),
+          },
+          groupModifications: s.regionModifications[clipId] ?? [],
           constituents: constituents.map((cid) => {
             const cp = getClipParams(s, cid);
             return {
@@ -59,6 +71,7 @@ export function useSilenceData(
                 paddingRightSeconds: cp.paddingRight,
                 minContent: cp.minContent,
               },
+              modifications: s.regionModifications[cid] ?? [],
             };
           }),
         };
@@ -76,6 +89,7 @@ export function useSilenceData(
           paddingRightSeconds: groupParams.paddingRight,
           minContent: groupParams.minContent,
         },
+        singleModifications: s.regionModifications[clipId] ?? [],
       };
     },
     deepEqual
@@ -154,16 +168,23 @@ export function useSilenceData(
       }
 
       try {
-        const result = await GetOrDetectSilencesWithCache(
+        const rawSilences = await GetOrDetectSilencesWithCache(
           activeFile.processedFileName,
           p.loudnessThreshold,
-          p.minSilenceDurationSeconds,
-          p.paddingLeftSeconds,
-          p.paddingRightSeconds,
-          p.minContent,
+          0.009,
+          0,
+          0,
+          0,
           clipStartSeconds,
           clipEndSeconds,
           timelineFps
+        );
+        const result = postProcessSilencesWithModifications(
+          rawSilences,
+          p,
+          clipStartSeconds,
+          clipEndSeconds,
+          detectionTarget.singleModifications
         );
         if (isMounted.current) {
           setSilenceData(result);
@@ -197,6 +218,8 @@ export function useSilenceData(
     const itemsMap = useClipStore.getState().timelineItems;
     const groupMinStart = activeFile.startFrame;
     const groupDurationSeconds = activeFile.duration / timelineFps;
+    const groupMods = detectionTarget.groupModifications ?? [];
+    const gp = detectionTarget.groupParams;
 
     try {
       const constituentSilenceLists = await Promise.all(
@@ -209,6 +232,7 @@ export function useSilenceData(
           const clipStartSeconds = sourceStartFrame / timelineFps;
           const clipEndSeconds = sourceEndFrame / timelineFps;
           const offsetSeconds = (itemStartFrame - groupMinStart) / timelineFps;
+          const shift = -clipStartSeconds + offsetSeconds;
 
           if (clipEndSeconds <= clipStartSeconds) {
             return [];
@@ -218,24 +242,66 @@ export function useSilenceData(
             const rawSilences = await GetOrDetectSilencesWithCache(
               fileName,
               c.params.loudnessThreshold,
-              c.params.minSilenceDurationSeconds,
-              c.params.paddingLeftSeconds,
-              c.params.paddingRightSeconds,
-              c.params.minContent,
+              0.009,
+              0,
+              0,
+              0,
               clipStartSeconds,
               clipEndSeconds,
               timelineFps
             );
 
+            const effectiveParams =
+              groupMods.length > 0 && gp
+                ? {
+                    minSilenceDurationSeconds: Math.max(
+                      0.009,
+                      c.params.minSilenceDurationSeconds - gp.minSilenceDurationSeconds
+                    ),
+                    paddingLeftSeconds: Math.max(
+                      0,
+                      c.params.paddingLeftSeconds - gp.paddingLeftSeconds
+                    ),
+                    paddingRightSeconds: Math.max(
+                      0,
+                      c.params.paddingRightSeconds - gp.paddingRightSeconds
+                    ),
+                    minContent: Math.max(0, c.params.minContent - gp.minContent),
+                  }
+                : c.params;
+
+            const processed = postProcessSilencesWithModifications(
+              rawSilences,
+              effectiveParams,
+              clipStartSeconds,
+              clipEndSeconds,
+              c.modifications
+            );
+
             // Map from constituent source time domain to group timeline time domain:
             const mapped: SilencePeriod[] = [];
-            for (const s of rawSilences) {
-              const sStart = s.start - clipStartSeconds + offsetSeconds;
-              const sEnd = s.end - clipStartSeconds + offsetSeconds;
+            for (const s of processed) {
+              const sStart = s.start + shift;
+              const sEnd = s.end + shift;
               const clampedStart = Math.max(0, sStart);
               const clampedEnd = Math.min(groupDurationSeconds, sEnd);
               if (clampedEnd > clampedStart + 1e-4) {
-                mapped.push({ start: clampedStart, end: clampedEnd });
+                const rawStart = Math.max(0, (s.rawStart ?? s.start) + shift);
+                const rawEnd = Math.min(groupDurationSeconds, (s.rawEnd ?? s.end) + shift);
+                const baseStart = Math.max(0, (s.baseStart ?? s.start) + shift);
+                const baseEnd = Math.min(groupDurationSeconds, (s.baseEnd ?? s.end) + shift);
+                const mid = (rawStart + rawEnd) / 2;
+                mapped.push({
+                  ...s,
+                  start: clampedStart,
+                  end: clampedEnd,
+                  rawStart,
+                  rawEnd,
+                  baseStart,
+                  baseEnd,
+                  startCenterTime: s.startCenterTime !== undefined ? s.startCenterTime + shift : mid,
+                  endCenterTime: s.endCenterTime !== undefined ? s.endCenterTime + shift : mid,
+                });
               }
             }
             return mapped;
@@ -246,7 +312,17 @@ export function useSilenceData(
         })
       );
 
-      const intersected = intersectMultipleSilenceLists(constituentSilenceLists);
+      let intersected = intersectMultipleSilenceLists(constituentSilenceLists);
+      if (groupMods.length > 0 && gp) {
+        intersected = postProcessSilencesWithModifications(
+          intersected,
+          gp,
+          0,
+          groupDurationSeconds,
+          groupMods
+        );
+      }
+
       if (isMounted.current) {
         setSilenceData(intersected);
       }

@@ -742,6 +742,7 @@ func (a *App) GetSettings() (map[string]any, error) {
 			defaultSettings["cleanupThresholdDays"] = 30
 			defaultSettings["enableCleanup"] = true
 			defaultSettings["UiScale"] = 1.0
+			defaultSettings["autoAdvanceClip"] = false
 
 			jsonData, marshalErr := json.MarshalIndent(defaultSettings, "", "  ")
 			if marshalErr != nil {

@@ -1,5 +1,5 @@
 import type { main } from "./models-adapter";
-import type { ActiveClip, DetectionParams } from "../types";
+import type { ActiveClip, DetectionParams, RegionModification, SilencePeriod } from "../types";
 import type { ClipStore } from "../stores/clipStore";
 
 export interface DisplayClip {
@@ -259,19 +259,61 @@ export function deriveAllClipDetectionParams(
  * Computes the intersection of two disjoint, sorted silence period lists.
  */
 export function intersectTwoSilenceLists(
-  a: Array<{ start: number; end: number }>,
-  b: Array<{ start: number; end: number }>
-): Array<{ start: number; end: number }> {
-  const result: Array<{ start: number; end: number }> = [];
+  a: SilencePeriod[],
+  b: SilencePeriod[]
+): SilencePeriod[] {
+  const result: SilencePeriod[] = [];
   let i = 0;
   let j = 0;
   while (i < a.length && j < b.length) {
-    const start = Math.max(a[i].start, b[j].start);
-    const end = Math.min(a[i].end, b[j].end);
+    const itemA = a[i];
+    const itemB = b[j];
+    const start = Math.max(itemA.start, itemB.start);
+    const end = Math.min(itemA.end, itemB.end);
     if (end > start + 1e-4) {
-      result.push({ start, end });
+      const hasMeta =
+        itemA.rawStart !== undefined ||
+        itemB.rawStart !== undefined ||
+        itemA.isModified !== undefined ||
+        itemB.isModified !== undefined;
+
+      if (!hasMeta) {
+        result.push({ start, end });
+      } else {
+        const leftFromA = itemA.start >= itemB.start;
+        const rightFromA = itemA.end <= itemB.end;
+        const rawStart = Math.max(itemA.rawStart ?? itemA.start, itemB.rawStart ?? itemB.start);
+        const rawEnd = Math.min(itemA.rawEnd ?? itemA.end, itemB.rawEnd ?? itemB.end);
+        const baseStart = Math.max(itemA.baseStart ?? itemA.start, itemB.baseStart ?? itemB.start);
+        const baseEnd = Math.min(itemA.baseEnd ?? itemA.end, itemB.baseEnd ?? itemB.end);
+        const mid = (rawStart + rawEnd) / 2;
+
+        const startModified = Boolean(leftFromA ? itemA.startModified : itemB.startModified);
+        const endModified = Boolean(rightFromA ? itemA.endModified : itemB.endModified);
+        const modIds: string[] = [];
+        for (const id of [...(itemA.modificationIds ?? []), ...(itemB.modificationIds ?? [])]) {
+          if (!modIds.includes(id)) modIds.push(id);
+        }
+
+        result.push({
+          start,
+          end,
+          rawStart,
+          rawEnd,
+          baseStart,
+          baseEnd,
+          startCenterTime: leftFromA ? (itemA.startCenterTime ?? mid) : (itemB.startCenterTime ?? mid),
+          endCenterTime: rightFromA ? (itemA.endCenterTime ?? mid) : (itemB.endCenterTime ?? mid),
+          startModId: leftFromA ? itemA.startModId : itemB.startModId,
+          endModId: rightFromA ? itemA.endModId : itemB.endModId,
+          startModified,
+          endModified,
+          isModified: startModified || endModified,
+          modificationIds: modIds,
+        });
+      }
     }
-    if (a[i].end < b[j].end) {
+    if (itemA.end < itemB.end) {
       i++;
     } else {
       j++;
@@ -284,8 +326,8 @@ export function intersectTwoSilenceLists(
  * Computes the multi-way intersection across multiple silence period lists.
  */
 export function intersectMultipleSilenceLists(
-  lists: Array<Array<{ start: number; end: number }>>
-): Array<{ start: number; end: number }> {
+  lists: SilencePeriod[][]
+): SilencePeriod[] {
   if (lists.length === 0) return [];
   if (lists.length === 1) return lists[0];
   let current = lists[0];
@@ -295,4 +337,183 @@ export function intersectMultipleSilenceLists(
   }
   return current;
 }
+
+export const REGION_MODIFICATION_EPSILON_SECONDS = 0.75;
+export const MODIFICATION_DELTA_EPSILON = 1e-4;
+
+/**
+ * postProcessSilencesWithModifications takes raw (unpadded, unmerged) silence intervals,
+ * matches any manual region modifications by midpoint timecode within an epsilon leeway,
+ * and applies padding, minimum silence duration filtering, and silence merge (minContent).
+ *
+ * When two or more regions merge due to minContent:
+ * - The merged region's start comes from the leftmost region; it inherits startModified only if the leftmost region had its start modified.
+ * - The merged region's end comes from the rightmost region; it inherits endModified only if the rightmost region had its end modified.
+ * - The merged region is marked `isModified = startModified || endModified`.
+ */
+export function postProcessSilencesWithModifications(
+  rawSilences: Array<{ start: number; end: number }>,
+  params: {
+    minSilenceDurationSeconds: number;
+    paddingLeftSeconds: number;
+    paddingRightSeconds: number;
+    minContent: number;
+  },
+  clipStartSeconds: number,
+  clipEndSeconds: number,
+  modifications?: RegionModification[],
+  midpointEpsilon: number = REGION_MODIFICATION_EPSILON_SECONDS
+): SilencePeriod[] {
+  const epsilon = 0.001;
+  const minDur = Math.max(0.009, params.minSilenceDurationSeconds);
+  const { paddingLeftSeconds, paddingRightSeconds, minContent } = params;
+
+  // 1. Match modifications to raw silences by midpoint timecode
+  const matchedModByRawIdx = new Map<number, RegionModification>();
+  if (modifications && modifications.length > 0 && rawSilences.length > 0) {
+    const usedRawIndices = new Set<number>();
+    for (const mod of modifications) {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < rawSilences.length; i++) {
+        if (usedRawIndices.has(i)) continue;
+        const r = rawSilences[i];
+        const mid = (r.start + r.end) / 2;
+        const dist = Math.abs(mid - mod.centerTime);
+        const insideBounds =
+          mod.centerTime >= r.start - midpointEpsilon &&
+          mod.centerTime <= r.end + midpointEpsilon;
+        if (dist <= midpointEpsilon || insideBounds) {
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+          }
+        }
+      }
+      if (bestIdx !== -1) {
+        usedRawIndices.add(bestIdx);
+        matchedModByRawIdx.set(bestIdx, mod);
+      }
+    }
+  }
+
+  // 2. Apply deltas, padding, and minSilenceDuration filtering
+  const preliminary: SilencePeriod[] = [];
+  for (let i = 0; i < rawSilences.length; i++) {
+    const raw = rawSilences[i];
+    const mod = matchedModByRawIdx.get(i);
+
+    const deltaStart = mod ? mod.deltaStart : 0;
+    const deltaEnd = mod ? mod.deltaEnd : 0;
+    const startMod = Boolean(mod && Math.abs(mod.deltaStart) > MODIFICATION_DELTA_EPSILON);
+    const endMod = Boolean(mod && Math.abs(mod.deltaEnd) > MODIFICATION_DELTA_EPSILON);
+
+    // Base padded boundaries (matches Go's DetectSilences padding logic)
+    const baseStart = raw.start > clipStartSeconds + epsilon ? raw.start + paddingLeftSeconds : raw.start;
+    const baseEnd = raw.end < clipEndSeconds - epsilon ? raw.end - paddingRightSeconds : raw.end;
+
+    const adjustedStart = Math.max(baseStart + deltaStart, clipStartSeconds);
+    const adjustedEnd = Math.min(baseEnd + deltaEnd, clipEndSeconds);
+    const centerTime = (raw.start + raw.end) / 2;
+
+    if (adjustedEnd - adjustedStart >= minDur) {
+      preliminary.push({
+        start: adjustedStart,
+        end: adjustedEnd,
+        rawStart: raw.start,
+        rawEnd: raw.end,
+        baseStart,
+        baseEnd,
+        startCenterTime: centerTime,
+        endCenterTime: centerTime,
+        startModId: mod?.id,
+        endModId: mod?.id,
+        startModified: startMod,
+        endModified: endMod,
+        isModified: startMod || endMod,
+        modificationIds: mod && (startMod || endMod) ? [mod.id] : [],
+      });
+    }
+  }
+
+  if (preliminary.length === 0) {
+    return [];
+  }
+
+  // Ensure preliminary periods are sorted by start time (handles can be moved across each other)
+  preliminary.sort((a, b) => a.start - b.start);
+
+  // 3. Snap first/last silence to clip boundaries if content at boundary is shorter than minContent
+  const first = preliminary[0];
+  if (
+    first.start - clipStartSeconds > epsilon &&
+    first.start - clipStartSeconds < minContent
+  ) {
+    first.start = clipStartSeconds;
+  }
+  const last = preliminary[preliminary.length - 1];
+  if (
+    clipEndSeconds - last.end > epsilon &&
+    clipEndSeconds - last.end < minContent
+  ) {
+    last.end = clipEndSeconds;
+  }
+
+  // 4. Silence Merge (minContent) with modification inheritance
+  const merged: SilencePeriod[] = [];
+  let current: SilencePeriod = { ...preliminary[0] };
+
+  for (let i = 1; i < preliminary.length; i++) {
+    const next = preliminary[i];
+    const contentDuration = next.start - current.end;
+    if (contentDuration < minContent) {
+      // Merging `current` with `next`:
+      // - The span expands to cover both regions: Math.min(start) to Math.max(end).
+      // - If either region was modified, the merged region inherits isModified = true and all modification IDs.
+      const inheritedStartMod = Boolean(
+        current.startModified || (next.start <= current.start && next.startModified)
+      );
+      const inheritedEndMod = Boolean(
+        next.endModified || (current.end >= next.end && current.endModified)
+      );
+      const inheritedIsMod = Boolean(current.isModified || next.isModified);
+
+      const modIds: string[] = [];
+      if (current.modificationIds) {
+        for (const id of current.modificationIds) {
+          if (!modIds.includes(id)) modIds.push(id);
+        }
+      }
+      if (next.modificationIds) {
+        for (const id of next.modificationIds) {
+          if (!modIds.includes(id)) modIds.push(id);
+        }
+      }
+
+      current = {
+        start: Math.min(current.start, next.start),
+        end: Math.max(current.end, next.end),
+        rawStart: Math.min(current.rawStart ?? current.start, next.rawStart ?? next.start),
+        rawEnd: Math.max(current.rawEnd ?? current.end, next.rawEnd ?? next.end),
+        baseStart: current.baseStart,
+        baseEnd: next.end >= current.end ? next.baseEnd : current.baseEnd,
+        startCenterTime: current.start <= next.start ? current.startCenterTime : next.startCenterTime,
+        endCenterTime: next.end >= current.end ? next.endCenterTime : current.endCenterTime,
+        startModId: current.start <= next.start ? current.startModId : next.startModId,
+        endModId: next.end >= current.end ? next.endModId : current.endModId,
+        startModified: inheritedStartMod,
+        endModified: inheritedEndMod,
+        isModified: inheritedIsMod,
+        modificationIds: modIds,
+      };
+    } else {
+      merged.push(current);
+      current = { ...next };
+    }
+  }
+  merged.push(current);
+
+  return merged;
+}
+
 
